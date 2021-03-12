@@ -21,14 +21,14 @@ template< typename T,
           bool is_integer = NumTraits<T>::IsInteger>
 struct default_digits10_impl
 {
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static int run() { return std::numeric_limits<T>::digits10; }
 };
 
 template<typename T>
 struct default_digits10_impl<T,false,false> // Floating point
 {
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static int run() {
     using std::log10;
     using std::ceil;
@@ -40,7 +40,7 @@ struct default_digits10_impl<T,false,false> // Floating point
 template<typename T>
 struct default_digits10_impl<T,false,true> // Integer
 {
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static int run() { return 0; }
 };
 
@@ -52,14 +52,14 @@ template< typename T,
           bool is_integer = NumTraits<T>::IsInteger>
 struct default_digits_impl
 {
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static int run() { return std::numeric_limits<T>::digits; }
 };
 
 template<typename T>
 struct default_digits_impl<T,false,false> // Floating point
 {
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static int run() {
     using std::log;
     using std::ceil;
@@ -71,11 +71,32 @@ struct default_digits_impl<T,false,false> // Floating point
 template<typename T>
 struct default_digits_impl<T,false,true> // Integer
 {
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static int run() { return 0; }
 };
 
 } // end namespace internal
+
+namespace numext {
+/** \internal bit-wise cast without changing the underlying bit representation. */
+
+// TODO: Replace by std::bit_cast (available in C++20)
+template <typename Tgt, typename Src>
+EIGEN_STRONG_INLINE EIGEN_DEVICE_FUNC Tgt bit_cast(const Src& src) {
+#if EIGEN_HAS_TYPE_TRAITS
+  // The behaviour of memcpy is not specified for non-trivially copyable types
+  EIGEN_STATIC_ASSERT(std::is_trivially_copyable<Src>::value, THIS_TYPE_IS_NOT_SUPPORTED);
+  EIGEN_STATIC_ASSERT(std::is_trivially_copyable<Tgt>::value && std::is_default_constructible<Tgt>::value,
+                      THIS_TYPE_IS_NOT_SUPPORTED);
+#endif
+
+  EIGEN_STATIC_ASSERT(sizeof(Src) == sizeof(Tgt), THIS_TYPE_IS_NOT_SUPPORTED);
+  Tgt tgt;
+  EIGEN_USING_STD(memcpy)
+  memcpy(&tgt, &src, sizeof(Tgt));
+  return tgt;
+}
+}  // namespace numext
 
 /** \class NumTraits
   * \ingroup Core_Module
@@ -140,25 +161,25 @@ template<typename T> struct GenericNumTraits
   typedef T Nested;
   typedef T Literal;
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline Real epsilon()
   {
     return numext::numeric_limits<T>::epsilon();
   }
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline int digits10()
   {
     return internal::default_digits10_impl<T>::run();
   }
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline int digits()
   {
     return internal::default_digits_impl<T>::run();
   }
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline Real dummy_precision()
   {
     // make sure to override this for floating-point types
@@ -166,23 +187,23 @@ template<typename T> struct GenericNumTraits
   }
 
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline T highest() {
     return (numext::numeric_limits<T>::max)();
   }
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline T lowest()  {
     return IsInteger ? (numext::numeric_limits<T>::min)()
                      : static_cast<T>(-(numext::numeric_limits<T>::max)());
   }
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline T infinity() {
     return numext::numeric_limits<T>::infinity();
   }
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline T quiet_NaN() {
     return numext::numeric_limits<T>::quiet_NaN();
   }
@@ -194,19 +215,20 @@ template<typename T> struct NumTraits : GenericNumTraits<T>
 template<> struct NumTraits<float>
   : GenericNumTraits<float>
 {
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline float dummy_precision() { return 1e-5f; }
 };
 
 template<> struct NumTraits<double> : GenericNumTraits<double>
 {
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline double dummy_precision() { return 1e-12; }
 };
 
 template<> struct NumTraits<long double>
   : GenericNumTraits<long double>
 {
+  EIGEN_CONSTEXPR
   static inline long double dummy_precision() { return 1e-15l; }
 };
 
@@ -223,11 +245,11 @@ template<typename _Real> struct NumTraits<std::complex<_Real> >
     MulCost = 4 * NumTraits<Real>::MulCost + 2 * NumTraits<Real>::AddCost
   };
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline Real epsilon() { return NumTraits<Real>::epsilon(); }
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline Real dummy_precision() { return NumTraits<Real>::dummy_precision(); }
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline int digits10() { return NumTraits<Real>::digits10(); }
 };
 
@@ -252,11 +274,12 @@ struct NumTraits<Array<Scalar, Rows, Cols, Options, MaxRows, MaxCols> >
     MulCost  = ArrayType::SizeAtCompileTime==Dynamic ? HugeCost : ArrayType::SizeAtCompileTime * NumTraits<Scalar>::MulCost
   };
 
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline RealScalar epsilon() { return NumTraits<RealScalar>::epsilon(); }
-  EIGEN_DEVICE_FUNC
+  EIGEN_DEVICE_FUNC EIGEN_CONSTEXPR
   static inline RealScalar dummy_precision() { return NumTraits<RealScalar>::dummy_precision(); }
 
+  EIGEN_CONSTEXPR
   static inline int digits10() { return NumTraits<Scalar>::digits10(); }
 };
 
@@ -270,6 +293,7 @@ template<> struct NumTraits<std::string>
     MulCost  = HugeCost
   };
 
+  EIGEN_CONSTEXPR
   static inline int digits10() { return 0; }
 
 private:

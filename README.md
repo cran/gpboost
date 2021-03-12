@@ -22,10 +22,9 @@ This is the R package implementation of the GPBoost library. See https://github.
 * [**Detailed R examples**](https://github.com/fabsig/GPBoost/tree/master/R-package/demo):
   * [GPBoost algorithm](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/GPBoost_algorithm.R) for combining tree-boosting with Gaussian process and random effects models
   * [GPBoost algorithm for binary classification and other non-Gaussian data](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/classification_non_Gaussian_data.R) (Poisson regression, etc.)
-  * [Cross validation](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/cross_validation.R) for parameter tuning
+  * [Parameter tuning](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/parameter_tuning.R) using deterministic or random grid search
   * [Linear Gaussian process and mixed effects model examples](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/linear_Gaussian_process_mixed_effects_models.R)
   * [Generalized linear Gaussian process and mixed effects model examples](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/generalized_linear_Gaussian_process_mixed_effects_models.R)
-  * [Standard boosting functionality (without Gaussian process or random  effects)](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/boosting.R)
 * [**GPBoost R and Python demo**](https://htmlpreview.github.io/?https://github.com/fabsig/GPBoost/blob/master/examples/GPBoost_demo.html) illustrates how GPBoost can be used in R and Python
 
 The following is also a short example.
@@ -85,6 +84,10 @@ After installing `Rtools` and `CMake`, be sure the following paths are added to 
     - If you have `Rtools` 4.x, example (NOTE: two paths are required):
         - `C:\rtools40\mingw64\bin`
         - `C:\rtools40\usr\bin`
+        - For instance, when installing in R with `install.packages()`, these paths can be added locally in R as follows prior to installation:
+```R 
+Sys.setenv(PATH=paste0(Sys.getenv("PATH"),";C:\\Rtools\\mingw_64\\bin\\;C:\\rtools40\\usr\\bin\\"))
+```
 * `CMake`
     - example: `C:\Program Files\CMake\bin`
 * `R`

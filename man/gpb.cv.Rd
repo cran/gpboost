@@ -2,16 +2,16 @@
 % Please edit documentation in R/gpb.cv.R
 \name{gpb.cv}
 \alias{gpb.cv}
-\title{Main CV logic for GPBoost}
+\title{CV function for number of boosting iterations}
 \usage{
-gpb.cv(params = list(), data, nrounds = 10L, nfold = 4L, label = NULL,
-  weight = NULL, obj = NULL, gp_model = NULL,
+gpb.cv(params = list(), data, nrounds = 100L, gp_model = NULL,
   use_gp_model_for_validation = TRUE, fit_GP_cov_pars_OOS = FALSE,
-  train_gp_model_cov_pars = TRUE, eval = NULL, verbose = 1L,
+  train_gp_model_cov_pars = TRUE, folds = NULL, nfold = 4L,
+  label = NULL, weight = NULL, obj = NULL, eval = NULL, verbose = 1L,
   record = TRUE, eval_freq = 1L, showsd = FALSE, stratified = TRUE,
-  folds = NULL, init_model = NULL, colnames = NULL,
-  categorical_feature = NULL, early_stopping_rounds = NULL,
-  callbacks = list(), reset_data = FALSE, ...)
+  init_model = NULL, colnames = NULL, categorical_feature = NULL,
+  early_stopping_rounds = NULL, callbacks = list(), reset_data = FALSE,
+  delete_boosters_folds = FALSE, ...)
 }
 \arguments{
 \item{params}{List of parameters (many of them tuning paramters), see Parameters.rst for more information. A few key parameters:
@@ -51,16 +51,6 @@ may allow you to pass other types of data like \code{matrix} and then separately
 
 \item{nrounds}{nNumber of boosting iterations (= number of trees). This is the most important tuning parameter for boosting. Default = 100}
 
-\item{nfold}{the original dataset is randomly partitioned into \code{nfold} equal size subsamples.}
-
-\item{label}{Vector of labels, used if \code{data} is not an \code{\link{gpb.Dataset}}}
-
-\item{weight}{vector of response values. If not NULL, will set to dataset}
-
-\item{obj}{objective function, can be character or custom objective function. Examples include
-\code{regression}, \code{regression_l1}, \code{huber},
-\code{binary}, \code{lambdarank}, \code{multiclass}, \code{multiclass}}
-
 \item{gp_model}{A \code{GPModel} object that contains the random effects (Gaussian process and / or grouped random effects) model}
 
 \item{use_gp_model_for_validation}{Boolean (default = TRUE). If TRUE, the Gaussian process is also used (in addition to the tree model) for calculating predictions on the validation data}
@@ -73,6 +63,20 @@ This corresponds to the GPBoostOOS algorithm.}
 \item{train_gp_model_cov_pars}{Boolean (default = TRUE). If TRUE, the covariance parameters of the Gaussian process are estimated in every boosting iterations, 
 otherwise the gp_model parameters are not estimated. In the latter case, you need to either esimate them beforehand or provide the values via 
 the 'init_cov_pars' parameter when creating the gp_model}
+
+\item{folds}{\code{list} provides a possibility to use a list of pre-defined CV folds
+(each element must be a vector of test fold's indices). When folds are supplied,
+the \code{nfold} and \code{stratified} parameters are ignored.}
+
+\item{nfold}{the original dataset is randomly partitioned into \code{nfold} equal size subsamples.}
+
+\item{label}{Vector of labels, used if \code{data} is not an \code{\link{gpb.Dataset}}}
+
+\item{weight}{vector of response values. If not NULL, will set to dataset}
+
+\item{obj}{objective function, can be character or custom objective function. Examples include
+\code{regression}, \code{regression_l1}, \code{huber},
+\code{binary}, \code{lambdarank}, \code{multiclass}, \code{multiclass}}
 
 \item{eval}{evaluation function(s). This can be a character vector, function, or list with a mixture of
             strings and functions.
@@ -119,10 +123,6 @@ the 'init_cov_pars' parameter when creating the gp_model}
 \item{stratified}{a \code{boolean} indicating whether sampling of folds should be stratified
 by the values of outcome labels.}
 
-\item{folds}{\code{list} provides a possibility to use a list of pre-defined CV folds
-(each element must be a vector of test fold's indices). When folds are supplied,
-the \code{nfold} and \code{stratified} parameters are ignored.}
-
 \item{init_model}{path of model file of \code{gpb.Booster} object, will continue training from this model}
 
 \item{colnames}{feature names, if not null, will use this to overwrite the names in dataset}
@@ -141,13 +141,15 @@ If early stopping occurs, the model will have 'best_iter' field.}
 \item{reset_data}{Boolean, setting it to TRUE (not the default value) will transform the booster model
 into a predictor model which frees up memory and the original datasets}
 
+\item{delete_boosters_folds}{Boolean, setting it to TRUE (not the default value) will delete the boosters of the individual folds}
+
 \item{...}{other parameters, see Parameters.rst for more information.}
 }
 \value{
 a trained model \code{gpb.CVBooster}.
 }
 \description{
-Cross validation logic used by GPBoost
+Cross validation function for determining number of boosting iterations
 }
 \section{Early Stopping}{
 
@@ -190,4 +192,7 @@ cvbst <- gpb.cv(params = params,
                 use_gp_model_for_validation = TRUE)
 print(paste0("Optimal number of iterations: ", cvbst$best_iter,
              ", best test error: ", cvbst$best_score))
+}
+\author{
+Authors of the LightGBM R package, Fabio Sigrist
 }

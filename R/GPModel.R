@@ -1,3 +1,7 @@
+# Copyright (c) 2020 Fabio Sigrist. All rights reserved.
+# 
+# Licensed under the Apache License Version 2.0. See LICENSE file in the project root for license information.
+
 #' @name GPModel_shared_params
 #' @title Shared parameter docs
 #' @description Parameter docs shared by \code{GPModel}, \code{gpb.cv}, and \code{gpboost}
@@ -78,6 +82,8 @@ NULL
 
 #' @importFrom R6 R6Class
 gpb.GPModel <- R6::R6Class(
+  # Class for random effects model (Gaussian process, grouped random effects, mixed effects models, etc.)
+  # Author: Fabio Sigrist
   classname = "GPModel",
   cloneable = FALSE,
   public = list(
@@ -116,6 +122,7 @@ gpb.GPModel <- R6::R6Class(
                           model_list = NULL) {
 
       if (!is.null(modelfile) | !is.null(model_list)){
+        # Load model from file or list
         
         if (!is.null(modelfile)) {
           if (!(is.character(modelfile) && length(modelfile) == 1L)) {
@@ -164,10 +171,12 @@ gpb.GPModel <- R6::R6Class(
         num_neighbors_pred = model_list[["num_neighbors_pred"]]
         cluster_ids = model_list[["cluster_ids"]]
         likelihood = model_list[["likelihood"]]
-        # Set additionaly required data
+        # Set additionally required data
         private$model_has_been_loaded_from_saved_file = TRUE
         private$cov_pars_loaded_from_file = model_list[["cov_pars"]]
-        private$y_loaded_from_file = model_list[["y"]]
+        if (!is.null(model_list[["y"]])) {
+          private$y_loaded_from_file = model_list[["y"]]
+        }
         private$has_covariates = model_list[["has_covariates"]]
         if (model_list[["has_covariates"]]) {
           private$coefs_loaded_from_file = model_list[["coefs"]]
@@ -398,10 +407,17 @@ gpb.GPModel <- R6::R6Class(
       if (!is.null(cluster_ids)) {
         
         if (is.vector(cluster_ids)) {
+          if (length(cluster_ids) != private$num_data) {
+            stop("GPModel: Length of ", sQuote("cluster_ids"), "does not match number of data points")
+          }
+          private$cluster_ids = cluster_ids
           
-          # Check whether matrix is the correct type first ("integer")
+          # Convert cluster_ids to int and save conversion map
           if (storage.mode(cluster_ids) != "integer") {
-            storage.mode(cluster_ids) <- "integer"
+            
+            private$cluster_ids_map_to_int <- structure(1:length(unique(cluster_ids)),names=c(unique(cluster_ids)))
+            cluster_ids = private$cluster_ids_map_to_int[cluster_ids]
+
           }
           
         } else {
@@ -410,11 +426,6 @@ gpb.GPModel <- R6::R6Class(
           
         }
         
-        if (length(cluster_ids) != private$num_data) {
-          stop("GPModel: Length of ", sQuote("cluster_ids"), "does not match number of data points")
-        }
-        
-        private$cluster_ids = cluster_ids
         cluster_ids <- as.vector(cluster_ids)
         
       }
@@ -476,6 +487,7 @@ gpb.GPModel <- R6::R6Class(
         private$gp_coords <- NULL
         private$gp_rand_coef_data <- NULL
         private$cluster_ids <- NULL
+        private$cluster_ids_map_to_int <- NULL
       }
       
       if (!is.null(modelfile)){
@@ -1133,13 +1145,27 @@ gpb.GPModel <- R6::R6Class(
         
       }
       
-      # Set IDs for independent processes
+      # Set cluster_ids for independent processes
       if (!is.null(cluster_ids_pred)) {
         
         if (is.vector(cluster_ids_pred)) {
           
-          if (storage.mode(cluster_ids_pred) != "integer") {
-            storage.mode(cluster_ids_pred) <- "integer"
+          if (is.null(private$cluster_ids_map_to_int) & storage.mode(cluster_ids_pred) != "integer") {
+            stop("predict.GPModel: cluster_ids_pred needs to be of type int as the data provided in cluster_ids when initializing the model was also int (or cluster_ids was not provided)")
+          }
+          
+          if (!is.null(private$cluster_ids_map_to_int)) {
+            
+            cluster_ids_pred_map_to_int <- structure(1:length(unique(cluster_ids_pred)),names=c(unique(cluster_ids_pred)))
+            for (key in names(cluster_ids_pred_map_to_int)) {
+              if (key %in% names(private$cluster_ids_map_to_int)) {
+                cluster_ids_pred_map_to_int[key] = private$cluster_ids_map_to_int[key]
+              } else {
+                cluster_ids_pred_map_to_int[key] = cluster_ids_pred_map_to_int[key] + length(private$cluster_ids_map_to_int)
+              }
+            }
+            cluster_ids_pred <- cluster_ids_pred_map_to_int[cluster_ids_pred]
+            
           }
           
         } else {
@@ -1149,7 +1175,7 @@ gpb.GPModel <- R6::R6Class(
         }
         
         if (length(cluster_ids_pred) != num_data_pred) {
-          stop("predict.GPModel: Length of ", sQuote("cluster_ids_pred"), "does not match number of data points")
+          stop("predict.GPModel: Length of ", sQuote("cluster_ids_pred"), " does not match number of predicted data points")
         }
         
         cluster_ids_pred <- as.vector(cluster_ids_pred)
@@ -1466,13 +1492,27 @@ gpb.GPModel <- R6::R6Class(
           
         } 
         
-        # Set IDs for independent processes
+        # Set cluster_ids for independent processes
         if (!is.null(cluster_ids_pred)) {
           
           if (is.vector(cluster_ids_pred)) {
             
-            if (storage.mode(cluster_ids_pred) != "integer") {
-              storage.mode(cluster_ids_pred) <- "integer"
+            if (is.null(private$cluster_ids_map_to_int) & storage.mode(cluster_ids_pred) != "integer") {
+              stop("predict.GPModel: cluster_ids_pred needs to be of type int as the data provided in cluster_ids when initializing the model was also int (or cluster_ids was not provided)")
+            }
+            
+            if (!is.null(private$cluster_ids_map_to_int)) {
+              
+              cluster_ids_pred_map_to_int <- structure(1:length(unique(cluster_ids_pred)),names=c(unique(cluster_ids_pred)))
+              for (key in names(cluster_ids_pred_map_to_int)) {
+                if (key %in% names(private$cluster_ids_map_to_int)) {
+                  cluster_ids_pred_map_to_int[key] = private$cluster_ids_map_to_int[key]
+                } else {
+                  cluster_ids_pred_map_to_int[key] = cluster_ids_pred_map_to_int[key] + length(private$cluster_ids_map_to_int)
+                }
+              }
+              cluster_ids_pred <- cluster_ids_pred_map_to_int[cluster_ids_pred]
+                
             }
             
           } else {
@@ -1723,7 +1763,7 @@ gpb.GPModel <- R6::R6Class(
       return(invisible(NULL))
     },
     
-    model_to_list = function() {
+    model_to_list = function(include_response_data=TRUE) {
       if (isTRUE(private$free_raw_data)) {
         stop("model_to_list: cannot convert to json when free_raw_data=TRUE has been set")
       }
@@ -1733,7 +1773,9 @@ gpb.GPModel <- R6::R6Class(
       model_list[["likelihood"]] <- self$get_likelihood_name()
       model_list[["cov_pars"]] <- self$get_cov_pars()
       # Response data
-      model_list[["y"]] <- self$get_response_data()
+      if (include_response_data) {
+        model_list[["y"]] <- self$get_response_data()
+      }
       # Feature data
       model_list[["group_data"]] <- self$get_group_data()
       model_list[["group_rand_coef_data"]] <- self$get_group_rand_coef_data()
@@ -1783,8 +1825,8 @@ gpb.GPModel <- R6::R6Class(
       if (isTRUE(private$free_raw_data)) {
         stop("save.GPModel: cannot save when free_raw_data=TRUE has been set")
       }
-      # Use RJSONIO since jsonlite and rjson omit the last digit of a double!
-      save_data_json <- RJSONIO::toJSON(self$model_to_list(), digits=17)
+      # Use RJSONIO R package since jsonlite and rjson omit the last digit of a double
+      save_data_json <- RJSONIO::toJSON(self$model_to_list(include_response_data=TRUE), digits=17)
       write(save_data_json, file=filename)
     }
     
@@ -1816,6 +1858,7 @@ gpb.GPModel <- R6::R6Class(
     cov_par_names = NULL,
     coef_names = NULL,
     cluster_ids = NULL,
+    cluster_ids_map_to_int = NULL,
     free_raw_data = FALSE,
     num_data_pred = NULL,
     model_has_been_loaded_from_saved_file = FALSE,
@@ -1904,7 +1947,7 @@ gpb.GPModel <- R6::R6Class(
 #' gp_model <- GPModel(group_data = group_data,
 #'                     gp_coords = coords, cov_function = "exponential",
 #'                     likelihood="gaussian")
-#'
+#' @author Fabio Sigrist
 #' @export
 GPModel <- function(group_data = NULL,
                     group_rand_coef_data = NULL,
@@ -1948,6 +1991,7 @@ GPModel <- function(group_data = NULL,
 #' @param gp_model a \code{GPModel}
 #' @inheritParams GPModel_shared_params
 #' 
+#' @author Fabio Sigrist
 #' @export 
 fit <- function(gp_model, y, X, params, fixed_effects = NULL) UseMethod("fit")
 
@@ -1995,6 +2039,7 @@ fit <- function(gp_model, y, X, params, fixed_effects = NULL) UseMethod("fit")
 #' 
 #' @method fit GPModel 
 #' @rdname fit.GPModel
+#' @author Fabio Sigrist
 #' @export
 fit.GPModel <- function(gp_model,
                         y,
@@ -2100,6 +2145,7 @@ fit.GPModel <- function(gp_model,
 #' }
 #' 
 #' @rdname fitGPModel
+#' @author Fabio Sigrist
 #' @export fitGPModel
 fitGPModel <- function(group_data = NULL,
                        group_rand_coef_data = NULL,
@@ -2172,6 +2218,7 @@ fitGPModel <- function(group_data = NULL,
 #' 
 #' @method summary GPModel 
 #' @rdname summary.GPModel
+#' @author Fabio Sigrist
 #' @export
 summary.GPModel <- function(object, ...){
   cov_pars <- object$get_cov_pars()
@@ -2247,6 +2294,7 @@ summary.GPModel <- function(object, ...){
 #' }
 #' 
 #' @rdname predict.GPModel
+#' @author Fabio Sigrist
 #' @export
 predict.GPModel <- function(object,
                             y = NULL,
@@ -2289,6 +2337,7 @@ predict.GPModel <- function(object,
 #' @return A \code{GPModel}
 #'
 #' @examples
+#' \donttest{
 #' library(gpboost)
 #' data(GPBoost_data, package = "gpboost")
 #' 
@@ -2303,9 +2352,10 @@ predict.GPModel <- function(object,
 #' # Check equality
 #' pred$mu - pred_loaded$mu
 #' pred$var - pred_loaded$var
-#' 
+#' }
 #' @rdname saveGPModel
 #' @importFrom RJSONIO toJSON
+#' @author Fabio Sigrist
 #' @export
 #' 
 saveGPModel <- function(gp_model, filename){
@@ -2331,6 +2381,7 @@ saveGPModel <- function(gp_model, filename){
 #' @return A \code{GPModel}
 #'
 #' @examples
+#' \donttest{
 #' library(gpboost)
 #' data(GPBoost_data, package = "gpboost")
 #' 
@@ -2345,9 +2396,10 @@ saveGPModel <- function(gp_model, filename){
 #' # Check equality
 #' pred$mu - pred_loaded$mu
 #' pred$var - pred_loaded$var
-#' 
+#' }
 #' @rdname loadGPModel
 #' @importFrom RJSONIO fromJSON
+#' @author Fabio Sigrist
 #' @export
 loadGPModel <- function(filename){
   

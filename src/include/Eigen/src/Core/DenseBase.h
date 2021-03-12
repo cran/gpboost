@@ -18,7 +18,7 @@ namespace internal {
 // The index type defined by EIGEN_DEFAULT_DENSE_INDEX_TYPE must be a signed type.
 // This dummy function simply aims at checking that at compile time.
 static inline void check_DenseIndex_is_signed() {
-  EIGEN_STATIC_ASSERT(NumTraits<DenseIndex>::IsSigned,THE_INDEX_TYPE_MUST_BE_A_SIGNED_TYPE); 
+  EIGEN_STATIC_ASSERT(NumTraits<DenseIndex>::IsSigned,THE_INDEX_TYPE_MUST_BE_A_SIGNED_TYPE)
 }
 
 } // end namespace internal
@@ -449,8 +449,22 @@ template<typename Derived> class DenseBase
 
     EIGEN_DEVICE_FUNC Scalar prod() const;
 
+    template<int NaNPropagation>
     EIGEN_DEVICE_FUNC typename internal::traits<Derived>::Scalar minCoeff() const;
+    template<int NaNPropagation>
     EIGEN_DEVICE_FUNC typename internal::traits<Derived>::Scalar maxCoeff() const;
+
+
+    // By default, the fastest version with undefined NaN propagation semantics is
+    // used.
+    // TODO(rmlarsen): Replace with default template argument when we move to
+    // c++11 or beyond.
+    EIGEN_DEVICE_FUNC typename internal::traits<Derived>::Scalar minCoeff() const {
+      return minCoeff<PropagateFast>();
+    }
+    EIGEN_DEVICE_FUNC typename internal::traits<Derived>::Scalar maxCoeff() const {
+      return maxCoeff<PropagateFast>();
+    }
 
     template<typename IndexType> EIGEN_DEVICE_FUNC
     typename internal::traits<Derived>::Scalar minCoeff(IndexType* row, IndexType* col) const;
@@ -530,16 +544,16 @@ template<typename Derived> class DenseBase
     static const RandomReturnType Random();
 
     template<typename ThenDerived,typename ElseDerived>
-    const Select<Derived,ThenDerived,ElseDerived>
+    inline EIGEN_DEVICE_FUNC const Select<Derived,ThenDerived,ElseDerived>
     select(const DenseBase<ThenDerived>& thenMatrix,
            const DenseBase<ElseDerived>& elseMatrix) const;
 
     template<typename ThenDerived>
-    inline const Select<Derived,ThenDerived, typename ThenDerived::ConstantReturnType>
+    inline EIGEN_DEVICE_FUNC const Select<Derived,ThenDerived, typename ThenDerived::ConstantReturnType>
     select(const DenseBase<ThenDerived>& thenMatrix, const typename ThenDerived::Scalar& elseScalar) const;
 
     template<typename ElseDerived>
-    inline const Select<Derived, typename ElseDerived::ConstantReturnType, ElseDerived >
+    inline EIGEN_DEVICE_FUNC const Select<Derived, typename ElseDerived::ConstantReturnType, ElseDerived >
     select(const typename ElseDerived::Scalar& thenScalar, const DenseBase<ElseDerived>& elseMatrix) const;
 
     template<int p> RealScalar lpNorm() const;

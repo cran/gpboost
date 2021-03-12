@@ -1202,41 +1202,6 @@ test_that("gpb.train() works with early stopping for regression with a metric th
   )
 })
 
-
-test_that("gpb.train() supports non-ASCII feature names", {
-  dtrain <- gpb.Dataset(
-    data = matrix(rnorm(400L), ncol =  4L)
-    , label = rnorm(100L)
-  )
-  feature_names <- c("F_零", "F_一", "F_二", "F_三")
-  bst <- gpb.train(
-    data = dtrain
-    , nrounds = 5L
-    , obj = "regression"
-    , params = list(
-      metric = "rmse"
-    )
-    , colnames = feature_names
-  )
-  expect_true(gpboost:::gpb.is.Booster(bst))
-  dumped_model <- RJSONIO::fromJSON(bst$dump_model())
-
-  # UTF-8 strings are not well-supported on Windows
-  # * https://developer.r-project.org/Blog/public/2020/05/02/utf-8-support-on-windows/
-  # * https://developer.r-project.org/Blog/public/2020/07/30/windows/utf-8-build-of-r-and-cran-packages/index.html
-  if (!ON_WINDOWS) {
-    expect_identical(
-      dumped_model[["feature_names"]]
-      , feature_names
-    )
-  } else {
-    expect_identical(
-      dumped_model[["feature_names"]]
-      , iconv(feature_names, to = "UTF-8")
-    )
-  }
-})
-
 test_that("when early stopping is not activated, best_iter and best_score come from valids and not training data", {
   set.seed(708L)
   trainDF <- data.frame(
@@ -1527,7 +1492,7 @@ test_that("gpb.cv() works when you specify both 'metric' and 'eval' with strings
   # the difference metrics shouldn't have been mixed up with each other
   results <- bst$record_evals[["valid"]]
   expect_true(abs(results[["binary_error"]][["eval"]][[1L]] - 0.5005654) < TOLERANCE)
-  expect_true(abs(results[["binary_logloss"]][["eval"]][[1L]] - 0.7011232) < TOLERANCE)
+  expect_true(abs(results[["binary_logloss"]][["eval"]][[1L]] - 0.7016582) < TOLERANCE)
 
   # all boosters should have been created
   expect_length(bst$boosters, nfolds)
