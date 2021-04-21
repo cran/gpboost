@@ -50,7 +50,6 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_equal(dim(gp_model$get_cov_pars())[2], 2)
     expect_equal(dim(gp_model$get_cov_pars())[1], 2)
     expect_equal(gp_model$get_num_optim_iter(), 13)
-    
     # Using gradient descent instead of Fisher scoring
     gp_model <- fitGPModel(group_data = group, y = y,
                            params = list(optimizer_cov = "gradient_descent", std_dev = FALSE,
@@ -61,7 +60,6 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_equal(class(cov_pars_est), "numeric")
     expect_equal(length(cov_pars_est), 2)
     expect_equal(gp_model$get_num_optim_iter(), 124)
-    
     # Using gradient descent with Nesterov acceleration
     gp_model <- fitGPModel(group_data = group, y = y,
                            params = list(optimizer_cov = "gradient_descent", std_dev = FALSE,
@@ -70,7 +68,6 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                                          convergence_criterion = "relative_change_in_parameters"))
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars[c(1,3)])),1E-5)
     expect_equal(gp_model$get_num_optim_iter(), 55)
-    
     # Using gradient descent and a too large learning rate
     gp_model <- fitGPModel(group_data = group, y = y,
                            params = list(optimizer_cov = "gradient_descent", std_dev = FALSE,
@@ -78,13 +75,19 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                                          maxit = 1000, convergence_criterion = "relative_change_in_parameters"))
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars[c(1,3)])),1E-6)
     expect_equal(gp_model$get_num_optim_iter(), 27)
-    
     # Different termination criterion
     gp_model <- fitGPModel(group_data = group, y = y,
                            params = list(optimizer_cov = "fisher_scoring", std_dev = TRUE,
                                          convergence_criterion = "relative_change_in_log_likelihood"))
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),1E-6)
     expect_equal(gp_model$get_num_optim_iter(), 12)
+    # Nelder-Mead
+    gp_model <- fitGPModel(group_data = group, y = y,
+                           params = list(optimizer_cov = "nelder_mead", std_dev = TRUE))
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),1E-3)
+    expect_equal(gp_model$get_num_optim_iter(), 18)
+    
+    # Evaluation of likelihood
     ll <- gp_model$neg_log_likelihood(y=y,cov_pars=gp_model$get_cov_pars()[1,])
     expect_lt(abs(ll-(-0.7292666)),1E-6)
     
@@ -176,6 +179,17 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),1E-6)
     expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),1E-6)
     expect_equal(gp_model$get_num_optim_iter(), 3437)
+    
+    # Fit model using Nelder-Mead
+    gp_model <- fitGPModel(group_data = group,
+                           y = y, X = X,
+                           params = list(optimizer_cov = "nelder_mead",
+                                         optimizer_coef = "gradient_descent", std_dev = TRUE))
+    cov_pars <- c(0.0005892916, 0.0003727007, 2.0219180842, 1.2789596377)
+    coef <- c(1.99260508, 0.63595798, 2.01454390, 0.02384147)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),1E-6)
+    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),1E-6)
+    expect_equal(gp_model$get_num_optim_iter(), 198)
   })
   
   
@@ -221,12 +235,17 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                            group_rand_coef_data = x,
                            ind_effect_group_rand_coef = 1,
                            y = y,
-                           params = list(optimizer_cov = "gradient_descent", std_dev = TRUE,
-                                         lr_cov = 0.1, use_nesterov_acc= FALSE, maxit=5))
-    expected_values <- c(0.6435813, 0.9308820, 1.0414605, 1.0717530,
-                         0.6866298, 1.0360369, 0.5270886, 1.2441796)
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-expected_values)),1E-6)
-    expect_equal(gp_model$get_num_optim_iter(), 5)
+                           params = list(optimizer_cov = "gradient_descent", std_dev = FALSE))
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-c(0.0002845659, 2.4833741395, 1.2376189948, 0.0428108436 ))),1E-6)
+    expect_equal(gp_model$get_num_optim_iter(),1000)
+    
+    # Nelder-Mead
+    gp_model <- fitGPModel(group_data = cbind(group,group2),
+                           group_rand_coef_data = x,
+                           ind_effect_group_rand_coef = 1,
+                           y = y,
+                           params = list(optimizer_cov = "nelder_mead", std_dev = FALSE))
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-c(0.0522126336, 2.4287341933, 1.2126494963, 0.0001102573))),1E-6)
     
     # Evaluate negative log-likelihood
     nll <- gp_model$neg_log_likelihood(cov_pars=c(0.1,1,2,1.5),y=y)

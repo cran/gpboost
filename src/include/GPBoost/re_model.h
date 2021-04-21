@@ -44,8 +44,8 @@ namespace GPBoost {
 		* \param dim_gp_coords Dimension of the coordinates (=number of features) for Gaussian process
 		* \param gp_rand_coef_data Covariate data for Gaussian process random coefficients
 		* \param num_gp_rand_coef Number of Gaussian process random coefficients
-		* \param cov_fct Type of covariance (kernel) function for Gaussian process. We follow the notation and parametrization of Diggle and Ribeiro (2007) except for the Matern covariance where we follow Rassmusen and Williams (2006)
-		* \param cov_fct_shape Shape parameter of covariance function (=smoothness parameter for Matern covariance, irrelevant for some covariance functions such as the exponential or Gaussian)
+		* \param cov_fct_shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. For the Wendland covariance function, we follow the notation of Bevilacqua et al. (2018)). This parameter is irrelevant for some covariance functions such as the exponential or Gaussian.
+		* \param cov_fct_taper_range Range parameter of Wendland covariance function / taper. We follow the notation of Bevilacqua et al. (2018)
 		* \param vecchia_approx If true, the Veccia approximation is used for the Gaussian process
 		* \param num_neighbors The number of neighbors used in the Vecchia approximation
 		* \param vecchia_ordering Ordering used in the Vecchia approximation. "none" = no ordering, "random" = random ordering
@@ -53,11 +53,27 @@ namespace GPBoost {
 		* \param num_neighbors_pred The number of neighbors used in the Vecchia approximation for making predictions
 		* \param likelihood Likelihood function for the observed response variable. Default = "gaussian"
 		*/
-		LIGHTGBM_EXPORT REModel(data_size_t num_data, const gp_id_t* cluster_ids_data = nullptr, const char* re_group_data = nullptr, data_size_t num_re_group = 0,
-			const double* re_group_rand_coef_data = nullptr, const int32_t* ind_effect_group_rand_coef = nullptr, data_size_t num_re_group_rand_coef = 0,
-			data_size_t num_gp = 0, const double* gp_coords_data = nullptr, int dim_gp_coords = 2, const double* gp_rand_coef_data = nullptr, data_size_t num_gp_rand_coef = 0,
-			const char* cov_fct = nullptr, double cov_fct_shape = 0., bool vecchia_approx = false, int num_neighbors = 30, const char* vecchia_ordering = nullptr,
-			const char* vecchia_pred_type = nullptr, int num_neighbors_pred = 30, const char* likelihood = nullptr);
+		LIGHTGBM_EXPORT REModel(data_size_t num_data,
+			const gp_id_t* cluster_ids_data,
+			const char* re_group_data,
+			data_size_t num_re_group,
+			const double* re_group_rand_coef_data,
+			const int32_t* ind_effect_group_rand_coef,
+			data_size_t num_re_group_rand_coef,
+			data_size_t num_gp,
+			const double* gp_coords_data,
+			int dim_gp_coords,
+			const double* gp_rand_coef_data,
+			data_size_t num_gp_rand_coef,
+			const char* cov_fct,
+			double cov_fct_shape,
+			double cov_fct_taper_range,
+			bool vecchia_approx,
+			int num_neighbors,
+			const char* vecchia_ordering,
+			const char* vecchia_pred_type,
+			int num_neighbors_pred,
+			const char* likelihood);
 
 		/*! \brief Destructor */
 		LIGHTGBM_EXPORT ~REModel();
@@ -112,11 +128,6 @@ namespace GPBoost {
 			bool calc_std_dev = false);
 
 		/*!
-		* \brief Reset cov_pars_ (to their initial values).
-		*/
-		void ResetCovPars();
-
-		/*!
 		* \brief Set configuration parameters for the optimizer for linear regression coefficients
 		* \param num_covariates Number of coefficients / covariates
 		* \param init_coef Initial values for the regression coefficients
@@ -126,6 +137,11 @@ namespace GPBoost {
 		*/
 		void SetOptimCoefConfig(int num_covariates = 0, double* init_coef = nullptr,
 			double lr_coef = 0.1, double acc_rate_coef = 0.5, const char* optimizer = nullptr);
+
+		/*!
+		* \brief Reset cov_pars_ (to their initial values).
+		*/
+		void ResetCovPars();
 
 		/*!
 		* \brief Find parameters that minimize the negative log-ligelihood (=MLE) using (Nesterov accelerated) gradient descent
@@ -310,7 +326,7 @@ namespace GPBoost {
 		bool use_nesterov_acc_ = true;//only used for "gradient_descent"
 		int nesterov_schedule_version_ = 0;
 		bool optim_trace_ = false;
-		string_t optimizer_cov_pars_ = "fisher_scoring";//"gradient_descent" or "fisher_scoring" (The default = "fisher_scoring" is changed to "gradient_descent" for non-Gaussian data upon initialization)
+		string_t optimizer_cov_pars_ = "gradient_descent";//"gradient_descent", "fisher_scoring", or "nelder_mead" (The default = "fisher_scoring" is changed to "gradient_descent" for non-Gaussian data upon initialization)
 		vec_t coef_;//linear regression coefficients for fixed effects (in case there are any)
 		bool has_covariates_ = false;
 		bool coef_initialized_ = false;
@@ -320,7 +336,11 @@ namespace GPBoost {
 		string_t optimizer_coef_ = "wls";//"gradient_descent" or "wls" (The default = "wls" is changed to "gradient_descent" for non-Gaussian data upon initialization)
 		string_t convergence_criterion_ = "relative_change_in_log_likelihood";//"relative_change_in_log_likelihood" (default) or "relative_change_in_parameters"
 		bool cov_pars_optimizer_hase_been_set_ = false;//true if the function 'SetOptimConfig' has been called and optimizer_cov_pars_ has been set
+		bool coef_optimizer_hase_been_set_ = false;//true if the function 'SetOptimCoefConfig' has been called and optimizer_coef_ has been set
 		bool calc_std_dev_ = false;
+		/*! \brief List of covariance functions wtih compact support */
+		const std::set<string_t> COMPACT_SUPPORT_COVS_{ "wendland",
+			"exponential_tapered" };
 	};
 
 }  // namespace GPBoost

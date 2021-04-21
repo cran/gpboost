@@ -14,12 +14,18 @@
 #' @param gp_coords A \code{matrix} with coordinates (features) for Gaussian process
 #' @param gp_rand_coef_data A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients
 #' @param cov_function A \code{string} specifying the covariance function for the Gaussian process. 
-#' The following covariance functions are available: "exponential", "gaussian", "matern", and "powered_exponential". 
-#' We follow the notation and parametrization of Diggle and Ribeiro (2007) except for the Matern covariance 
-#' where we follow Rassmusen and Williams (2006)
-#' @param cov_fct_shape A \code{numeric} specifying the shape parameter of a covariance function 
-#' (=smoothness parameter for Matern covariance, irrelevant for some covariance functions 
-#' such as the exponential or Gaussian)
+#' The following covariance functions are available:
+#' "exponential", "gaussian", "matern", "powered_exponential", "wendland", "exponential_tapered"
+#' For "exponential", "gaussian", and "powered_exponential", we follow the notation and parametrization of Diggle and Ribeiro (2007).
+#' For "matern", we follow the notation of Rassmusen and Williams (2006).
+#' For "wendland", we follow the notation of Bevilacqua et al. (2019).
+#' A covariance function with the suffix "_tapered" refers to a covariance function that is multiplied by 
+#' a compactly supported Wendland covariance function (= tapering)
+#' @param cov_fct_shape A \code{numeric} specifying the shape parameter of the covariance function 
+#' (=smoothness parameter for Matern and Wendland covariance. For the Wendland covariance function, 
+#' we follow the notation of Bevilacqua et al. (2019)). 
+#' This parameter is irrelevant for some covariance functions such as the exponential or Gaussian.
+#' @param cov_fct_taper_range A \code{numeric} specifying the range parameter of the Wendland covariance function / taper. We follow the notation of Bevilacqua et al. (2019)
 #' @param vecchia_approx A \code{boolean}. If true, the Vecchia approximation is used 
 #' @param num_neighbors An \code{integer} specifying the number of neighbors for the Vecchia approximation
 #' @param vecchia_ordering A \code{string} specifying the ordering used in the Vecchia approximation. 
@@ -42,12 +48,12 @@
 #' @param params A \code{list} with parameters for the model fitting / optimization
 #'             \itemize{
 #'                \item{optimizer_cov}{ Optimizer used for estimating covariance parameters. 
-#'                Options: "gradient_descent" or "fisher_scoring". Default="fisher_scoring" for Gaussian data
+#'                Options: "gradient_descent", "fisher_scoring", or "nelder_mead". Default="fisher_scoring" for Gaussian data
 #'                and "gradient_descent" for other likelihoods.}
 #'                \item{optimizer_coef}{ Optimizer used for estimating linear regression coefficients, if there are any 
 #'                (for the GPBoost algorithm there are usually none). 
 #'                Options: "gradient_descent" or "wls". Gradient descent steps are done simultaneously 
-#'                with gradient descent steps for the covariance paramters. 
+#'                with gradient descent steps for the covariance parameters. 
 #'                "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
 #'                Default="wls" for Gaussian data and "gradient_descent" for other likelihoods.}
 #'                \item{maxit}{ Maximal number of iterations for optimization algorithm. Default=1000.}
@@ -111,6 +117,7 @@ gpb.GPModel <- R6::R6Class(
                           gp_rand_coef_data = NULL,
                           cov_function = "exponential",
                           cov_fct_shape = 0,
+                          cov_fct_taper_range = 1,
                           vecchia_approx = FALSE,
                           num_neighbors = 30L,
                           vecchia_ordering = "none",
@@ -120,7 +127,7 @@ gpb.GPModel <- R6::R6Class(
                           free_raw_data = FALSE,
                           modelfile = NULL,
                           model_list = NULL) {
-
+      
       if (!is.null(modelfile) | !is.null(model_list)){
         # Load model from file or list
         
@@ -147,8 +154,8 @@ gpb.GPModel <- R6::R6Class(
           if (!is.null(model_list[[feature]])) {
             if (is.list(model_list[[feature]])) {
               model_list[[feature]] <- matrix(unlist(model_list[[feature]]),
-                                             nrow = length(model_list[[feature]]),
-                                             byrow = TRUE)
+                                              nrow = length(model_list[[feature]]),
+                                              byrow = TRUE)
               if (dim(model_list[[feature]])[2]==1) {
                 model_list[[feature]] <- as.vector(model_list[[feature]])
               }
@@ -164,6 +171,7 @@ gpb.GPModel <- R6::R6Class(
         gp_rand_coef_data = model_list[["gp_rand_coef_data"]]
         cov_function = model_list[["cov_function"]]
         cov_fct_shape = model_list[["cov_fct_shape"]]
+        cov_fct_taper_range = model_list[["cov_fct_taper_range"]]
         vecchia_approx = model_list[["vecchia_approx"]]
         num_neighbors = model_list[["num_neighbors"]]
         vecchia_ordering = model_list[["vecchia_ordering"]]
@@ -322,45 +330,23 @@ gpb.GPModel <- R6::R6Class(
           
         }
         
-        if (!(vecchia_ordering %in% private$SUPPORTED_VECCHIA_ORDERING)) {
-          stop("GPModel: ", sQuote("vecchia_ordering"), " needs to be: ",
-               paste(sQuote(private$SUPPORTED_VECCHIA_ORDERING),collapse=", "))
-        }
-        
-        if (!(vecchia_pred_type %in% private$VECCHIA_PRED_TYPES)) {
-          stop("GPModel: ", sQuote("vecchia_pred_type"), " needs to be: ",
-               paste(sQuote(private$VECCHIA_PRED_TYPES),collapse=", "))
-        }
-        
-        if (!(cov_function %in% private$SUPPORTED_COV_FUNCTIONS)) {
-          stop("GPModel: ", sQuote("cov_function"), " needs to be: ",
-               paste(sQuote(private$SUPPORTED_COV_FUNCTIONS),collapse=", "))
-        }
-        
-        if (cov_function == "powered_exponential") {
-          if (cov_fct_shape <= 0 || cov_fct_shape > 2) {
-            stop(sQuote("cov_fct_shape"), " needs to be larger than 0 and smaller or equal than 2 for ", sQuote("cov_function=powered_exponential"))
-          }
-        }
-        
-        if (cov_function == "matern") {
-          if (!(cov_fct_shape == 0.5 || cov_fct_shape == 1.5 || cov_fct_shape == 2.5)) {
-            stop(sQuote("cov_fct_shape"), " needs to be 0.5, 1.5, or 2.5 for ", sQuote("cov_function=matern"))
-          }
-        }
-        
         private$num_gp <- 1L
         private$dim_coords <- as.integer(dim(gp_coords)[2])
         private$gp_coords <- gp_coords
         gp_coords <- as.vector(matrix(private$gp_coords)) #convert to correct format for sending to C
         private$cov_function <- cov_function
         private$cov_fct_shape <- as.numeric(cov_fct_shape)
+        private$cov_fct_taper_range <- as.numeric(cov_fct_taper_range)
         private$num_neighbors <- as.integer(num_neighbors)
         private$vecchia_ordering <- vecchia_ordering
         vecchia_ordering <- gpb.c_str(vecchia_ordering)
         private$vecchia_pred_type <- vecchia_pred_type
         private$num_neighbors_pred <- as.integer(num_neighbors_pred)
-        private$cov_par_names <- c(private$cov_par_names,"GP_var","GP_range")
+        if (private$cov_function == "wendland") {
+          private$cov_par_names <- c(private$cov_par_names,"GP_var")
+        } else {
+          private$cov_par_names <- c(private$cov_par_names,"GP_var","GP_range")
+        }
         
         # Set data for GP random coef
         if (!is.null(gp_rand_coef_data)) {
@@ -392,11 +378,24 @@ gpb.GPModel <- R6::R6Class(
           gp_rand_coef_data <- as.vector(matrix(private$gp_rand_coef_data)) #convert to correct format for sending to C
           for (ii in 1:private$num_gp_rand_coef) {
             if (is.null(colnames(private$gp_rand_coef_data))) {
-              private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"),paste0("GP_rand_coef_nb_", ii,"_range"))
+              if (private$cov_function == "wendland") {
+                private$cov_par_names <- c(private$cov_par_names,
+                                           paste0("GP_rand_coef_nb_", ii,"_var"))
+              } else {
+                private$cov_par_names <- c(private$cov_par_names,
+                                           paste0("GP_rand_coef_nb_", ii,"_var"),
+                                           paste0("GP_rand_coef_nb_", ii,"_range"))
+              }
+              
             } else {
-              private$cov_par_names <- c(private$cov_par_names,
-                                         paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"),
-                                         paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range"))
+              if (private$cov_function == "wendland") {
+                private$cov_par_names <- c(private$cov_par_names,
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"))
+              } else {
+                private$cov_par_names <- c(private$cov_par_names,
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"),
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range"))
+              }
             }
           }
         }
@@ -417,7 +416,7 @@ gpb.GPModel <- R6::R6Class(
             
             private$cluster_ids_map_to_int <- structure(1:length(unique(cluster_ids)),names=c(unique(cluster_ids)))
             cluster_ids = private$cluster_ids_map_to_int[cluster_ids]
-
+            
           }
           
         } else {
@@ -458,6 +457,7 @@ gpb.GPModel <- R6::R6Class(
                          private$num_gp_rand_coef,
                          cov_function_c_str,
                          private$cov_fct_shape,
+                         private$cov_fct_taper_range,
                          private$vecchia_approx,
                          private$num_neighbors,
                          vecchia_ordering,
@@ -639,6 +639,8 @@ gpb.GPModel <- R6::R6Class(
         message(paste0("GPModel: Number of iterations until convergence: ", self$get_num_optim_iter()))
       }
       
+      return(invisible(self))
+      
     },
     
     # Evaluate the negative log-ligelihood
@@ -819,7 +821,8 @@ gpb.GPModel <- R6::R6Class(
                convergence_criterion,
                std_dev)
       
-      return(invisible(NULL))
+      return(invisible(self))
+     
       
     },
     
@@ -845,7 +848,7 @@ gpb.GPModel <- R6::R6Class(
     
     # Set configuration parameters for the optimizer
     set_optim_coef_params = function(params = list()) {
-      num_coef=NULL
+      num_coef <- NULL
       
       if (gpb.is.null.handle(private$handle)) {
         stop("GPModel: Gaussian process model has not been initialized")
@@ -908,7 +911,7 @@ gpb.GPModel <- R6::R6Class(
                acc_rate_coef,
                optimizer_coef_c_str)
       
-      return(invisible(NULL))
+      return(invisible(self))
       
     },
     
@@ -1195,7 +1198,7 @@ gpb.GPModel <- R6::R6Class(
                gp_rand_coef_data_pred,
                X_pred)
       
-      return(invisible(NULL))
+      return(invisible(self))
       
     },
     
@@ -1234,10 +1237,6 @@ gpb.GPModel <- R6::R6Class(
       
       group_data_pred_c_str <- NULL
       if (!is.null(vecchia_pred_type)) {
-        if (!(vecchia_pred_type %in% private$VECCHIA_PRED_TYPES)) {
-          stop("predict.GPModel: ", sQuote("vecchia_pred_type"), " needs to be either: ",
-               paste(sQuote(private$VECCHIA_PRED_TYPES),collapse=", "))
-        }
         private$vecchia_pred_type <- vecchia_pred_type
       }
       vecchia_pred_type_c_str <- gpb.c_str(private$vecchia_pred_type)
@@ -1512,7 +1511,7 @@ gpb.GPModel <- R6::R6Class(
                 }
               }
               cluster_ids_pred <- cluster_ids_pred_map_to_int[cluster_ids_pred]
-                
+              
             }
             
           } else {
@@ -1721,6 +1720,10 @@ gpb.GPModel <- R6::R6Class(
       return(private$cov_fct_shape)
     },
     
+    get_cov_fct_taper_range = function() {
+      return(private$cov_fct_taper_range)
+    },
+    
     get_ind_effect_group_rand_coef = function() {
       return(private$ind_effect_group_rand_coef)
     },
@@ -1760,7 +1763,7 @@ gpb.GPModel <- R6::R6Class(
                private$handle,
                likelihood_c_str)
       
-      return(invisible(NULL))
+      return(invisible(self))
     },
     
     model_to_list = function(include_response_data=TRUE) {
@@ -1788,8 +1791,9 @@ gpb.GPModel <- R6::R6Class(
       model_list[["vecchia_ordering"]] <- private$vecchia_ordering
       model_list[["vecchia_pred_type"]] <- private$vecchia_pred_type
       model_list[["num_neighbors_pred"]] <- private$num_neighbors_pred
-      model_list[["cov_function"]] <- self$get_cov_function()
-      model_list[["cov_fct_shape"]] <- self$get_cov_fct_shape()
+      model_list[["cov_function"]] <- private$cov_function
+      model_list[["cov_fct_shape"]] <- private$cov_fct_shape
+      model_list[["cov_fct_taper_range"]] <- private$cov_fct_taper_range
       # Covariate data
       model_list[["has_covariates"]] <- private$has_covariates
       if (private$has_covariates) {
@@ -1828,8 +1832,11 @@ gpb.GPModel <- R6::R6Class(
       # Use RJSONIO R package since jsonlite and rjson omit the last digit of a double
       save_data_json <- RJSONIO::toJSON(self$model_to_list(include_response_data=TRUE), digits=17)
       write(save_data_json, file=filename)
+      
+      return(invisible(self))
+      
     }
-    
+
   ),
   
   private = list(
@@ -1850,6 +1857,7 @@ gpb.GPModel <- R6::R6Class(
     gp_rand_coef_data = NULL,
     cov_function = "exponential",
     cov_fct_shape = 0.,
+    cov_fct_taper_range = 1.,
     vecchia_approx = FALSE,
     num_neighbors = 30L,
     vecchia_ordering = "none",
@@ -1879,15 +1887,15 @@ gpb.GPModel <- R6::R6Class(
                   trace = FALSE,
                   convergence_criterion = "relative_change_in_log_likelihood",
                   std_dev = FALSE),
-    SUPPORTED_COV_FUNCTIONS = c("exponential", "gaussian", "powered_exponential", "matern"),
-    SUPPORTED_VECCHIA_ORDERING = c("none", "random"),
-    VECCHIA_PRED_TYPES = c("order_obs_first_cond_obs_only",
-                           "order_obs_first_cond_all", "order_pred_first",
-                           "latent_order_obs_first_cond_obs_only","latent_order_obs_first_cond_all"),
     
     determine_num_cov_pars = function(likelihood) {
+      if (private$cov_function == "wendland") {
+        num_par_per_GP <- 1L
+      } else {
+        num_par_per_GP <- 2L
+      }
       private$num_cov_pars <- private$num_group_re + private$num_group_rand_coef + 
-        2L * (private$num_gp + private$num_gp_rand_coef)
+        num_par_per_GP * (private$num_gp + private$num_gp_rand_coef)
       if (likelihood == "gaussian"){
         private$num_cov_pars <- private$num_cov_pars + 1L
       }
@@ -1956,6 +1964,7 @@ GPModel <- function(group_data = NULL,
                     gp_rand_coef_data = NULL,
                     cov_function = "exponential",
                     cov_fct_shape = 0,
+                    cov_fct_taper_range = 1,
                     vecchia_approx = FALSE,
                     num_neighbors = 30L,
                     vecchia_ordering = "none",
@@ -1973,6 +1982,7 @@ GPModel <- function(group_data = NULL,
                             gp_rand_coef_data = gp_rand_coef_data,
                             cov_function = cov_function,
                             cov_fct_shape = cov_fct_shape,
+                            cov_fct_taper_range = cov_fct_taper_range,
                             vecchia_approx = vecchia_approx,
                             num_neighbors = num_neighbors,
                             vecchia_ordering = vecchia_ordering,
@@ -2154,6 +2164,7 @@ fitGPModel <- function(group_data = NULL,
                        gp_rand_coef_data = NULL,
                        cov_function = "exponential",
                        cov_fct_shape = 0,
+                       cov_fct_taper_range = 1,
                        vecchia_approx = FALSE,
                        num_neighbors = 30L,
                        vecchia_ordering = "none",
@@ -2173,6 +2184,7 @@ fitGPModel <- function(group_data = NULL,
                              gp_rand_coef_data = gp_rand_coef_data,
                              cov_function = cov_function,
                              cov_fct_shape = cov_fct_shape,
+                             cov_fct_taper_range = cov_fct_taper_range,
                              vecchia_approx = vecchia_approx,
                              num_neighbors = num_neighbors,
                              vecchia_ordering = vecchia_ordering,
@@ -2226,7 +2238,6 @@ summary.GPModel <- function(object, ...){
   print(signif(cov_pars,6))
   if (object$.__enclos_env__$private$has_covariates) {
     coef <- object$get_coef()
-    cat("\n")
     message("Linear regression coefficients:")
     print(signif(coef,6))
   }
@@ -2234,6 +2245,7 @@ summary.GPModel <- function(object, ...){
     cat("\n")
     message("Note: no convergence after the maximal number of iterations")
   }
+  return(invisible(object))
 }
 
 #' Make predictions for a \code{GPModel}
@@ -2358,7 +2370,7 @@ predict.GPModel <- function(object,
 #' @author Fabio Sigrist
 #' @export
 #' 
-saveGPModel <- function(gp_model, filename){
+saveGPModel <- function(gp_model, filename) {
   
   if (!gpb.check.r6.class(gp_model, "GPModel")) {
     stop("saveGPModel: gp_model needs to be a ", sQuote("GPModel"))
@@ -2413,3 +2425,86 @@ loadGPModel <- function(filename){
   return(invisible(gpb.GPModel$new(modelfile = filename)))
   
 }
+
+#' Generic 'set_prediction_data' method for a \code{GPModel}
+#'
+#' Generic 'set_prediction_data' method for a \code{GPModel}
+#' 
+#' @param gp_model A \code{GPModel}
+#' @param group_data_pred A \code{vector} or \code{matrix} with labels of group levels for which predictions are made (if there are grouped random effects in the \code{GPModel})
+#' @param group_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for grouped random coefficients (if there are some in the \code{GPModel})
+#' @param gp_coords_pred A \code{matrix} with prediction coordinates (features) for Gaussian process (if there is a GP in the \code{GPModel})
+#' @param gp_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients (if there are some in the \code{GPModel})
+#' @param cluster_ids_pred A \code{vector} with IDs / labels indicating the realizations of random effects / Gaussian processes for which predictions are made (set to NULL if you have not specified this when creating the \code{GPModel})
+#' @param X_pred A \code{matrix} with covariate data for the linear regression term (if there is one in the \code{GPModel})
+#'
+#' @examples
+#' \donttest{
+#' library(gpboost)
+#' data(GPBoost_data, package = "gpboost")
+#' set.seed(1)
+#' train_ind <- sample.int(length(y),size=250)
+#' gp_model <- GPModel(group_data = group_data[train_ind,1], likelihood="gaussian")
+#' set_prediction_data(gp_model, group_data_pred = group_data[-train_ind,1])
+#' }
+#' 
+#' @author Fabio Sigrist
+#' @export 
+#' 
+set_prediction_data <- function(gp_model,
+                                group_data_pred = NULL,
+                                group_rand_coef_data_pred = NULL,
+                                gp_coords_pred = NULL,
+                                gp_rand_coef_data_pred = NULL,
+                                cluster_ids_pred = NULL,
+                                X_pred = NULL) UseMethod("set_prediction_data")
+
+#' Set prediction data for a \code{GPModel}
+#' 
+#' Set the data required for making predictions with a \code{GPModel} 
+#' 
+#' @param gp_model A \code{GPModel}
+#' @param group_data_pred A \code{vector} or \code{matrix} with labels of group levels for which predictions are made (if there are grouped random effects in the \code{GPModel})
+#' @param group_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for grouped random coefficients (if there are some in the \code{GPModel})
+#' @param gp_coords_pred A \code{matrix} with prediction coordinates (features) for Gaussian process (if there is a GP in the \code{GPModel})
+#' @param gp_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients (if there are some in the \code{GPModel})
+#' @param cluster_ids_pred A \code{vector} with IDs / labels indicating the realizations of random effects / Gaussian processes for which predictions are made (set to NULL if you have not specified this when creating the \code{GPModel})
+#' @param X_pred A \code{matrix} with covariate data for the linear regression term (if there is one in the \code{GPModel})
+#'
+#' @return A \code{GPModel}
+#'
+#' @examples
+#' \donttest{
+#' library(gpboost)
+#' data(GPBoost_data, package = "gpboost")
+#' set.seed(1)
+#' train_ind <- sample.int(length(y),size=250)
+#' gp_model <- GPModel(group_data = group_data[train_ind,1], likelihood="gaussian")
+#' set_prediction_data(gp_model, group_data_pred = group_data[-train_ind,1])
+#' }
+#' @method set_prediction_data GPModel 
+#' @rdname set_prediction_data.GPModel
+#' @author Fabio Sigrist
+#' @export 
+#' 
+set_prediction_data.GPModel <- function(gp_model,
+                                        group_data_pred = NULL,
+                                        group_rand_coef_data_pred = NULL,
+                                        gp_coords_pred = NULL,
+                                        gp_rand_coef_data_pred = NULL,
+                                        cluster_ids_pred = NULL,
+                                        X_pred = NULL) {
+  
+  if (!gpb.check.r6.class(gp_model, "GPModel")) {
+    stop("set_prediction_data.GPModel: gp_model needs to be a ", sQuote("GPModel"))
+  }
+  
+  invisible(gp_model$set_prediction_data(group_data_pred = group_data_pred,
+                                         group_rand_coef_data_pred = group_rand_coef_data_pred,
+                                         gp_coords_pred = gp_coords_pred,
+                                         gp_rand_coef_data_pred = gp_rand_coef_data_pred,
+                                         cluster_ids_pred = cluster_ids_pred,
+                                         X_pred = X_pred))
+}
+
+

@@ -41,13 +41,12 @@ using LightGBM::Log;
 #define M_2_SQRTPI      1.12837916709551257390
 #endif
 
-//#include <chrono>  // only needed for debugging
-//#include <thread> // only needed for debugging
-
-//std::chrono::steady_clock::time_point beginall = std::chrono::steady_clock::now();//DELETE
-//std::chrono::steady_clock::time_point begin, end;//DELETE
+#include <chrono>  // only for debugging
+#include <thread> // only for debugging
+//std::chrono::steady_clock::time_point beginall = std::chrono::steady_clock::now();// only for debugging
+//std::chrono::steady_clock::time_point begin, end;// only for debugging
 //double el_time;
-//end = std::chrono::steady_clock::now();//DELETE
+//end = std::chrono::steady_clock::now();// only for debugging
 //el_time = (double)(std::chrono::duration_cast<std::chrono::microseconds>(end - beginall).count()) / 1000000.;// Only for debugging
 //Log::REInfo("TOTAL TIME for mode calculation: %g", el_time);// Only for debugging
 
@@ -55,9 +54,9 @@ namespace GPBoost {
 
 	/*!
 	* \brief This class implements the likelihoods for the Gaussian proceses
-	* The template parameter <T_chol> can be either <chol_den_mat_t> or <chol_sp_mat_t>
+	* The template parameters <T_mat, T_chol> can be either <den_mat_t, chol_den_mat_t> or <sp_mat_t, chol_sp_mat_t>
 	*/
-	template<typename T_chol>//
+	template<typename T_mat, typename T_chol>
 	class Likelihood {
 	public:
 		/*! \brief Constructor */
@@ -80,6 +79,7 @@ namespace GPBoost {
 			if (likelihood_type_ == "gamma") {
 				aux_pars_ = { 1. };//shape parameter, TODO: also estimate this parameter
 			}
+			chol_fact_pattern_analyzed_ = false;
 		}
 
 		/*!
@@ -123,6 +123,7 @@ namespace GPBoost {
 				Log::REFatal("Likelihood of type '%s' is not supported.", likelihood.c_str());
 			}
 			likelihood_type_ = likelihood;
+			chol_fact_pattern_analyzed_ = false;
 		}
 
 		/*!
@@ -464,6 +465,39 @@ namespace GPBoost {
 		}
 
 		/*!
+		* \brief Do Cholesky decomposition
+		* \param[out] chol_fact Cholesky factor
+		* \param psi Matrix for which the Cholesky decomposition should be done
+		*/
+		template <class T_mat_1,  typename std::enable_if< std::is_same<sp_mat_t, T_mat_1>::value>::type * = nullptr  >
+		void CalcChol(T_chol& chol_fact, const T_mat_1& psi) {
+			if (!chol_fact_pattern_analyzed_) {
+				chol_fact.analyzePattern(psi);
+				chol_fact_pattern_analyzed_ = true;
+			}
+			chol_fact.factorize(psi);
+		}
+		template <class T_mat_1, typename std::enable_if< std::is_same<den_mat_t, T_mat_1>::value>::type * = nullptr  >
+		void CalcChol(T_chol& chol_fact, const T_mat_1& psi) {
+			chol_fact.compute(psi);
+		}
+
+		/*!
+		* \brief Apply permutation matrix of Cholesky factor (if it exists)
+		* \param chol_fact Cholesky factor
+		* \param M[out] Matrix to which the permutation is applied to
+		*/
+		template <class T_mat_1, typename std::enable_if< std::is_same<sp_mat_t, T_mat_1>::value>::type * = nullptr  >
+		void ApplyPermutationCholeskyFactor(const T_chol& chol_fact, T_mat_1& M) {
+			if (chol_fact.permutationP().size() > 0) {//Apply permutation if an ordering is used
+				M = chol_fact.permutationP() * M;
+			}
+		}
+		template <class T_mat_1, typename std::enable_if< std::is_same<den_mat_t, T_mat_1>::value>::type * = nullptr  >
+		void ApplyPermutationCholeskyFactor(const T_chol&, T_mat_1&) {
+		}
+
+		/*!
 		* \brief Find the mode of the posterior of the latent random effects using Newton's method and calculate the approximative marginal log-likelihood..
 		*		Calculations are done using a numerically stable variant based on factorizing ("inverting") B = (Id + Wsqrt * Z*Sigma*Zt * Wsqrt).
 		*		In the notation of the paper: "Sigma = Z*Sigma*Z^T" and "Z = Id".
@@ -475,7 +509,6 @@ namespace GPBoost {
 		* \param ZSigmaZt Covariance matrix of latent random effect (can be den_mat_t or sp_mat_t)
 		* \param[out] approx_marginal_ll Approximate marginal log-likelihood evaluated at the mode
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void FindModePostRandEffCalcMLLStable(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -525,9 +558,9 @@ namespace GPBoost {
 				// Calculate Cholesky factor of matrix B = Id + Wsqrt * Z*Sigma*Zt * Wsqrt
 				Wsqrt.diagonal().array() = second_deriv_neg_ll_.array().sqrt();
 				Id_plus_Wsqrt_ZSigmaZt_Wsqrt = Id + Wsqrt * (*ZSigmaZt) * Wsqrt;
-				chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.compute(Id_plus_Wsqrt_ZSigmaZt_Wsqrt);
+				CalcChol<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, Id_plus_Wsqrt_ZSigmaZt_Wsqrt);
 				// Update mode and a_vec_
-				rhs = second_deriv_neg_ll_.asDiagonal() * mode_ + first_deriv_ll_;
+				rhs.array() = second_deriv_neg_ll_.array() * mode_.array() + first_deriv_ll_.array();
 				v_aux = Wsqrt * (*ZSigmaZt) * rhs;
 				a_vec_ = rhs - Wsqrt * (chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.solve(v_aux));
 				mode_ = (*ZSigmaZt) * a_vec_;
@@ -564,8 +597,8 @@ namespace GPBoost {
 			}
 			Wsqrt.diagonal().array() = second_deriv_neg_ll_.array().sqrt();
 			Id_plus_Wsqrt_ZSigmaZt_Wsqrt = Id + Wsqrt * (*ZSigmaZt) * Wsqrt;
-			chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.compute(Id_plus_Wsqrt_ZSigmaZt_Wsqrt);
-			approx_marginal_ll -= ((den_mat_t)chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL()).diagonal().array().log().sum();
+			CalcChol<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, Id_plus_Wsqrt_ZSigmaZt_Wsqrt);
+			approx_marginal_ll -= ((T_mat)chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL()).diagonal().array().log().sum();
 			mode_has_been_calculated_ = true;
 			////Only for debugging
 			//Log::REInfo("FindModePostRandEffCalcMLLStable");
@@ -595,7 +628,6 @@ namespace GPBoost {
 		* \param random_effects_indices_of_data Indices that indicate to which random effect every data point is related
 		* \param[out] approx_marginal_ll Approximate marginal log-likelihood evaluated at the mode
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -603,6 +635,9 @@ namespace GPBoost {
 			const std::shared_ptr<T_mat> Sigma,
 			const data_size_t * const random_effects_indices_of_data,
 			double& approx_marginal_ll) {
+			//std::chrono::steady_clock::time_point beginall = std::chrono::steady_clock::now();// only for debugging
+			//std::chrono::steady_clock::time_point begin, end;// only for debugging
+			//double el_time;
 			// Initialize variables
 			if (!mode_initialized_) {
 				InitializeModeAvec();
@@ -652,7 +687,7 @@ namespace GPBoost {
 						}
 					}//end omp critical
 				}//end omp parallel
-				//Old non-parallel version
+				//Non-parallel version
 				//for (data_size_t i = 0; i < num_data; ++i) {
 				//	diag_sqrt_ZtWZ[random_effects_indices_of_data[i]] += second_deriv_neg_ll_[i];
 				//}
@@ -671,17 +706,20 @@ namespace GPBoost {
 						}
 					}//end omp critical
 				}//end omp parallel
-				////Old non-parallel version
-				//for (data_size_t i = 0; i < num_data; ++i) {
-				//	rhs[random_effects_indices_of_data[i]] += first_deriv_ll_[i];
-				//}
 				// Calculate Cholesky factor of matrix B = Id + ZtWZsqrt * Sigma * ZtWZsqrt
 				diag_sqrt_ZtWZ.array() = diag_sqrt_ZtWZ.array().sqrt();
 				Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt = Id + diag_sqrt_ZtWZ.asDiagonal() * (*Sigma) * diag_sqrt_ZtWZ.asDiagonal();
-				chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.compute(Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt);
+				CalcChol<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt);//this is the bottleneck (for large data and sparse matrices)
+				////only for debugging
+				//Log::REInfo("FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale: Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt: number non zeros = %d", GetNumberNonZeros<T_mat>(Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt));//only for debugging
+				//T_mat chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt = chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL();//only for debugging
+				//Log::REInfo("FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale: chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_: number non zeros = %d", GetNumberNonZeros<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt));//only for debugging
 				// Update mode and a_vec_
-				v_aux = diag_sqrt_ZtWZ.asDiagonal() * (*Sigma) * rhs;
-				a_vec_ = rhs - diag_sqrt_ZtWZ.asDiagonal() * (chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.solve(v_aux));
+				v_aux = (*Sigma) * rhs;
+				v_aux.array() *= diag_sqrt_ZtWZ.array();
+				a_vec_ = -chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.solve(v_aux);
+				a_vec_.array() *= diag_sqrt_ZtWZ.array();
+				a_vec_.array() += rhs.array();
 				mode_ = (*Sigma) * a_vec_;
 				// Update location parameter of log-likelihood for calculation of approx. marginal log-likelihood (objective function)
 				if (fixed_effects == nullptr) {
@@ -705,7 +743,7 @@ namespace GPBoost {
 				else {
 					approx_marginal_ll = approx_marginal_ll_new;
 				}
-			}
+			}//end loop for finding mode
 			if (it == MAXIT_MODE_NEWTON_) {
 				Log::REDebug("Algorithm for finding mode for Laplace approximation has not converged after the maximal number of iterations");
 			}
@@ -728,8 +766,8 @@ namespace GPBoost {
 			}//end omp parallel
 			diag_sqrt_ZtWZ.array() = diag_sqrt_ZtWZ.array().sqrt();
 			Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt = Id + diag_sqrt_ZtWZ.asDiagonal() * (*Sigma) * diag_sqrt_ZtWZ.asDiagonal();
-			chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.compute(Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt);
-			approx_marginal_ll -= ((den_mat_t)chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL()).diagonal().array().log().sum();
+			CalcChol<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt);
+			approx_marginal_ll -= ((T_mat)chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL()).diagonal().array().log().sum();
 			mode_has_been_calculated_ = true;
 			////Only for debugging
 			//Log::REInfo("FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale");
@@ -743,6 +781,9 @@ namespace GPBoost {
 			//for (int i = 0; i < 5; ++i) {
 			//	Log::REInfo("a[%d]: %g", i, a_vec_[i]);
 			//}
+			//end = std::chrono::steady_clock::now();// only for debugging
+			//el_time = (double)(std::chrono::duration_cast<std::chrono::microseconds>(end - beginall).count()) / 1000000.;// Only for debugging
+			//Log::REInfo("FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale: TOTAL TIME for mode calculation: %g", el_time);// Only for debugging
 		}//end FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale
 
 		/*!
@@ -794,8 +835,13 @@ namespace GPBoost {
 				// Calculate Cholesky factor and update mode
 				rhs = Zt * first_deriv_ll_ - SigmaI * mode_;//right hand side for updating mode
 				SigmaI_plus_ZtWZ = SigmaI + Zt * second_deriv_neg_ll_.asDiagonal() * Z;
-				chol_fact_SigmaI_plus_ZtWZ_.compute(SigmaI_plus_ZtWZ);
-				mode_ += chol_fact_SigmaI_plus_ZtWZ_.solve(rhs);
+				SigmaI_plus_ZtWZ.makeCompressed();
+				if (!chol_fact_pattern_analyzed_) {
+					chol_fact_SigmaI_plus_ZtWZ_grouped_.analyzePattern(SigmaI_plus_ZtWZ);
+					chol_fact_pattern_analyzed_ = true;
+				}
+				chol_fact_SigmaI_plus_ZtWZ_grouped_.factorize(SigmaI_plus_ZtWZ);
+				mode_ += chol_fact_SigmaI_plus_ZtWZ_grouped_.solve(rhs);
 				// Update location parameter of log-likelihood for calculation of approx. marginal log-likelihood (objective function)
 				location_par = Z * mode_;
 				if (fixed_effects != nullptr) {
@@ -820,8 +866,9 @@ namespace GPBoost {
 			CalcFirstDerivLogLik(y_data, y_data_int, location_par.data(), num_data);//first derivative is not used here anymore but since it is reused in gradient calculation and in prediction, we calculate it once more
 			CalcSecondDerivNegLogLik(y_data, y_data_int, location_par.data(), num_data);
 			SigmaI_plus_ZtWZ = SigmaI + Zt * second_deriv_neg_ll_.asDiagonal() * Z;
-			chol_fact_SigmaI_plus_ZtWZ_.compute(SigmaI_plus_ZtWZ);
-			approx_marginal_ll += -((den_mat_t)chol_fact_SigmaI_plus_ZtWZ_.matrixL()).diagonal().array().log().sum() + 0.5 * SigmaI.diagonal().array().log().sum();
+			SigmaI_plus_ZtWZ.makeCompressed();
+			chol_fact_SigmaI_plus_ZtWZ_grouped_.factorize(SigmaI_plus_ZtWZ);
+			approx_marginal_ll += -((sp_mat_t)chol_fact_SigmaI_plus_ZtWZ_grouped_.matrixL()).diagonal().array().log().sum() + 0.5 * SigmaI.diagonal().array().log().sum();
 			mode_has_been_calculated_ = true;
 			////Only for debugging
 			//Log::REInfo("FindModePostRandEffCalcMLLGroupedRE");
@@ -1040,12 +1087,19 @@ namespace GPBoost {
 					CalcSecondDerivNegLogLik(y_data, y_data_int, location_par.data(), num_data);
 				}
 				// Calculate Cholesky factor and update mode
-				rhs = second_deriv_neg_ll_.asDiagonal() * mode_ + first_deriv_ll_;//right hand side for updating mode
+				rhs.array() = second_deriv_neg_ll_.array() * mode_.array() + first_deriv_ll_.array();//right hand side for updating mode
 				SigmaI_plus_W = SigmaI;
 				SigmaI_plus_W.diagonal().array() += second_deriv_neg_ll_.array();
-				//Log::REInfo("Number non zeros = %d", (int)SigmaI_plus_W.nonZeros());//only for debugging, can be deleted
-				chol_fact_SigmaI_plus_ZtWZ_.compute(SigmaI_plus_W);//This is usually the bottleneck
-				mode_ = chol_fact_SigmaI_plus_ZtWZ_.solve(rhs);
+				SigmaI_plus_W.makeCompressed();
+				//Calculation of the Cholesky factor is the bottleneck
+				if (!chol_fact_pattern_analyzed_) {
+					chol_fact_SigmaI_plus_ZtWZ_vecchia_.analyzePattern(SigmaI_plus_W);
+					chol_fact_pattern_analyzed_ = true;
+				}
+				chol_fact_SigmaI_plus_ZtWZ_vecchia_.factorize(SigmaI_plus_W);//This is the bottleneck for large data
+				//Log::REInfo("SigmaI_plus_W: number non zeros = %d", (int)SigmaI_plus_W.nonZeros());//only for debugging
+				//Log::REInfo("chol_fact_SigmaI_plus_ZtWZ: Number non zeros = %d", (int)((sp_mat_t)chol_fact_SigmaI_plus_ZtWZ_vecchia_.matrixL()).nonZeros());//only for debugging
+				mode_ = chol_fact_SigmaI_plus_ZtWZ_vecchia_.solve(rhs);
 				// Calculate new objective function
 				B_mode = B * mode_;
 				if (no_fixed_effects) {
@@ -1066,7 +1120,7 @@ namespace GPBoost {
 				else {
 					approx_marginal_ll = approx_marginal_ll_new;
 				}
-			}
+			} // end loop for mode finding
 			if (it == MAXIT_MODE_NEWTON_) {
 				Log::REDebug("Algorithm for finding mode for Laplace approximation has not converged after the maximal number of iterations");
 			}
@@ -1080,10 +1134,12 @@ namespace GPBoost {
 			}
 			SigmaI_plus_W = SigmaI;
 			SigmaI_plus_W.diagonal().array() += second_deriv_neg_ll_.array();
-			chol_fact_SigmaI_plus_ZtWZ_.compute(SigmaI_plus_W);
-			approx_marginal_ll += -((den_mat_t)chol_fact_SigmaI_plus_ZtWZ_.matrixL()).diagonal().array().log().sum() + 0.5 * D_inv.diagonal().array().log().sum();
+			SigmaI_plus_W.makeCompressed();
+			chol_fact_SigmaI_plus_ZtWZ_vecchia_.factorize(SigmaI_plus_W);
+			approx_marginal_ll += -((sp_mat_t)chol_fact_SigmaI_plus_ZtWZ_vecchia_.matrixL()).diagonal().array().log().sum() + 0.5 * D_inv.diagonal().array().log().sum();
 			mode_has_been_calculated_ = true;
 			////Only for debugging
+			//Log::REInfo("FindModePostRandEffCalcMLLVecchia");
 			//Log::REInfo("Number of iterations: %d", it);
 			//Log::REInfo("approx_marginal_ll: %g", approx_marginal_ll);
 			//Log::REInfo("Mode");
@@ -1110,7 +1166,6 @@ namespace GPBoost {
 		* \param[out] fixed_effect_grad Gradient of approximate marginal log-likelihood wrt fixed effects F (note: this is passed as a Eigen vector in order to avoid the need for copying)
 		* \param calc_mode If true, the mode of the random effects posterior is calculated otherwise the values in mode and a_vec_ are used (default=false)
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void CalcGradNegMargLikelihoodLAApproxStable(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -1124,7 +1179,7 @@ namespace GPBoost {
 			bool calc_mode = false) {
 			if (calc_mode) {// Calculate mode and Cholesky factor of B = (Id + Wsqrt * ZSigmaZt * Wsqrt) at mode
 				double mll;//approximate marginal likelihood. This is a by-product that is not used here.
-				FindModePostRandEffCalcMLLStable<T_mat>(y_data, y_data_int, fixed_effects, num_data, ZSigmaZt, mll);
+				FindModePostRandEffCalcMLLStable(y_data, y_data_int, fixed_effects, num_data, ZSigmaZt, mll);
 			}
 			else {
 				CHECK(mode_has_been_calculated_);
@@ -1132,8 +1187,9 @@ namespace GPBoost {
 			// Initialize variables
 			bool no_fixed_effects = (fixed_effects == nullptr);
 			vec_t location_par;//location parameter = mode of random effects + fixed effects
-			sp_mat_t Wsqrt(num_data, num_data);//diagonal matrix with square root of negative second derivatives on the diagonal (sqrt of negative Hessian of log-likelihood)
-			Wsqrt.setIdentity();
+			T_mat L_inv_Wsqrt(num_data, num_data);//diagonal matrix with square root of negative second derivatives on the diagonal (sqrt of negative Hessian of log-likelihood)
+			L_inv_Wsqrt.setIdentity();
+			L_inv_Wsqrt.diagonal().array() = second_deriv_neg_ll_.array().sqrt();
 			vec_t third_deriv(num_data);//vector of third derivatives of log-likelihood
 			if (no_fixed_effects) {
 				CalcThirdDerivLogLik(y_data, y_data_int, mode_.data(), num_data, third_deriv.data());
@@ -1146,19 +1202,15 @@ namespace GPBoost {
 				}
 				CalcThirdDerivLogLik(y_data, y_data_int, location_par.data(), num_data, third_deriv.data());
 			}
-			Wsqrt.diagonal().array() = second_deriv_neg_ll_.array().sqrt();
-			T_mat L = chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL();
-			T_mat L_inv_Wsqrt, WI_plus_Sigma_inv, C;
-			CalcLInvH(L, Wsqrt, L_inv_Wsqrt, true);//L_inv_Wsqrt = L\Wsqrt		
-			C = L_inv_Wsqrt * (*ZSigmaZt);
+			ApplyPermutationCholeskyFactor<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, L_inv_Wsqrt);
+			chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL().solveInPlace(L_inv_Wsqrt);//L_inv_Wsqrt = L\Wsqrt
+			T_mat L_inv_Wsqrt_ZSigmaZt = L_inv_Wsqrt * (*ZSigmaZt);
 			// calculate gradient wrt covariance parameters
 			if (calc_cov_grad) {
-				//CalcLInvH(L, L_inv_Wsqrt, WI_plus_Sigma_inv, false);//WI_plus_Sigma_inv = Wsqrt * L^T\(L\Wsqrt) = (W^-1 + Sigma)^-1
-				//WI_plus_Sigma_inv = Wsqrt * WI_plus_Sigma_inv;
-				WI_plus_Sigma_inv = L_inv_Wsqrt.transpose() * L_inv_Wsqrt;//WI_plus_Sigma_inv = Wsqrt * L^T\(L\Wsqrt) = (W^-1 + Sigma)^-1
+				T_mat WI_plus_Sigma_inv = L_inv_Wsqrt.transpose() * L_inv_Wsqrt;//WI_plus_Sigma_inv = Wsqrt * L^T\(L\Wsqrt) = (W^-1 + Sigma)^-1
 				// calculate gradient of approx. marginal log-likelihood wrt the mode
-				// note: use (i) (Sigma^-1 + W)^-1 = Sigma - Sigma*(W^-1 + Sigma)^-1*Sigma = ZSigmaZt - C^T*C and (ii) "Z=Id"
-				vec_t d_mll_d_mode = (-0.5 * ((*ZSigmaZt).diagonal() - ((T_mat)(C.transpose() * C)).diagonal()).array() * third_deriv.array()).matrix();
+				// note: use (i) (Sigma^-1 + W)^-1 = Sigma - Sigma*(W^-1 + Sigma)^-1*Sigma = ZSigmaZt - L_inv_Wsqrt_ZSigmaZt^T*L_inv_Wsqrt_ZSigmaZt and (ii) "Z=Id"
+				vec_t d_mll_d_mode = (-0.5 * ((*ZSigmaZt).diagonal() - ((T_mat)(L_inv_Wsqrt_ZSigmaZt.transpose() * L_inv_Wsqrt_ZSigmaZt)).diagonal()).array() * third_deriv.array()).matrix();
 				vec_t d_mode_d_par;//derivative of mode wrt to a covariance parameter
 				vec_t v_aux;//auxiliary variable for caclulating d_mode_d_par
 				int par_count = 0;
@@ -1190,13 +1242,13 @@ namespace GPBoost {
 			}//end calc_cov_grad
 			// calculate gradient wrt fixed effects
 			if (calc_F_grad) {
-				T_mat ZSigmaZtI_plus_W_inv = (*ZSigmaZt) - (T_mat)(C.transpose() * C);// = (ZSigmaZt^-1 + W) ^ -1
-				// calculate gradient of approx. marginal likeligood wrt the mode
-				vec_t d_mll_d_mode = (-0.5 * ZSigmaZtI_plus_W_inv.diagonal().array() * third_deriv.array()).matrix();//Note: d_mll_d_mode = d_detmll_d_F
-				//T_mat ZSigmaZtI_plus_W_inv_W = ZSigmaZtI_plus_W_inv * second_deriv_neg_ll_.asDiagonal();//DELETE
-				//fixed_effect_grad = -first_deriv_ll_ + d_mll_d_mode - d_mll_d_mode.transpose() * ZSigmaZtI_plus_W_inv_W;//DELETE
-				vec_t d_mll_d_modeT_SigmaI_plus_ZtWZ_inv_Zt_W = d_mll_d_mode.transpose() * ZSigmaZtI_plus_W_inv * second_deriv_neg_ll_.asDiagonal();
-				fixed_effect_grad = -first_deriv_ll_ + d_mll_d_mode - d_mll_d_modeT_SigmaI_plus_ZtWZ_inv_Zt_W;
+				T_mat L_inv_Wsqrt_ZSigmaZt_sqr = L_inv_Wsqrt_ZSigmaZt.cwiseProduct(L_inv_Wsqrt_ZSigmaZt);
+				vec_t ZSigmaZtI_plus_W_inv_diag = (*ZSigmaZt).diagonal() - L_inv_Wsqrt_ZSigmaZt_sqr.transpose() * vec_t::Ones(L_inv_Wsqrt_ZSigmaZt_sqr.rows());// diagonal of (ZSigmaZt^-1 + W) ^ -1
+				vec_t d_mll_d_mode = (-0.5 * ZSigmaZtI_plus_W_inv_diag.array() * third_deriv.array()).matrix();// gradient of approx. marginal likelihood wrt the mode and thus also F here
+				vec_t L_inv_Wsqrt_ZSigmaZt_d_mll_d_mode = L_inv_Wsqrt_ZSigmaZt * d_mll_d_mode;// for implicit derivative
+				vec_t ZSigmaZtI_plus_W_inv_d_mll_d_mode = (*ZSigmaZt) * d_mll_d_mode - L_inv_Wsqrt_ZSigmaZt.transpose() * L_inv_Wsqrt_ZSigmaZt_d_mll_d_mode;
+				vec_t d_mll_d_F_implicit = (ZSigmaZtI_plus_W_inv_d_mll_d_mode.array() * second_deriv_neg_ll_.array()).matrix();// implicit derivative
+				fixed_effect_grad = -first_deriv_ll_ + d_mll_d_mode - d_mll_d_F_implicit;
 			}//end calc_F_grad
 		}//end CalcGradNegMargLikelihoodLAApproxStable
 
@@ -1219,7 +1271,6 @@ namespace GPBoost {
 		* \param[out] fixed_effect_grad Gradient of approximate marginal log-likelihood wrt fixed effects F (note: this is passed as a Eigen vector in order to avoid the need for copying)
 		* \param calc_mode If true, the mode of the random effects posterior is calculated otherwise the values in mode and a_vec_ are used (default=false)
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void CalcGradNegMargLikelihoodLAApproxOnlyOneGPCalculationsOnREScale(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -1232,10 +1283,13 @@ namespace GPBoost {
 			double* cov_grad,
 			vec_t & fixed_effect_grad,
 			bool calc_mode = false) {
+			//std::chrono::steady_clock::time_point beginall = std::chrono::steady_clock::now();// only for debugging
+			//std::chrono::steady_clock::time_point begin, end;// only for debugging
+			//double el_time;
 			CHECK(re_comps_cluster_i.size() == 1);
 			if (calc_mode) {// Calculate mode and Cholesky factor of B = (Id + Wsqrt * ZSigmaZt * Wsqrt) at mode
 				double mll;//approximate marginal likelihood. This is a by-product that is not used here.
-				FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale<T_mat>(y_data, y_data_int, fixed_effects, num_data,
+				FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale(y_data, y_data_int, fixed_effects, num_data,
 					Sigma, random_effects_indices_of_data, mll);
 			}
 			else {
@@ -1271,9 +1325,9 @@ namespace GPBoost {
 					}
 				}//end omp critical
 			}//end omp parallel
-			sp_mat_t ZtWZsqrt(num_re_, num_re_);//diagonal matrix with square root of diagonal of ZtWZ
-			ZtWZsqrt.setIdentity();
-			ZtWZsqrt.diagonal().array() = diag_ZtWZ.array().sqrt();
+			T_mat L_inv_ZtWZsqrt(num_re_, num_re_);//diagonal matrix with square root of diagonal of ZtWZ
+			L_inv_ZtWZsqrt.setIdentity();
+			L_inv_ZtWZsqrt.diagonal().array() = diag_ZtWZ.array().sqrt();
 			vec_t third_deriv(num_data);//vector of third derivatives of log-likelihood
 			CalcThirdDerivLogLik(y_data, y_data_int, location_par.data(), num_data, third_deriv.data());
 			vec_t diag_ZtThirdDerivZ(num_re_);//sqrt of diagonal matrix ZtWZ
@@ -1292,10 +1346,12 @@ namespace GPBoost {
 					}
 				}//end omp critical
 			}//end omp parallel
-			T_mat L = chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL();
-			T_mat L_inv_ZtWZsqrt, ZtWZI_Sigma_inv, C;
-			CalcLInvH(L, ZtWZsqrt, L_inv_ZtWZsqrt, true);//L_inv_ZtWZsqrt = L\ZtWZsqrt
-			C = L_inv_ZtWZsqrt * (*Sigma);
+			ApplyPermutationCholeskyFactor<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, L_inv_ZtWZsqrt);
+			chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL().solveInPlace(L_inv_ZtWZsqrt);//L_inv_ZtWZsqrt = L\ZtWZsqrt //This is the bottleneck (in this first part) for large data when using sparse matrices
+			T_mat L_inv_ZtWZsqrt_Sigma = L_inv_ZtWZsqrt * (*Sigma);
+			////Only for debugging
+			//Log::REInfo("CalcGradNegMargLikelihoodLAApproxOnlyOneGPCalculationsOnREScale: L_inv_ZtWZsqrt: number non zeros = %d", GetNumberNonZeros<T_mat>(L_inv_ZtWZsqrt));//Only for debugging
+			//Log::REInfo("CalcGradNegMargLikelihoodLAApproxOnlyOneGPCalculationsOnREScale: L_inv_ZtWZsqrt_Sigma: number non zeros = %d", GetNumberNonZeros<T_mat>(L_inv_ZtWZsqrt_Sigma));//Only for debugging
 			// calculate gradient wrt covariance parameters
 			if (calc_cov_grad) {
 				vec_t ZtFirstDeriv(num_re_);//sqrt of diagonal matrix ZtWZ
@@ -1314,10 +1370,10 @@ namespace GPBoost {
 						}
 					}//end omp critical
 				}//end omp parallel
-				ZtWZI_Sigma_inv = L_inv_ZtWZsqrt.transpose() * L_inv_ZtWZsqrt;//ZtWZI_Sigma_inv = ZtWZsqrt * L^T\(L\ZtWZsqrt) = ((ZtWZ)^-1 + Sigma)^-1
+				T_mat ZtWZI_Sigma_inv = L_inv_ZtWZsqrt.transpose() * L_inv_ZtWZsqrt;//ZtWZI_Sigma_inv = ZtWZsqrt * L^T\(L\ZtWZsqrt) = ((ZtWZ)^-1 + Sigma)^-1
 				// calculate gradient of approx. marginal log-likelihood wrt the mode
-				// note: use (i) (Sigma^-1 + W)^-1 = Sigma - Sigma*(W^-1 + Sigma)^-1*Sigma = ZSigmaZt - C^T*C
-				vec_t d_mll_d_mode = (-0.5 * ((*Sigma).diagonal() - ((T_mat)(C.transpose() * C)).diagonal()).array() * diag_ZtThirdDerivZ.array()).matrix();
+				// note: use (i) (Sigma^-1 + W)^-1 = Sigma - Sigma*(W^-1 + Sigma)^-1*Sigma = ZSigmaZt - L_inv_ZtWZsqrt_Sigma^T*L_inv_ZtWZsqrt_Sigma
+				vec_t d_mll_d_mode = (-0.5 * ((*Sigma).diagonal() - ((T_mat)(L_inv_ZtWZsqrt_Sigma.transpose() * L_inv_ZtWZsqrt_Sigma)).diagonal()).array() * diag_ZtThirdDerivZ.array()).matrix();
 				vec_t d_mode_d_par;//derivative of mode wrt to a covariance parameter
 				vec_t v_aux;//auxiliary variable for caclulating d_mode_d_par
 				int par_count = 0;
@@ -1350,16 +1406,21 @@ namespace GPBoost {
 			}//end calc_cov_grad
 			// calculate gradient wrt fixed effects
 			if (calc_F_grad) {
-				T_mat SigmaI_plus_ZtWZ_inv = (*Sigma) - (T_mat)(C.transpose() * C);// = (Sigma^-1 + ZtWZ) ^ -1
-				// calculate gradient of approx. marginal likeligood wrt the mode
-				vec_t d_mll_d_mode = (-0.5 * SigmaI_plus_ZtWZ_inv.diagonal().array() * diag_ZtThirdDerivZ.array()).matrix();
+				T_mat L_inv_ZtWZsqrt_Sigma_sqr = L_inv_ZtWZsqrt_Sigma.cwiseProduct(L_inv_ZtWZsqrt_Sigma);
+				vec_t SigmaI_plus_ZtWZ_inv_diag = (*Sigma).diagonal() - L_inv_ZtWZsqrt_Sigma_sqr.transpose() * vec_t::Ones(L_inv_ZtWZsqrt_Sigma_sqr.rows());// diagonal of (Sigma^-1 + ZtWZ) ^ -1
+				vec_t d_mll_d_mode = (-0.5 * SigmaI_plus_ZtWZ_inv_diag.array() * diag_ZtThirdDerivZ.array()).matrix();// gradient of approx. marginal likelihood wrt the mode
+				vec_t L_inv_ZtWZsqrt_Sigma_d_mll_d_mode = L_inv_ZtWZsqrt_Sigma * d_mll_d_mode;// for implicit derivative
+				vec_t SigmaI_plus_ZtWZ_inv_d_mll_d_mode = (*Sigma) * d_mll_d_mode - L_inv_ZtWZsqrt_Sigma.transpose() * L_inv_ZtWZsqrt_Sigma_d_mll_d_mode;
 				fixed_effect_grad = -first_deriv_ll_;
 #pragma omp parallel for schedule(static)
 				for (data_size_t i = 0; i < num_data; ++i) {
-					fixed_effect_grad[i] += -0.5 * third_deriv[i] * SigmaI_plus_ZtWZ_inv.coeff(random_effects_indices_of_data[i], random_effects_indices_of_data[i]) -
-						second_deriv_neg_ll_[i] * (d_mll_d_mode.cwiseProduct(SigmaI_plus_ZtWZ_inv.col(random_effects_indices_of_data[i]))).sum();
+					fixed_effect_grad[i] += -0.5 * third_deriv[i] * SigmaI_plus_ZtWZ_inv_diag[random_effects_indices_of_data[i]] -
+						second_deriv_neg_ll_[i] * SigmaI_plus_ZtWZ_inv_d_mll_d_mode[random_effects_indices_of_data[i]];
 				}
 			}//end calc_F_grad
+			//end = std::chrono::steady_clock::now();// only for debugging
+			//el_time = (double)(std::chrono::duration_cast<std::chrono::microseconds>(end - beginall).count()) / 1000000.;// Only for debugging
+			//Log::REInfo("CalcGradNegMargLikelihoodLAApproxOnlyOneGPCalculationsOnREScale: TOTAL TIME: %g", el_time);// Only for debugging
 		}//end CalcGradNegMargLikelihoodLAApproxOnlyOneGPCalculationsOnREScale
 
 		/*!
@@ -1379,7 +1440,6 @@ namespace GPBoost {
 		* \param[out] fixed_effect_grad Gradient wrt fixed effects F (note: this is passed as a Eigen vector in order to avoid the need for copying)
 		* \param calc_mode If true, the mode of the random effects posterior is calculated otherwise the values in mode and a_vec_ are used (default=false)
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void CalcGradNegMargLikelihoodLAApproxGroupedRE(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -1413,9 +1473,13 @@ namespace GPBoost {
 			vec_t third_deriv(num_data);//vector of third derivatives of log-likelihood
 			CalcThirdDerivLogLik(y_data, y_data_int, location_par.data(), num_data, third_deriv.data());
 			// Calculate (Sigma^-1 + Zt*W*Z)^-1
-			sp_mat_t Id(num_REs, num_REs);
-			Id.setIdentity();
-			sp_mat_t SigmaI_plus_ZtWZ_inv = chol_fact_SigmaI_plus_ZtWZ_.solve(Id);
+			sp_mat_t L_inv(num_REs, num_REs);
+			L_inv.setIdentity();
+			if (chol_fact_SigmaI_plus_ZtWZ_grouped_.permutationP().size() > 0) {//Permutation is only used when having an ordering
+				L_inv = chol_fact_SigmaI_plus_ZtWZ_grouped_.permutationP() * L_inv;
+			}
+			chol_fact_SigmaI_plus_ZtWZ_grouped_.matrixL().solveInPlace(L_inv);
+			sp_mat_t SigmaI_plus_ZtWZ_inv = L_inv.transpose() * L_inv;
 			// calculate gradient of approx. marginal likeligood wrt the mode
 			//Note: the calculation of d_mll_d_mode is the bottleneck of this function (corresponding lines below are indicated with * and, in particular, **)
 			vec_t d_mll_d_mode(num_REs);
@@ -1434,7 +1498,6 @@ namespace GPBoost {
 				//sp_mat_t Zt_d_W_d_mode_i_Z = Zt * diag_d_W_d_mode_i.asDiagonal() * Z;//= Z^T * diag(diag_d_W_d_mode_i) * Z
 				d_mll_d_mode[i] = -0.5 * (Zt_d_W_d_mode_i_Z.cwiseProduct(SigmaI_plus_ZtWZ_inv)).sum();
 			}
-
 			// calculate gradient wrt covariance parameters
 			if (calc_cov_grad) {
 				sp_mat_t ZtWZ = Zt * second_deriv_neg_ll_.asDiagonal() * Z;
@@ -1502,11 +1565,6 @@ namespace GPBoost {
 				}
 				vec_t d_mll_d_modeT_SigmaI_plus_ZtWZ_inv_Zt_W = d_mll_d_mode.transpose() * SigmaI_plus_ZtWZ_inv * Zt * second_deriv_neg_ll_.asDiagonal();
 				fixed_effect_grad = -first_deriv_ll_ + d_detmll_d_F - d_mll_d_modeT_SigmaI_plus_ZtWZ_inv_Zt_W;
-				////Only for debugging
-				//Log::REInfo("CalcGradNegMargLikelihoodLAApproxGroupedRE");
-				//for (int i = 0; i < 5; ++i) {
-				//	Log::REInfo("fixed_effect_grad[%d]: %g", i, fixed_effect_grad[i]);
-				//}
 			}//end calc_F_grad
 		}//end CalcGradNegMargLikelihoodLAApproxGroupedRE
 
@@ -1626,7 +1684,6 @@ namespace GPBoost {
 				//}
 				//Log::REInfo("cov_grad[0]: %g", cov_grad[0]);
 			}//end calc_cov_grad
-
 			// calculate gradient wrt fixed effects
 			if (calc_F_grad) {
 #pragma omp parallel for schedule(static)
@@ -1699,13 +1756,16 @@ namespace GPBoost {
 				CalcThirdDerivLogLik(y_data, y_data_int, location_par.data(), num_data, third_deriv.data());
 			}
 			// Calculate (Sigma^-1 + W)^-1
-			sp_mat_t Id(num_data, num_data);
-			Id.setIdentity();
-			sp_mat_t SigmaI_plus_W_inv = chol_fact_SigmaI_plus_ZtWZ_.solve(Id);
-			// calculate gradient of approx. marginal likeligood wrt the mode
-			vec_t d_mll_d_mode = -0.5 * (SigmaI_plus_W_inv.diagonal().array() * third_deriv.array()).matrix();
+			sp_mat_t L_inv(num_data, num_data);
+			L_inv.setIdentity();
+			if (chol_fact_SigmaI_plus_ZtWZ_vecchia_.permutationP().size() > 0) {//Permutation is only used when having an ordering
+				L_inv = chol_fact_SigmaI_plus_ZtWZ_vecchia_.permutationP() * L_inv;
+			}
+			chol_fact_SigmaI_plus_ZtWZ_vecchia_.matrixL().solveInPlace(L_inv);
 			// calculate gradient wrt covariance parameters
 			if (calc_cov_grad) {
+				sp_mat_t SigmaI_plus_W_inv = L_inv.transpose() * L_inv;//Note: this is the computational bottleneck for large data
+				vec_t d_mll_d_mode = -0.5 * (SigmaI_plus_W_inv.diagonal().array() * third_deriv.array()).matrix();// gradient of approx. marginal likeligood wrt the mode
 				vec_t d_mode_d_par;//derivative of mode wrt to a covariance parameter
 				double explicit_derivative;
 				int num_par = (int)B_grad.size();
@@ -1741,11 +1801,15 @@ namespace GPBoost {
 			}//end calc_cov_grad
 			// calculate gradient wrt fixed effects
 			if (calc_F_grad) {
-				vec_t impl_deriv = -d_mll_d_mode.transpose() * SigmaI_plus_W_inv * second_deriv_neg_ll_.asDiagonal();
-				fixed_effect_grad = -first_deriv_ll_ + d_mll_d_mode + impl_deriv;
+				sp_mat_t L_inv_sqr = L_inv.cwiseProduct(L_inv);
+				vec_t SigmaI_plus_W_inv_diag = L_inv_sqr.transpose() * vec_t::Ones(L_inv_sqr.rows());// diagonal of (Sigma^-1 + W) ^ -1
+				vec_t d_mll_d_mode = (-0.5 * SigmaI_plus_W_inv_diag.array() * third_deriv.array()).matrix();// gradient of approx. marginal likelihood wrt the mode and thus also F here
+				vec_t L_inv_d_mll_d_mode = L_inv * d_mll_d_mode;// for implicit derivative
+				vec_t SigmaI_plus_W_inv_d_mll_d_mode = L_inv.transpose() * L_inv_d_mll_d_mode;
+				vec_t d_mll_d_F_implicit = -(SigmaI_plus_W_inv_d_mll_d_mode.array() * second_deriv_neg_ll_.array()).matrix();// implicit derivative
+				fixed_effect_grad = -first_deriv_ll_ + d_mll_d_mode + d_mll_d_F_implicit;
 			}//end calc_F_grad
 		}//end CalcGradNegMargLikelihoodLAApproxVecchia
-
 
 		/*!
 		* \brief Make predictions for the (latent) random effects when using the Laplace approximation.
@@ -1765,7 +1829,6 @@ namespace GPBoost {
 		* \param calc_pred_var If true, predictive variances are also calculated
 		* \param calc_mode If true, the mode of the random effects posterior is calculated otherwise the values in mode and a_vec_ are used (default=false)
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void PredictLAApproxStable(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -1780,7 +1843,7 @@ namespace GPBoost {
 			bool calc_mode = false) {
 			if (calc_mode) {// Calculate mode and Cholesky factor of B = (Id + Wsqrt * ZSigmaZt * Wsqrt) at mode
 				double mll;//approximate marginal likelihood. This is a by-product that is not used here.
-				FindModePostRandEffCalcMLLStable<T_mat>(y_data, y_data_int, fixed_effects, num_data, ZSigmaZt, mll);
+				FindModePostRandEffCalcMLLStable(y_data, y_data_int, fixed_effects, num_data, ZSigmaZt, mll);
 			}
 			else {
 				CHECK(mode_has_been_calculated_);
@@ -1790,18 +1853,17 @@ namespace GPBoost {
 				sp_mat_t Wsqrt(num_data, num_data);//diagonal matrix with square root of negative second derivatives on the diagonal (sqrt of negative Hessian of log-likelihood)
 				Wsqrt.setIdentity();
 				Wsqrt.diagonal().array() = second_deriv_neg_ll_.array().sqrt();
-				T_mat L = chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL();
-				T_mat Maux, Maux2;
-				Maux = Wsqrt * Cross_Cov.transpose();
-				CalcLInvH(L, Maux, Maux2, true);//Maux2 = L\(Wsqrt * Cross_Cov^T)
+				T_mat Maux = Wsqrt * Cross_Cov.transpose();
+				ApplyPermutationCholeskyFactor<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, Maux);
+				chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL().solveInPlace(Maux);
 				if (calc_pred_cov) {
-					pred_cov -= Maux2.transpose() * Maux2;
+					pred_cov -= Maux.transpose() * Maux;
 				}
 				if (calc_pred_var) {
-					Maux2 = Maux2.cwiseProduct(Maux2);
+					Maux = Maux.cwiseProduct(Maux);
 #pragma omp parallel for schedule(static)
 					for (int i = 0; i < (int)pred_mean.size(); ++i) {
-						pred_var[i] -= Maux2.col(i).sum();
+						pred_var[i] -= Maux.col(i).sum();
 					}
 				}
 			}
@@ -1842,7 +1904,6 @@ namespace GPBoost {
 		* \param calc_pred_var If true, predictive variances are also calculated
 		* \param calc_mode If true, the mode of the random effects posterior is calculated otherwise the values in mode and a_vec_ are used (default=false)
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void PredictLAApproxOnlyOneGPCalculationsOnREScale(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -1858,7 +1919,7 @@ namespace GPBoost {
 			bool calc_mode = false) {
 			if (calc_mode) {// Calculate mode and Cholesky factor of B = (Id + Wsqrt * ZSigmaZt * Wsqrt) at mode
 				double mll;//approximate marginal likelihood. This is a by-product that is not used here.
-				FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale<T_mat>(y_data, y_data_int, fixed_effects,
+				FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale(y_data, y_data_int, fixed_effects,
 					num_data, Sigma, random_effects_indices_of_data, mll);
 			}
 			else {
@@ -1899,18 +1960,17 @@ namespace GPBoost {
 				sp_mat_t ZtWZsqrt(num_re_, num_re_);//diagonal matrix with square root of diagonal of ZtWZ
 				ZtWZsqrt.setIdentity();
 				ZtWZsqrt.diagonal().array() = diag_ZtWZ.array().sqrt();
-				T_mat L = chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL();
-				T_mat Maux, Maux2;
-				Maux = ZtWZsqrt * Cross_Cov.transpose();
-				CalcLInvH(L, Maux, Maux2, true);//Maux2 = L\(ZtWZsqrt * Cross_Cov^T)
+				T_mat Maux = ZtWZsqrt * Cross_Cov.transpose();
+				ApplyPermutationCholeskyFactor<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, Maux);
+				chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL().solveInPlace(Maux);//Maux = L\(ZtWZsqrt * Cross_Cov^T)
 				if (calc_pred_cov) {
-					pred_cov -= Maux2.transpose() * Maux2;
+					pred_cov -= Maux.transpose() * Maux;
 				}
 				if (calc_pred_var) {
-					Maux2 = Maux2.cwiseProduct(Maux2);
+					Maux = Maux.cwiseProduct(Maux);
 #pragma omp parallel for schedule(static)
 					for (int i = 0; i < (int)pred_mean.size(); ++i) {
-						pred_var[i] -= Maux2.col(i).sum();
+						pred_var[i] -= Maux.col(i).sum();
 					}
 				}
 			}
@@ -1956,7 +2016,6 @@ namespace GPBoost {
 		* \param calc_pred_var If true, predictive variances are also calculated
 		* \param calc_mode If true, the mode of the random effects posterior is calculated otherwise the values in mode and a_vec_ are used (default=false)
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void PredictLAApproxGroupedRE(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -1979,20 +2038,21 @@ namespace GPBoost {
 			}
 			pred_mean = Cross_Cov * first_deriv_ll_;
 			if (calc_pred_cov || calc_pred_var) {
-				T_mat Maux, Maux2;
-				Maux = Zt * second_deriv_neg_ll_.asDiagonal() * Cross_Cov.transpose();
-				// calculate Maux2 = L\(Z^T * second_deriv_neg_ll_.asDiagonal() * Cross_Cov^T)
-				T_mat L = chol_fact_SigmaI_plus_ZtWZ_.matrixL();
-				CalcLInvH(L, Maux, Maux2, true);
+				// calculate Maux = L\(Z^T * second_deriv_neg_ll_.asDiagonal() * Cross_Cov^T)
+				T_mat Maux = Zt * second_deriv_neg_ll_.asDiagonal() * Cross_Cov.transpose();
+				if (chol_fact_SigmaI_plus_ZtWZ_grouped_.permutationP().size() > 0) {//Permutation is only used when having an ordering
+					Maux = chol_fact_SigmaI_plus_ZtWZ_grouped_.permutationP() * Maux;
+				}
+				chol_fact_SigmaI_plus_ZtWZ_grouped_.matrixL().solveInPlace(Maux);
 				if (calc_pred_cov) {
-					pred_cov += Maux2.transpose() * Maux2 - (T_mat)(Cross_Cov * second_deriv_neg_ll_.asDiagonal() * Cross_Cov.transpose());
+					pred_cov += Maux.transpose() * Maux - (T_mat)(Cross_Cov * second_deriv_neg_ll_.asDiagonal() * Cross_Cov.transpose());
 				}
 				if (calc_pred_var) {
 					T_mat Maux3 = Cross_Cov.cwiseProduct(Cross_Cov * second_deriv_neg_ll_.asDiagonal());
-					Maux2 = Maux2.cwiseProduct(Maux2);
+					Maux = Maux.cwiseProduct(Maux);
 #pragma omp parallel for schedule(static)
 					for (int i = 0; i < (int)pred_mean.size(); ++i) {
-						pred_var[i] += Maux2.col(i).sum() - Maux3.row(i).sum();
+						pred_var[i] += Maux.col(i).sum() - Maux3.row(i).sum();
 					}
 				}
 			}
@@ -2037,7 +2097,6 @@ namespace GPBoost {
 		* \param calc_pred_var If true, predictive variances are also calculated
 		* \param calc_mode If true, the mode of the random effects posterior is calculated otherwise the values in mode and a_vec_ are used (default=false)
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void PredictLAApproxOnlyOneGroupedRECalculationsOnREScale(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -2135,7 +2194,6 @@ namespace GPBoost {
 		* \param calc_pred_var If true, predictive variances are also calculated
 		* \param calc_mode If true, the mode of the random effects posterior is calculated otherwise the values in mode and a_vec_ are used (default=false)
 		*/
-		template <typename T_mat>//T_mat can be either den_mat_t or sp_mat_t
 		void PredictLAApproxVecchia(const double* y_data,
 			const int* y_data_int,
 			const double* fixed_effects,
@@ -2159,10 +2217,11 @@ namespace GPBoost {
 			pred_mean = Cross_Cov * first_deriv_ll_;
 			if (calc_pred_cov || calc_pred_var) {
 				T_mat SigmaI_CrossCovT = B.transpose() * D_inv * B * Cross_Cov.transpose();
-				// calculate Maux = L\(Sigma^-1 * Cross_Cov^T), L = Chol(Sigma^-1 + W)
-				T_mat Maux;
-				sp_mat_t L = chol_fact_SigmaI_plus_ZtWZ_.matrixL();
-				CalcLInvH(L, SigmaI_CrossCovT, Maux, true);
+				T_mat Maux = SigmaI_CrossCovT; //Maux = L\(Sigma^-1 * Cross_Cov^T), L = Chol(Sigma^-1 + W)
+				if (chol_fact_SigmaI_plus_ZtWZ_vecchia_.permutationP().size() > 0) {//Permutation is only used when having an ordering
+					Maux = chol_fact_SigmaI_plus_ZtWZ_vecchia_.permutationP() * Maux;
+				}
+				chol_fact_SigmaI_plus_ZtWZ_vecchia_.matrixL().solveInPlace(Maux);
 				if (calc_pred_cov) {
 					pred_cov += -Cross_Cov * SigmaI_CrossCovT + Maux.transpose() * Maux;
 				}
@@ -2304,13 +2363,19 @@ namespace GPBoost {
 		vec_t second_deriv_neg_ll_;
 		/*! \brief Diagonal of matrix Sigma^-1 + Zt * W * Z in Laplace approximation (used only in version 'GroupedRE' when there is only one random effect and ZtWZ is diagonal. Otherwise 'diag_SigmaI_plus_ZtWZ_' is used for grouped REs) */
 		vec_t diag_SigmaI_plus_ZtWZ_;
-		/*! \brief Cholesky factors of matrix Sigma^-1 + Zt * W * Z in Laplace approximation (used only in versions 'Vecchia' and 'GroupedRE'. For grouped REs, this is used if there is more than one random effect) */
-		chol_sp_mat_t chol_fact_SigmaI_plus_ZtWZ_;
+		/*! \brief Cholesky factors of matrix Sigma^-1 + Zt * W * Z in Laplace approximation (used only in version'GroupedRE' if there is more than one random effect). */
+		chol_sp_mat_AMDOrder_t chol_fact_SigmaI_plus_ZtWZ_grouped_;
+		/*! \brief Cholesky factors of matrix Sigma^-1 + Zt * W * Z in Laplace approximation (used only in version 'Vecchia') */
+		chol_sp_mat_AMDOrder_t chol_fact_SigmaI_plus_ZtWZ_vecchia_;
+		//Note: chol_sp_mat_AMDOrder_t (AMD permutation) is faster than chol_sp_mat_t (no permutation) for the Vecchia approcimation but for the grouped random effects the difference is small.
+		//			chol_sp_mat_COLAMDOrder_t is slower than no ordering or chol_sp_mat_AMDOrder_t for both grouped random effects and the Vecchia approximation
 		/*! 
 		* \brief Cholesky factors of matrix B = I + Wsqrt *  Z * Sigma * Zt * Wsqrt in Laplace approximation (for version 'Stable') 
 		*		or of matrix B = Id + ZtWZsqrt * Sigma * ZtWZsqrt (for version 'OnlyOneGPCalculationsOnREScale')
 		*/
 		T_chol chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_;
+		/*! \brief If true, the pattern for the Cholesky factor (chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, chol_fact_SigmaI_plus_ZtWZ_grouped_, or chol_fact_SigmaI_plus_ZtWZ_vecchia_) has been analyzed */
+		bool chol_fact_pattern_analyzed_ = false;
 		/*! \brief If true, the mode has been initialized to 0 */
 		bool mode_initialized_ = false;
 		/*! \brief If true, the mode has been determined */
@@ -2443,7 +2508,18 @@ namespace GPBoost {
 										0.56940269194964050397,
 										0.64909798155426670071,
 										0.83424747101276179534 };
-	};
+
+		/*! \brief Get number of non-zero entries in matrix */
+		template <class T_mat1, typename std::enable_if< std::is_same<sp_mat_t, T_mat1>::value>::type * = nullptr  >
+		int GetNumberNonZeros(T_mat1 M) {
+			return((int)M.nonZeros());
+		};
+		template <class T_mat1, typename std::enable_if< std::is_same<den_mat_t, T_mat1>::value>::type * = nullptr  >
+		int GetNumberNonZeros(T_mat1 M) {
+			return((int)M.cols() * M.rows());
+		};
+
+	};//end class Likelihood
 
 }  // namespace GPBoost
 

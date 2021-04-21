@@ -30,13 +30,19 @@ namespace GPBoost {
 		data_size_t num_gp_rand_coef,
 		const char* cov_fct,
 		double cov_fct_shape,
+		double cov_fct_taper_range,
 		bool vecchia_approx,
 		int num_neighbors,
 		const char* vecchia_ordering,
 		const char* vecchia_pred_type,
 		int num_neighbors_pred,
 		const char* likelihood) {
-		if ((num_gp + num_gp_rand_coef) == 0) {
+		string_t cov_fct_str = "none";
+		if (cov_fct != nullptr) {
+			cov_fct_str = std::string(cov_fct);
+		}
+		bool use_sparse_matrices = (num_gp + num_gp_rand_coef) == 0 || (COMPACT_SUPPORT_COVS_.find(cov_fct_str) != COMPACT_SUPPORT_COVS_.end());
+		if (use_sparse_matrices) {
 			sparse_ = true;
 			re_model_sp_ = std::unique_ptr<REModelTemplate<sp_mat_t, chol_sp_mat_t>>(new REModelTemplate<sp_mat_t, chol_sp_mat_t>(
 				num_data,
@@ -53,6 +59,7 @@ namespace GPBoost {
 				num_gp_rand_coef,
 				cov_fct,
 				cov_fct_shape,
+				cov_fct_taper_range,
 				vecchia_approx,
 				num_neighbors, 
 				vecchia_ordering,
@@ -78,6 +85,7 @@ namespace GPBoost {
 				num_gp_rand_coef,
 				cov_fct,
 				cov_fct_shape,
+				cov_fct_taper_range,
 				vecchia_approx,
 				num_neighbors,
 				vecchia_ordering,
@@ -87,7 +95,7 @@ namespace GPBoost {
 			num_cov_pars_ = re_model_den_->num_cov_par_;
 		}
 		if (!GaussLikelihood()) {
-			optimizer_cov_pars_ = "gradient_descent";
+			//optimizer_cov_pars_ = "gradient_descent";
 			optimizer_coef_ = "gradient_descent";
 		}
 	}
@@ -125,6 +133,8 @@ namespace GPBoost {
 		}
 		if (!GaussLikelihood() && !cov_pars_optimizer_hase_been_set_) {
 			optimizer_cov_pars_ = "gradient_descent";
+		}
+		if (!GaussLikelihood() && !coef_optimizer_hase_been_set_) {
 			optimizer_coef_ = "gradient_descent";
 		}
 	}
@@ -177,31 +187,6 @@ namespace GPBoost {
 		calc_std_dev_ = calc_std_dev;
 	}
 
-	void REModel::InitializeCovParsIfNotDefined(const double* y_data) {
-		if (!cov_pars_initialized_) {
-			if (init_cov_pars_provided_) {
-				cov_pars_ = init_cov_pars_;
-			}
-			else {
-				cov_pars_ = vec_t(num_cov_pars_);
-				if (sparse_) {
-					re_model_sp_->FindInitCovPar(y_data, cov_pars_.data());
-				}
-				else {
-					re_model_den_->FindInitCovPar(y_data, cov_pars_.data());
-				}
-				covariance_matrix_has_been_factorized_ = false;
-				init_cov_pars_ = cov_pars_;
-			}
-			cov_pars_initialized_ = true;
-		}
-	}
-
-	void REModel::ResetCovPars() {
-		cov_pars_ = vec_t(num_cov_pars_);
-		cov_pars_initialized_ = false;
-	}
-
 	void REModel::SetOptimCoefConfig(int num_covariates, double* init_coef,
 		double lr_coef, double acc_rate_coef, const char* optimizer) {
 		if (init_coef != nullptr) {
@@ -215,7 +200,13 @@ namespace GPBoost {
 		acc_rate_coef_ = acc_rate_coef;
 		if (optimizer != nullptr) {
 			optimizer_coef_ = std::string(optimizer);
+			coef_optimizer_hase_been_set_ = true;
 		}
+	}
+
+	void REModel::ResetCovPars() {
+		cov_pars_ = vec_t(num_cov_pars_);
+		cov_pars_initialized_ = false;
 	}
 
 	void REModel::OptimCovPar(const double* y_data, const double* fixed_effects) {
@@ -311,30 +302,54 @@ namespace GPBoost {
 		}
 		if (sparse_) {
 			re_model_sp_->OptimLinRegrCoefCovPar(y_data,
-				covariate_data, num_covariates,
-				cov_pars_.data(), coef_.data(),
+				covariate_data,
+				num_covariates,
+				cov_pars_.data(),
+				coef_.data(),
 				num_it_,
-				cov_pars_.data(), coef_.data(),
-				lr_coef_, lr_cov_, acc_rate_coef_, acc_rate_cov_, momentum_offset_,
-				max_iter_, delta_rel_conv_,
-				use_nesterov_acc_, nesterov_schedule_version_,
-				optimizer_cov_pars_, optimizer_coef_,
-				std_dev_cov_par, std_dev_coef, calc_std_dev_,
+				cov_pars_.data(),
+				coef_.data(),
+				lr_coef_,
+				lr_cov_,
+				acc_rate_coef_,
+				acc_rate_cov_,
+				momentum_offset_,
+				max_iter_,
+				delta_rel_conv_,
+				use_nesterov_acc_,
+				nesterov_schedule_version_,
+				optimizer_cov_pars_,
+				optimizer_coef_,
+				std_dev_cov_par,
+				std_dev_coef,
+				calc_std_dev_,
 				convergence_criterion_,
 				nullptr,
 				true);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(y_data,
-				covariate_data, num_covariates,
-				cov_pars_.data(), coef_.data(),
+				covariate_data,
+				num_covariates,
+				cov_pars_.data(),
+				coef_.data(),
 				num_it_,
-				cov_pars_.data(), coef_.data(),
-				lr_coef_, lr_cov_, acc_rate_coef_, acc_rate_cov_, momentum_offset_,
-				max_iter_, delta_rel_conv_,
-				use_nesterov_acc_, nesterov_schedule_version_,
-				optimizer_cov_pars_, optimizer_coef_,
-				std_dev_cov_par, std_dev_coef, calc_std_dev_,
+				cov_pars_.data(),
+				coef_.data(),
+				lr_coef_,
+				lr_cov_,
+				acc_rate_coef_,
+				acc_rate_cov_,
+				momentum_offset_,
+				max_iter_,
+				delta_rel_conv_,
+				use_nesterov_acc_,
+				nesterov_schedule_version_,
+				optimizer_cov_pars_,
+				optimizer_coef_,
+				std_dev_cov_par,
+				std_dev_coef,
+				calc_std_dev_,
 				convergence_criterion_,
 				nullptr,
 				true);
@@ -373,7 +388,7 @@ namespace GPBoost {
 				false,
 				convergence_criterion_,
 				nullptr,
-				false);
+				false);//learn_covariance_parameters=false
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(nullptr,
@@ -400,7 +415,7 @@ namespace GPBoost {
 				false,
 				convergence_criterion_,
 				nullptr,
-				false);
+				false);//learn_covariance_parameters=false
 		}
 	}
 
@@ -705,6 +720,26 @@ namespace GPBoost {
 		}
 		else {
 			re_model_den_->NewtonUpdateLeafValues(data_leaf_index, num_leaves, leaf_values, cov_pars_[0]);
+		}
+	}
+
+	void REModel::InitializeCovParsIfNotDefined(const double* y_data) {
+		if (!cov_pars_initialized_) {
+			if (init_cov_pars_provided_) {
+				cov_pars_ = init_cov_pars_;
+			}
+			else {
+				cov_pars_ = vec_t(num_cov_pars_);
+				if (sparse_) {
+					re_model_sp_->FindInitCovPar(y_data, cov_pars_.data());
+				}
+				else {
+					re_model_den_->FindInitCovPar(y_data, cov_pars_.data());
+				}
+				covariance_matrix_has_been_factorized_ = false;
+				init_cov_pars_ = cov_pars_;
+			}
+			cov_pars_initialized_ = true;
 		}
 	}
 

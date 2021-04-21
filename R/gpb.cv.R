@@ -37,7 +37,7 @@ CVBooster <- R6::R6Class(
 #'              (each element must be a vector of test fold's indices). When folds are supplied,
 #'              the \code{nfold} and \code{stratified} parameters are ignored.
 #' @param fit_GP_cov_pars_OOS Boolean (default = FALSE). If TRUE, the covariance parameters of the 
-#'            gp_model model are estimated using the out-of-sample (OOS) predictions 
+#'            \code{gp_model} model are estimated using the out-of-sample (OOS) predictions 
 #'            on the validation data using the optimal number of iterations (after performing the CV). 
 #'            This corresponds to the GPBoostOOS algorithm.
 #' @param colnames feature names, if not null, will use this to overwrite the names in dataset
@@ -484,6 +484,7 @@ gpb.cv <- function(params = list()
         num_neighbors_pred <- gp_model$.__enclos_env__$private$num_neighbors_pred
         cov_function <- gp_model$get_cov_function()
         cov_fct_shape <- gp_model$get_cov_fct_shape()
+        cov_fct_taper_range <- gp_model$get_cov_fct_taper_range()
         ind_effect_group_rand_coef <- gp_model$get_ind_effect_group_rand_coef()
         
         gp_model_train <- gpb.GPModel$new(group_data=group_data,
@@ -493,6 +494,7 @@ gpb.cv <- function(params = list()
                                           gp_rand_coef_data=gp_rand_coef_data,
                                           cov_function=cov_function,
                                           cov_fct_shape=cov_fct_shape,
+                                          cov_fct_taper_range=cov_fct_taper_range,
                                           vecchia_approx=vecchia_approx,
                                           num_neighbors=num_neighbors,
                                           vecchia_ordering=vecchia_ordering,

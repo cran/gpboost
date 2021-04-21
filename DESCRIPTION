@@ -2,8 +2,8 @@ Package: gpboost
 Type: Package
 Title: Combining Tree-Boosting with Gaussian Process and Mixed Effects
         Models
-Version: 0.5.0
-Date: 2021-03-12
+Version: 0.6.0
+Date: 2021-04-21
 Authors@R: c(
 	person("Fabio", "Sigrist", email = "fabiosigrist@gmail.com", role = c("aut", "cre")),
 	person("Benoit", "Jacob", role = c("cph")),
@@ -27,7 +27,8 @@ Authors@R: c(
     person("Alberto", "Ferreira", role = c("ctb")),
     person("Daniel", "Lemire", role = c("ctb")),
     person("Victor", "Zverovich", role = c("cph")),
-    person("IBM Corporation", role = c("ctb"))
+    person("IBM Corporation", role = c("ctb")),
+	person("Keith O'Hara", role = c("cph"))
     )
 Description: An R package that allows for combining tree-boosting with Gaussian process and mixed effects models. It also allows for independently doing tree-boosting as well as inference and prediction for Gaussian process and mixed effects models. See <https://github.com/fabsig/GPBoost> for more information on the software and Sigrist (2020) <arXiv:2004.02653> for more information on the methodology.
 Encoding: UTF-8
@@ -42,7 +43,7 @@ Imports: data.table (>= 1.9.6), graphics, RJSONIO, Matrix (>= 1.1-0),
         methods, utils
 SystemRequirements: C++11
 RoxygenNote: 6.0.1
-Packaged: 2021-03-12 12:37:24 UTC; whsigris
+Packaged: 2021-04-21 12:04:07 UTC; whsigris
 Author: Fabio Sigrist [aut, cre],
   Benoit Jacob [cph],
   Gael Guennebaud [cph],
@@ -65,7 +66,8 @@ Author: Fabio Sigrist [aut, cre],
   Alberto Ferreira [ctb],
   Daniel Lemire [ctb],
   Victor Zverovich [cph],
-  IBM Corporation [ctb]
+  IBM Corporation [ctb],
+  Keith O'Hara [cph]
 Maintainer: Fabio Sigrist <fabiosigrist@gmail.com>
 Repository: CRAN
-Date/Publication: 2021-03-12 13:20:02 UTC
+Date/Publication: 2021-04-21 12:50:03 UTC
