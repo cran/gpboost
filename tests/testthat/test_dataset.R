@@ -72,20 +72,31 @@ test_that("gpb.Dataset: nrow is correct for a very sparse matrix", {
 
 test_that("gpb.Dataset: Dataset should be able to construct from matrix and return non-null handle", {
   rawData <- matrix(runif(1000L), ncol = 10L)
-  handle <- gpboost:::gpb.null.handle()
   ref_handle <- NULL
-  handle <- gpboost:::gpb.call(
-    "LGBM_DatasetCreateFromMat_R"
-    , ret = handle
+  handle <- .Call(
+    gpboost:::LGBM_DatasetCreateFromMat_R
     , rawData
     , nrow(rawData)
     , ncol(rawData)
     , gpboost:::gpb.params2str(params = list())
     , ref_handle
   )
-  expect_false(is.na(handle))
-  gpboost:::gpb.call("LGBM_DatasetFree_R", ret = NULL, handle)
+  expect_false(is.null(handle))
+  .Call(gpboost:::LGBM_DatasetFree_R, handle)
   handle <- NULL
+})
+
+test_that("cpp errors should be raised as proper R errors", {
+  data(agaricus.train, package = "gpboost")
+  train <- agaricus.train
+  dtrain <- gpb.Dataset(
+    train$data
+    , label = train$label
+    , init_score = seq_len(10L)
+  )
+  expect_error({
+    dtrain$construct()
+  }, regexp = "Initial score size doesn't match data size")
 })
 
 test_that("gpb.Dataset$setinfo() should convert 'group' to integer", {

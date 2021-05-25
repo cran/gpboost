@@ -4,7 +4,7 @@
 #   * https://cran.r-project.org/doc/manuals/r-release/R-exts.html#Configure-and-cleanup
 
 AC_PREREQ(2.69)
-AC_INIT([gpboost], [0.6.0], [], [gpboost], [])
+AC_INIT([gpboost], [0.6.1], [], [gpboost], [])
 
 ###########################
 # find compiler and flags #

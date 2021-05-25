@@ -6,139 +6,24 @@ gpb.is.Dataset <- function(x) {
   return(gpb.check.r6.class(object = x, name = "gpb.Dataset"))
 }
 
-gpb.null.handle <- function() {
-  if (.Machine$sizeof.pointer == 8L) {
-    return(NA_real_)
-  } else {
-    return(NA_integer_)
-  }
-}
-
 gpb.is.null.handle <- function(x) {
-  return(is.null(x) || is.na(x))
-}
-
-gpb.encode.char <- function(arr, len) {
-  if (!is.raw(arr)) {
-    stop("gpb.encode.char: Can only encode from raw type")
+  if (is.null(x)) {
+    return(TRUE)
   }
-  return(rawToChar(arr[seq_len(len)]))
-}
-
-# [description] Raise an error. Before raising that error, check for any error message
-#               stored in a buffer on the C++ side.
-gpb.last_error <- function() {
-  # Perform text error buffering
-  buf_len <- 200L
-  act_len <- 0L
-  err_msg <- raw(buf_len)
-  err_msg <- .Call(
-    "LGBM_GetLastError_R"
-    , buf_len
-    , act_len
-    , err_msg
-    , PACKAGE = "gpboost"
+  return(
+    isTRUE(.Call(LGBM_HandleIsNull_R, x))
   )
+}
 
-  # Check error buffer
-  if (act_len > buf_len) {
-    buf_len <- act_len
-    err_msg <- raw(buf_len)
-    err_msg <- .Call(
-      "LGBM_GetLastError_R"
-      , buf_len
-      , act_len
-      , err_msg
-      , PACKAGE = "gpboost"
-    )
-  }
-
-  stop("api error: ", gpb.encode.char(arr = err_msg, len = act_len))
-
+# [description] Get the most recent error stored on the C++ side and raise it
+#               as an R error.
+gpb.last_error <- function() {
+ 
+  err_msg <- .Call(
+    LGBM_GetLastError_R
+  )
+  stop("api error: ", err_msg)
   return(invisible(NULL))
-
-}
-
-gpb.call <- function(fun_name, ret, ...) {
-  # Set call state to a zero value
-  call_state <- 0L
-
-  # Check for a ret call
-  if (!is.null(ret)) {
-    call_state <- .Call(
-      fun_name
-      , ...
-      , ret
-      , call_state
-      , PACKAGE = "gpboost"
-    )
-  } else {
-    call_state <- .Call(
-      fun_name
-      , ...
-      , call_state
-      , PACKAGE = "gpboost"
-    )
-  }
-  call_state <- as.integer(call_state)
-  # Check for call state value post call
-  if (call_state != 0L) {
-    gpb.last_error()
-  }
-
-  return(ret)
-
-}
-
-gpb.call <- function(fun_name, ret, ...) {
-  # Set call state to a zero value
-  call_state <- 0L
-  
-  # Check for a ret call
-  if (!is.null(ret)) {
-    call_state <- .Call(
-      fun_name
-      , ...
-      , ret
-      , call_state
-      , PACKAGE = "gpboost"
-    )
-  } else {
-    call_state <- .Call(
-      fun_name
-      , ...
-      , call_state
-      , PACKAGE = "gpboost"
-    )
-  }
-  call_state <- as.integer(call_state)
-  # Check for call state value post call
-  if (call_state != 0L) {
-    gpb.last_error()
-  }
-  
-  return(ret)
-  
-}
-
-gpb.call.return.str <- function(fun_name, ...) {
-
-  # Create buffer
-  buf_len <- as.integer(1024L * 1024L)
-  act_len <- 0L
-  buf <- raw(buf_len)
-
-  # Call buffer
-  buf <- gpb.call(fun_name = fun_name, ret = buf, ..., buf_len, act_len)
-
-  # Check for buffer content
-  if (act_len > buf_len) {
-    buf_len <- act_len
-    buf <- raw(buf_len)
-    buf <- gpb.call(fun_name = fun_name, ret = buf, ..., buf_len, act_len)
-  }
-
-  return(gpb.encode.char(arr = buf, len = act_len))
 
 }
 
@@ -197,10 +82,10 @@ gpb.params2str <- function(params, ...) {
 
   # Check ret length
   if (length(ret) == 0L) {
-    return(gpb.c_str(x = ""))
+    return("")
   }
 
-  return(gpb.c_str(x = paste0(ret, collapse = " ")))
+  return(paste0(ret, collapse = " "))
 
 }
 
@@ -263,11 +148,11 @@ gpb.check_interaction_constraints <- function(params, column_names) {
 }
 
 gpb.c_str <- function(x) {
-
+  
   ret <- charToRaw(as.character(x))
   ret <- c(ret, as.raw(0L))
   return(ret)
-
+  
 }
 
 gpb.check.r6.class <- function(object, name) {

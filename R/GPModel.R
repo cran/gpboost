@@ -15,14 +15,14 @@
 #' @param gp_rand_coef_data A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients
 #' @param cov_function A \code{string} specifying the covariance function for the Gaussian process. 
 #' The following covariance functions are available:
-#' "exponential", "gaussian", "matern", "powered_exponential", "wendland", "exponential_tapered"
+#' "exponential", "gaussian", "matern", "powered_exponential", "wendland", and "exponential_tapered".
 #' For "exponential", "gaussian", and "powered_exponential", we follow the notation and parametrization of Diggle and Ribeiro (2007).
 #' For "matern", we follow the notation of Rassmusen and Williams (2006).
 #' For "wendland", we follow the notation of Bevilacqua et al. (2019).
 #' A covariance function with the suffix "_tapered" refers to a covariance function that is multiplied by 
 #' a compactly supported Wendland covariance function (= tapering)
 #' @param cov_fct_shape A \code{numeric} specifying the shape parameter of the covariance function 
-#' (=smoothness parameter for Matern and Wendland covariance. For the Wendland covariance function, 
+#' (=smoothness parameter for Matern and Wendland covariance). For the Wendland covariance function, 
 #' we follow the notation of Bevilacqua et al. (2019)). 
 #' This parameter is irrelevant for some covariance functions such as the exponential or Gaussian.
 #' @param cov_fct_taper_range A \code{numeric} specifying the range parameter of the Wendland covariance function / taper. We follow the notation of Bevilacqua et al. (2019)
@@ -48,11 +48,10 @@
 #' @param params A \code{list} with parameters for the model fitting / optimization
 #'             \itemize{
 #'                \item{optimizer_cov}{ Optimizer used for estimating covariance parameters. 
-#'                Options: "gradient_descent", "fisher_scoring", or "nelder_mead". Default="fisher_scoring" for Gaussian data
-#'                and "gradient_descent" for other likelihoods.}
+#'                Options: "gradient_descent", "fisher_scoring", and "nelder_mead". Default = "gradient_descent"}
 #'                \item{optimizer_coef}{ Optimizer used for estimating linear regression coefficients, if there are any 
 #'                (for the GPBoost algorithm there are usually none). 
-#'                Options: "gradient_descent" or "wls". Gradient descent steps are done simultaneously 
+#'                Options: "gradient_descent", "wls", and "nelder_mead". Gradient descent steps are done simultaneously 
 #'                with gradient descent steps for the covariance parameters. 
 #'                "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
 #'                Default="wls" for Gaussian data and "gradient_descent" for other likelihoods.}
@@ -75,8 +74,7 @@
 #'                Default=0.5.}
 #'                \item{momentum_offset}{ Number of iterations for which no mometum is applied in the beginning.
 #'                Default=2.}
-#'                \item{trace}{ If TRUE, the value of the gradient is printed for some iterations.
-#'                Useful for finding good learning rates. Default=FALSE.}
+#'                \item{trace}{ If TRUE, information on the progress of the parameter optimization is printed. Default=FALSE.}
 #'                \item{convergence_criterion}{ The convergence criterion used for terminating the optimization algorithm.
 #'                Options: "relative_change_in_log_likelihood" (default) or "relative_change_in_parameters".}
 #'                \item{std_dev}{ If TRUE, (asymptotic) standard deviations are calculated for the covariance parameters}
@@ -101,7 +99,10 @@ gpb.GPModel <- R6::R6Class(
       if (!gpb.is.null.handle(private$handle)) {
         
         # Freeing up handle
-        gpb.call("GPB_REModelFree_R", ret = NULL, private$handle)
+        .Call(
+          GPB_REModelFree_R
+          , private$handle
+        )
         private$handle <- NULL
         
       }
@@ -233,13 +234,14 @@ gpb.GPModel <- R6::R6Class(
         group_data_unique <- unique(group_data)
         group_data_unique_c_str <- lapply(group_data_unique,gpb.c_str)
         group_data_c_str <- unlist(group_data_unique_c_str[match(group_data,group_data_unique)])
-        # group_data_c_str <- unlist(lapply(group_data,gpb.c_str))# Version 2: slower than above
+        # Version 2: slower than above
+        # group_data_c_str <- unlist(lapply(group_data,gpb.c_str))
         # group_data_c_str <- c()# Version 3: much slower
         # for (i in 1:length(group_data)) {
         #   group_data_c_str <- c(group_data_c_str,gpb.c_str(group_data[i]))
         # }
         
-        # Set data for random coef for grouped REs
+        # Set data for random coefficients for grouped REs
         if (!is.null(group_rand_coef_data)) {
           
           if (is.numeric(group_rand_coef_data)) {
@@ -339,7 +341,6 @@ gpb.GPModel <- R6::R6Class(
         private$cov_fct_taper_range <- as.numeric(cov_fct_taper_range)
         private$num_neighbors <- as.integer(num_neighbors)
         private$vecchia_ordering <- vecchia_ordering
-        vecchia_ordering <- gpb.c_str(vecchia_ordering)
         private$vecchia_pred_type <- vecchia_pred_type
         private$num_neighbors_pred <- as.integer(num_neighbors_pred)
         if (private$cov_function == "wendland") {
@@ -430,40 +431,38 @@ gpb.GPModel <- R6::R6Class(
       }
       
       private$determine_num_cov_pars(likelihood)
-      vecchia_pred_type_c_str <- gpb.c_str(private$vecchia_pred_type)
-      cov_function_c_str <- gpb.c_str(private$cov_function)
-      likelihood_c_str <- gpb.c_str(likelihood)
       
       # Create handle
-      handle <- 0.0
+      handle <- NULL
       
       # Attempts to create a handle for the GPModel
       # try({
       
       # Store handle
-      handle <- gpb.call("GPB_CreateREModel_R",
-                         ret = handle,
-                         private$num_data,
-                         cluster_ids,
-                         group_data_c_str,
-                         private$num_group_re,
-                         group_rand_coef_data,
-                         ind_effect_group_rand_coef,
-                         private$num_group_rand_coef,
-                         private$num_gp,
-                         gp_coords,
-                         private$dim_coords,
-                         gp_rand_coef_data,
-                         private$num_gp_rand_coef,
-                         cov_function_c_str,
-                         private$cov_fct_shape,
-                         private$cov_fct_taper_range,
-                         private$vecchia_approx,
-                         private$num_neighbors,
-                         vecchia_ordering,
-                         vecchia_pred_type_c_str,
-                         private$num_neighbors_pred,
-                         likelihood_c_str)
+      handle <- .Call(
+        GPB_CreateREModel_R
+        , private$num_data
+        , cluster_ids
+        , group_data_c_str
+        , private$num_group_re
+        , group_rand_coef_data
+        , ind_effect_group_rand_coef
+        , private$num_group_rand_coef
+        , private$num_gp
+        , gp_coords
+        , private$dim_coords
+        , gp_rand_coef_data
+        , private$num_gp_rand_coef
+        , private$cov_function
+        , private$cov_fct_shape
+        , private$cov_fct_taper_range
+        , private$vecchia_approx
+        , private$num_neighbors
+        , vecchia_ordering
+        , private$vecchia_pred_type
+        , private$num_neighbors_pred
+        , likelihood
+      )
       # })
       
       # Check whether the handle was created properly if it was not stopped earlier by a stop call
@@ -618,20 +617,22 @@ gpb.GPModel <- R6::R6Class(
       
       if (is.null(X)) {
         
-        gpb.call("GPB_OptimCovPar_R",
-                 ret = NULL,
-                 private$handle,
-                 y,
-                 fixed_effects)
+        .Call(
+          GPB_OptimCovPar_R
+          , private$handle
+          , y
+          , fixed_effects
+        )
         
       } else {
         
-        gpb.call("GPB_OptimLinRegrCoefCovPar_R",
-                 ret = NULL,
-                 private$handle,
-                 y,
-                 X,
-                 private$num_coef)
+        .Call(
+          GPB_OptimLinRegrCoefCovPar_R
+          , private$handle
+          , y
+          , X
+          , private$num_coef
+        )
         
       }
       
@@ -702,11 +703,13 @@ gpb.GPModel <- R6::R6Class(
       }
       
       negll = 0.
-      gpb.call("GPB_EvalNegLogLikelihood_R",
-               ret = negll,
-               private$handle,
-               y,
-               cov_pars)
+      .Call(
+        GPB_EvalNegLogLikelihood_R
+        , private$handle
+        , y
+        , cov_pars
+        , negll
+      )
       
       return(negll)
       
@@ -794,32 +797,33 @@ gpb.GPModel <- R6::R6Class(
       nesterov_schedule_version <- private$params[["nesterov_schedule_version"]]
       trace <- private$params[["trace"]]
       momentum_offset <- private$params[["momentum_offset"]]
-      convergence_criterion <- gpb.c_str(private$params[["convergence_criterion"]])
+      convergence_criterion <- private$params[["convergence_criterion"]]
       optimizer_cov_c_str <- NULL
       init_cov_pars <- NULL
       if (!is.null(params[["optimizer_cov"]])) {
-        optimizer_cov_c_str <- gpb.c_str(params[["optimizer_cov"]])
+        optimizer_cov_c_str <- params[["optimizer_cov"]]
       }
       if (!is.null(params[["init_cov_pars"]])) {
         init_cov_pars <- params[["init_cov_pars"]]
       }
       std_dev <- private$params[["std_dev"]]
       
-      gpb.call("GPB_SetOptimConfig_R",
-               ret = NULL,
-               private$handle,
-               init_cov_pars,
-               lr_cov,
-               acc_rate_cov,
-               maxit,
-               delta_rel_conv,
-               use_nesterov_acc,
-               nesterov_schedule_version,
-               trace,
-               optimizer_cov_c_str,
-               momentum_offset,
-               convergence_criterion,
-               std_dev)
+      .Call(
+        GPB_SetOptimConfig_R
+        , private$handle
+        , init_cov_pars
+        , lr_cov
+        , acc_rate_cov
+        , maxit
+        , delta_rel_conv
+        , use_nesterov_acc
+        , nesterov_schedule_version
+        , trace
+        , optimizer_cov_c_str
+        , momentum_offset
+        , convergence_criterion
+        , std_dev
+      )
       
       return(invisible(self))
      
@@ -827,15 +831,25 @@ gpb.GPModel <- R6::R6Class(
     },
     
     get_optim_params = function() {
+      
       params <- private$params
-      params$optimizer_cov <- gpb.call.return.str("GPB_GetOptimizerCovPars_R",
-                                                  private$handle)
-      params$optimizer_coef <- gpb.call.return.str("GPB_GetOptimizerCoef_R",
-                                                   private$handle)
+      # Get covariance parameters optimizer
+      params$optimizer_cov <- .Call(
+        GPB_GetOptimizerCovPars_R
+        , private$handle
+      )
+      # Get linear regression coefficients optimizer
+      params$optimizer_coef <- .Call(
+        GPB_GetOptimizerCoef_R
+        , private$handle
+      )
+
       init_cov_pars <- numeric(private$num_cov_pars)
-      init_cov_pars <- gpb.call("GPB_GetInitCovPar_R",
-                                ret = init_cov_pars,
-                                private$handle)
+      .Call(
+        GPB_GetInitCovPar_R
+        , private$handle
+        , init_cov_pars
+      )
       if (sum(abs(init_cov_pars - rep(-1,private$num_cov_pars))) < 1E-6) {
         params["init_cov_pars"] <- list(NULL)
       }
@@ -899,17 +913,18 @@ gpb.GPModel <- R6::R6Class(
       acc_rate_coef <- private$params[["acc_rate_coef"]]
       optimizer_coef_c_str <- NULL
       if (!is.null(params[["optimizer_coef"]])) {
-        optimizer_coef_c_str <- gpb.c_str(params[["optimizer_coef"]])
+        optimizer_coef_c_str <- params[["optimizer_coef"]]
       }
       
-      gpb.call("GPB_SetOptimCoefConfig_R",
-               ret = NULL,
-               private$handle,
-               num_coef,
-               init_coef,
-               lr_coef,
-               acc_rate_coef,
-               optimizer_coef_c_str)
+      .Call(
+        GPB_SetOptimCoefConfig_R
+        , private$handle
+        , num_coef
+        , init_coef
+        , lr_coef
+        , acc_rate_coef
+        , optimizer_coef_c_str
+      )
       
       return(invisible(self))
       
@@ -923,10 +938,12 @@ gpb.GPModel <- R6::R6Class(
         optim_pars <- numeric(private$num_cov_pars)
       }
       
-      optim_pars <- gpb.call("GPB_GetCovPar_R",
-                             ret = optim_pars,
-                             private$handle,
-                             private$params[["std_dev"]])
+      .Call(
+        GPB_GetCovPar_R
+        , private$handle
+        , private$params[["std_dev"]]
+        , optim_pars
+      )
       
       cov_pars <- optim_pars[1:private$num_cov_pars]
       names(cov_pars) <- private$cov_par_names
@@ -951,11 +968,13 @@ gpb.GPModel <- R6::R6Class(
       } else {
         optim_pars <- numeric(private$num_coef)
       }
-      
-      optim_pars <- gpb.call("GPB_GetCoef_R",
-                             ret = optim_pars,
-                             private$handle,
-                             private$params[["std_dev"]])
+
+      .Call(
+        GPB_GetCoef_R
+        , private$handle
+        , private$params[["std_dev"]]
+        , optim_pars
+      )
       
       coef <- optim_pars[1:private$num_coef]
       names(coef) <- private$coef_names
@@ -977,6 +996,7 @@ gpb.GPModel <- R6::R6Class(
                                    X_pred = NULL) {
       
       num_data_pred <- 0
+      group_data_pred_c_str <- NULL
       
       # Set data for grouped random effects
       if (!is.null(group_data_pred)) {
@@ -1001,15 +1021,9 @@ gpb.GPModel <- R6::R6Class(
         
         num_data_pred <- as.integer(dim(group_data_pred)[1])
         group_data_pred <- as.vector(group_data_pred)
-        
-        if (storage.mode(group_data_pred) != "character") {
-          storage.mode(group_data_pred) <- "character"
-        }
-        group_data_pred_c_str <- c()
-        for (i in 1:length(group_data_pred)) {
-          group_data_pred_c_str <- c(group_data_pred_c_str,gpb.c_str(group_data_pred[i]))
-        }
-        group_data_pred <- group_data_pred_c_str
+        group_data_pred_unique <- unique(group_data_pred)
+        group_data_pred_unique_c_str <- lapply(group_data_pred_unique,gpb.c_str)
+        group_data_pred_c_str <- unlist(group_data_pred_unique_c_str[match(group_data_pred,group_data_pred_unique)])
         
         # Set data for random coef for grouped REs
         if (!is.null(group_rand_coef_data_pred)) {
@@ -1043,7 +1057,7 @@ gpb.GPModel <- R6::R6Class(
         
       }
       
-      # Set data for (spatial, spatio-temporal, or temporal) Gaussian process
+      # Set data for Gaussian process
       if (!is.null(gp_coords_pred)) {
         
         if (is.numeric(gp_coords_pred)) {
@@ -1187,16 +1201,17 @@ gpb.GPModel <- R6::R6Class(
       
       private$num_data_pred <- num_data_pred
       
-      gpb.call("GPB_SetPredictionData_R",
-               ret=NULL,
-               private$handle,
-               num_data_pred,
-               cluster_ids_pred,
-               group_data_pred,
-               group_rand_coef_data_pred,
-               gp_coords_pred,
-               gp_rand_coef_data_pred,
-               X_pred)
+      .Call(
+        GPB_SetPredictionData_R
+        , private$handle
+        , num_data_pred
+        , cluster_ids_pred
+        , group_data_pred_c_str
+        , group_rand_coef_data_pred
+        , gp_coords_pred
+        , gp_rand_coef_data_pred
+        , X_pred
+      )
       
       return(invisible(self))
       
@@ -1239,7 +1254,7 @@ gpb.GPModel <- R6::R6Class(
       if (!is.null(vecchia_pred_type)) {
         private$vecchia_pred_type <- vecchia_pred_type
       }
-      vecchia_pred_type_c_str <- gpb.c_str(private$vecchia_pred_type)
+      vecchia_pred_type_c_str <- private$vecchia_pred_type
       
       if (!is.null(num_neighbors_pred)) {
         private$num_neighbors_pred <- as.integer(num_neighbors_pred)
@@ -1609,26 +1624,28 @@ gpb.GPModel <- R6::R6Class(
         preds <- numeric(num_data_pred)
       }
       
-      preds <- gpb.call("GPB_PredictREModel_R",
-                        ret=preds,
-                        private$handle,
-                        y,
-                        num_data_pred,
-                        predict_cov_mat,
-                        predict_var,
-                        predict_response,
-                        cluster_ids_pred,
-                        group_data_pred_c_str,
-                        group_rand_coef_data_pred,
-                        gp_coords_pred,
-                        gp_rand_coef_data_pred,
-                        cov_pars,
-                        X_pred,
-                        use_saved_data,
-                        vecchia_pred_type_c_str,
-                        private$num_neighbors_pred,
-                        fixed_effects,
-                        fixed_effects_pred)
+      .Call(
+        GPB_PredictREModel_R
+        , private$handle
+        , y
+        , num_data_pred
+        , predict_cov_mat
+        , predict_var
+        , predict_response
+        , cluster_ids_pred
+        , group_data_pred_c_str
+        , group_rand_coef_data_pred
+        , gp_coords_pred
+        , gp_rand_coef_data_pred
+        , cov_pars
+        , X_pred
+        , use_saved_data
+        , vecchia_pred_type_c_str
+        , private$num_neighbors_pred
+        , fixed_effects
+        , fixed_effects_pred
+        , preds
+      )
       
       pred_mean <- preds[1:num_data_pred]
       pred_cov_mat <- NA
@@ -1691,9 +1708,11 @@ gpb.GPModel <- R6::R6Class(
     get_response_data = function() {
       
       response_data <- numeric(private$num_data)
-      response_data <- gpb.call("GPB_GetResponseData_R",
-                                ret=response_data,
-                                private$handle)
+      .Call(
+        GPB_GetResponseData_R
+        , private$handle
+        , response_data
+      )
       
       return(response_data)
     },
@@ -1704,9 +1723,11 @@ gpb.GPModel <- R6::R6Class(
         stop("GPModel: Model has no covariate data for linear predictor")
       }
       covariate_data <- numeric(private$num_data * private$num_coef)
-      covariate_data <- gpb.call("GPB_GetCovariateData_R",
-                                 ret=covariate_data,
-                                 private$handle)
+      .Call(
+        GPB_GetCovariateData_R
+        , private$handle
+        , covariate_data
+      )
       covariate_data <- matrix(covariate_data,ncol=private$num_coef)
       
       return(covariate_data)
@@ -1734,15 +1755,19 @@ gpb.GPModel <- R6::R6Class(
     
     get_num_optim_iter = function() {
       num_it <- integer(1)
-      num_it <- gpb.call("GPB_GetNumIt_R",
-                         ret = num_it,
-                         private$handle)
+      .Call(
+        GPB_GetNumIt_R
+        , private$handle
+        , num_it
+      )
       return(num_it)
     },
     
     get_likelihood_name = function() {
-      ll_name <- gpb.call.return.str("GPB_GetLikelihoodName_R",
-                                     private$handle)
+      ll_name <- .Call(
+        GPB_GetLikelihoodName_R
+        , private$handle
+      )
       return(ll_name)
     },
     
@@ -1757,11 +1782,11 @@ gpb.GPModel <- R6::R6Class(
       if (likelihood == "gaussian" && !("Error_term" %in% private$cov_par_names)){
         private$cov_par_names <- c("Error_term",private$cov_par_names)
       }
-      likelihood_c_str <- gpb.c_str(likelihood)
-      gpb.call("GPB_SetLikelihood_R",
-               ret = NULL,
-               private$handle,
-               likelihood_c_str)
+      .Call(
+        GPB_SetLikelihood_R
+        , private$handle
+        , likelihood
+      )
       
       return(invisible(self))
     },
