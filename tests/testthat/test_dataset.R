@@ -1,4 +1,3 @@
-library(Matrix)
 
 context("testing gpb.Dataset functionality")
 
@@ -81,6 +80,7 @@ test_that("gpb.Dataset: Dataset should be able to construct from matrix and retu
     , gpboost:::gpb.params2str(params = list())
     , ref_handle
   )
+  expect_is(handle, "externalptr")
   expect_false(is.null(handle))
   .Call(gpboost:::LGBM_DatasetFree_R, handle)
   handle <- NULL
@@ -201,6 +201,24 @@ test_that("Dataset$update_params() works correctly for recognized Dataset parame
   for (param_name in names(new_params)) {
     expect_identical(new_params[[param_name]], updated_params[[param_name]])
   }
+})
+
+test_that("Dataset$finalize() should not fail on an already-finalized Dataset", {
+  dtest <- gpb.Dataset(
+    data = test_data
+    , label = test_label
+  )
+  expect_true(gpboost:::gpb.is.null.handle(dtest$.__enclos_env__$private$handle))
+  
+  dtest$construct()
+  expect_false(gpboost:::gpb.is.null.handle(dtest$.__enclos_env__$private$handle))
+  
+  dtest$finalize()
+  expect_true(gpboost:::gpb.is.null.handle(dtest$.__enclos_env__$private$handle))
+  
+  # calling finalize() a second time shouldn't cause any issues
+  dtest$finalize()
+  expect_true(gpboost:::gpb.is.null.handle(dtest$.__enclos_env__$private$handle))
 })
 
 test_that("gpb.Dataset: should be able to run gpb.train() immediately after using gpb.Dataset() on a file", {

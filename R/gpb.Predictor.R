@@ -11,9 +11,8 @@ Predictor <- R6::R6Class(
     finalize = function() {
 
       # Check the need for freeing handle
-      if (private$need_free_handle && !gpb.is.null.handle(x = private$handle)) {
+      if (private$need_free_handle) {
 
-        # Freeing up handle
         .Call(
           LGBM_BoosterFree_R
           , private$handle
@@ -27,8 +26,7 @@ Predictor <- R6::R6Class(
     },
 
     # Initialize will create a starter model
-    initialize = function(modelfile, ...) {
-      params <- list(...)
+    initialize = function(modelfile, params = list()) {
       private$params <- gpb.params2str(params = params)
       # Create new lgb handle
       handle <- NULL
