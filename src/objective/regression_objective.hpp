@@ -7,6 +7,7 @@
 #define LIGHTGBM_OBJECTIVE_REGRESSION_OBJECTIVE_HPP_
 
 #include <GPBoost/re_model.h>
+#include <GPBoost/DF_utils.h>
 
 #include <LightGBM/meta.h>
 #include <LightGBM/objective_function.h>
@@ -17,8 +18,8 @@
 #include <vector>
 
 #include <cmath>
-#ifndef M_SQRT1_2
-#define M_SQRT1_2      0.707106781186547524401
+#ifndef M_PI
+#define M_PI      3.141592653589793238462643383279502884 // pi
 #endif
 
 using GPBoost::REModel;
@@ -196,7 +197,7 @@ namespace LightGBM {
 					output[0] = input[0];
 				}
 				else if (likelihood_type_ == std::string("bernoulli_probit")) {
-					output[0] = normalCDF(input[0]);
+					output[0] = GPBoost::normalCDF(input[0]);
 				}
 				else if (likelihood_type_ == std::string("bernoulli_logit")) {
 					output[0] = 1. / (1. + std::exp(-input[0]));
@@ -264,73 +265,6 @@ namespace LightGBM {
 					}
 					Log::Info("[GPBoost with %s likelihood]: initscore=%f",
 						likelihood_type_.c_str(), initscore);
-
-					//DELETE code below
-//// Old (incorrect) version 1 (set scores to 0)
-//					if (re_model_->GetLikelihood() == std::string("gaussian")) {
-//						sumw = static_cast<double>(num_data_);
-//#pragma omp parallel for schedule(static) reduction(+:suml)
-//						for (data_size_t i = 0; i < num_data_; ++i) {
-//							suml += label_[i];
-//						}
-//						initscore = suml / sumw;
-//						Log::Info("[GPBoost with gaussian likelihood]: initscore=%f", initscore);
-//					}
-//					else if (re_model_->GetLikelihood() == std::string("bernoulli_probit")) {
-//						sumw = static_cast<double>(num_data_);
-//#pragma omp parallel for schedule(static) reduction(+:suml)
-//						for (data_size_t i = 0; i < num_data_; ++i) {
-//							suml += is_pos_(label_[i]);
-//						}
-//						double pavg = suml / sumw;
-//						pavg = std::min(pavg, 1.0 - kEpsilon);
-//						pavg = std::max<double>(pavg, kEpsilon);
-//						//initscore = std::log(pavg / (1.0f - pavg));//TODO: better use inverse normal cdf here?
-//						initscore = normalCDFInverse(pavg);
-//						Log::Info("[GPBoost with bernoulli_probit likelihood]: pavg=%f -> initscore=%f", pavg, initscore);
-//					}
-
-//// Old (incorrect) version 2
-//					if (likelihood_type_ == std::string("gaussian") ||
-//						likelihood_type_ == std::string("poisson") ||
-//						likelihood_type_ == std::string("gamma")) {
-//						sumw = static_cast<double>(num_data_);
-//#pragma omp parallel for schedule(static) reduction(+:suml)
-//						for (data_size_t i = 0; i < num_data_; ++i) {
-//							suml += label_[i];
-//						}
-//						initscore = suml / sumw;
-//						if (likelihood_type_ == std::string("poisson") ||
-//							likelihood_type_ == std::string("gamma")) {
-//							initscore = Common::SafeLog(initscore);
-//						}
-//						Log::Info("[GPBoost with %s likelihood]: initscore=%f",
-//							likelihood_type_.c_str(), initscore);
-//					}
-//					else if (likelihood_type_ == std::string("bernoulli_probit") ||
-//						likelihood_type_ == std::string("bernoulli_logit")) {
-//						sumw = static_cast<double>(num_data_);
-//#pragma omp parallel for schedule(static) reduction(+:suml)
-//						for (data_size_t i = 0; i < num_data_; ++i) {
-//							suml += is_pos_(label_[i]);
-//						}
-//						double pavg = suml / sumw;
-//						pavg = std::min(pavg, 1.0 - kEpsilon);
-//						pavg = std::max<double>(pavg, kEpsilon);
-//						if (likelihood_type_ == std::string("bernoulli_probit")) {
-//							initscore = normalCDFInverse(pavg);
-//						}
-//						else {
-//							initscore = std::log(pavg / (1.0f - pavg));
-//						}
-//						Log::Info("[GPBoost with %s likelihood]: pavg=%f -> initscore=%f",
-//							likelihood_type_.c_str(), pavg, initscore);
-//					}
-//					else {
-//						Log::Fatal("BoostFromScore (for intial score calculation) not implemented for likelihood / objective = %s",
-//							likelihood_type_.c_str());
-//					}
-
 				}//end has_gp_model_
 				else {//no gp_model
 					sumw = static_cast<double>(num_data_);
@@ -342,35 +276,6 @@ namespace LightGBM {
 				}
 			}
 			return initscore;
-		}
-
-		inline double normalCDF(double value) const {
-			return 0.5 * std::erfc(-value * M_SQRT1_2);
-		}
-
-		//For use below in normalCDFInverse
-		double RationalApproximation(double t) const {
-			// Abramowitz and Stegun formula 26.2.23.
-			// The absolute value of the error should be less than 4.5 e-4.
-			double c[] = { 2.515517, 0.802853, 0.010328 };
-			double d[] = { 1.432788, 0.189269, 0.001308 };
-			return t - ((c[2] * t + c[1]) * t + c[0]) /
-				(((d[2] * t + d[1]) * t + d[0]) * t + 1.0);
-		}
-
-		double normalCDFInverse(double p) const {
-			if (p <= 0.0 || p >= 1.0) {
-				Log::Fatal("Invalid input argument (%g); must be larger than 0 but less than 1.");
-			}
-
-			if (p < 0.5) {
-				// F^-1(p) = - G^-1(p)
-				return -RationalApproximation(sqrt(-2.0 * log(p)));
-			}
-			else {
-				// F^-1(p) = G^-1(1-p)
-				return RationalApproximation(sqrt(-2.0 * log(1 - p)));
-			}
 		}
 
 	protected:
@@ -954,6 +859,121 @@ namespace LightGBM {
 
 	private:
 		double rho_;
+	};
+
+	/*!
+* \brief Objective function for Tobit model
+*	Reference: Sigrist, F., & Hirnschall, C. (2019). Grabit: Gradient Tree Boosted Tobit Models for Default Prediction. Journal of Banking and Finance
+*/
+	class TobitLoss : public RegressionL2loss {
+	public:
+		explicit TobitLoss(const Config& config) : RegressionL2loss(config) {
+			sigma_ = static_cast<double>(config.sigma);
+			yl_ = static_cast<double>(config.yl);
+			yu_ = static_cast<double>(config.yu);
+			if (sigma_ <= 0.0) {
+				Log::Fatal("'sigma' must be greater than zero but was %f", sigma_);
+			}
+			if (yu_ <= yl_) {
+				Log::Fatal("'yl' must be smaller than 'yu'");
+			}
+		}
+
+		explicit TobitLoss(const std::vector<std::string>& strs) : RegressionL2loss(strs) {
+		}
+
+		~TobitLoss() {}
+
+		void Init(const Metadata& metadata, data_size_t num_data) override {
+			if (sqrt_) {
+				Log::Warning("Cannot use sqrt transform for %s loss, will auto disable it", GetName());
+				sqrt_ = false;
+			}
+			RegressionL2loss::Init(metadata, num_data);
+			const_ = 0.5 * std::log(2 * M_PI) + std::log(sigma_);
+			sigma2_inverse_ = 1. / (sigma_ * sigma_);
+			// Safety check for labels
+#pragma omp parallel for schedule(static)
+			for (data_size_t i = 0; i < num_data_; ++i) {
+				if (label_[i] - yl_ < -1e-6 * std::abs(yl_)) {
+					Log::Fatal("Label / response variable (sample nb. =%d, value=%f) must not be smaller than yl (=%f)", i, label_[i], yl_);
+				}
+				else if (label_[i] - yu_ > 1e-6 * std::abs(yu_)) {
+					Log::Fatal("Label / response variable (sample nb. =%d, value=%f) must not be larger than yu (=%f)", i, label_[i], yu_);
+				}
+			}
+		}
+
+		void GetGradients(const double* score, score_t* gradients,
+			score_t* hessians) const override {
+			if (weights_ == nullptr) {
+#pragma omp parallel for schedule(static)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double diff = (label_[i] - score[i]) / sigma_;
+					if (label_[i] <= yl_) {// lower censoring
+						const double logpdf = GPBoost::normalLogPDF(diff);
+						const double logcdf = GPBoost::normalLogCDF(diff);
+						gradients[i] = static_cast<score_t>(std::exp(logpdf - logcdf) / sigma_);
+						hessians[i] = static_cast<score_t>(std::exp(logpdf - logcdf) * sigma2_inverse_ * diff +
+							std::exp(2 * logpdf - 2 * logcdf) * sigma2_inverse_);
+					}
+					else if (label_[i] >= yu_) {// upper censoring
+						const double logpdf = GPBoost::normalLogPDF(diff);
+						const double logcdf = GPBoost::normalLogCDF(-diff);
+						gradients[i] = static_cast<score_t>(-std::exp(logpdf - logcdf) / sigma_);
+						hessians[i] = static_cast<score_t>(-std::exp(logpdf - logcdf) * sigma2_inverse_ * diff +
+							std::exp(2 * logpdf - 2 * logcdf) * sigma2_inverse_);
+					}
+					else {// not censored observation
+						gradients[i] = static_cast<score_t>(-diff / sigma_);
+						hessians[i] = static_cast<score_t>(sigma2_inverse_);
+					}
+				}
+			}
+			else {
+#pragma omp parallel for schedule(static)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double diff = (label_[i] - score[i]) / sigma_;
+					if (label_[i] <= yl_) {// lower censoring
+						const double logpdf = GPBoost::normalLogPDF(diff);
+						const double logcdf = GPBoost::normalLogCDF(diff);
+						gradients[i] = static_cast<score_t>(std::exp(logpdf - logcdf) / sigma_ * weights_[i]);
+						hessians[i] = static_cast<score_t>((std::exp(logpdf - logcdf) * sigma2_inverse_ * diff +
+							std::exp(2 * logpdf - 2 * logcdf) * sigma2_inverse_) * weights_[i]);
+					}
+					else if (label_[i] >= yu_) {// upper censoring
+						const double logpdf = GPBoost::normalLogPDF(diff);
+						const double logcdf = GPBoost::normalLogCDF(-diff);
+						gradients[i] = static_cast<score_t>(-std::exp(logpdf - logcdf) / sigma_ * weights_[i]);
+						hessians[i] = static_cast<score_t>((-std::exp(logpdf - logcdf) * sigma2_inverse_ * diff +
+							std::exp(2 * logpdf - 2 * logcdf) * sigma2_inverse_) * weights_[i]);
+					}
+					else {// not censored observation
+						gradients[i] = static_cast<score_t>(-diff / sigma_ * weights_[i]);
+						hessians[i] = static_cast<score_t>(sigma2_inverse_ * weights_[i]);
+					}
+				}
+			}
+		}
+
+		const char* GetName() const override {
+			return "tobit";
+		}
+
+		bool IsConstantHessian() const override {
+			return false;
+		}
+
+	private:
+		/*! \brief Standard deviation of latent Gaussian variable */
+		double sigma_;
+		double sigma2_inverse_;
+		/*! \brief Lower censoring threshold */
+		double yl_;
+		/*! \brief Upper censoring threshold */
+		double yu_;
+		/*! \brief Normalizing constant for (negative) Tobit log-likelihood not depending on data */
+		double const_;
 	};
 
 #undef PercentileFun
