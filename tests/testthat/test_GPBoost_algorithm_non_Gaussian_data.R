@@ -11,8 +11,6 @@ DEFAULT_OPTIM_PARAMS_EARLY_STOP <- list(maxit=10, lr_cov=0.1, optimizer_cov="gra
 DEFAULT_OPTIM_PARAMS_EARLY_STOP_NO_NESTEROV <- list(maxit=20, lr_cov=0.01, use_nesterov_acc=FALSE,
                                                     optimizer_cov="gradient_descent" )
 
-# , optimizer_coef="gradient_descent"##DELETTE
-
 # Function that simulates uniform random variables
 sim_rand_unif <- function(n, init_c=0.1){
   mod_lcg <- 134456 # modulus for linear congruential generator (random0 used)
@@ -638,15 +636,15 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                    min_data_in_leaf = 5,
                    objective = "binary",
                    verbose = 0)
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-0.9823337 )),TOLERANCE)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-0.9927358)),TOLERANCE)
     # Prediction
     pred <- predict(bst, data = X_test, group_data_pred = group_data_test,
                     predict_var = TRUE, rawscore = TRUE)
-    expect_lt(sum(abs(head(pred$fixed_effect)-c(0.3668229, 0.5218973, 0.6283960, 0.5446420, -1.1381589, 0.3394119))),TOLERANCE)
-    expect_lt(sum(abs(tail(pred$random_effect_mean)-c(rep(-2.003468,3),
+    expect_lt(sum(abs(head(pred$fixed_effect)-c(0.3555116, 0.5236091, 0.6358643, 0.5443878, -1.1371436, 0.3320095))),TOLERANCE)
+    expect_lt(sum(abs(tail(pred$random_effect_mean)-c(rep(-2.0045,3),
                                                       rep(0,n_new)))),TOLERANCE)
-    expect_lt(sum(abs(tail(pred$random_effect_cov)-c(rep(0.2149298,3),
-                                                     rep(0.9823337,n_new)))),TOLERANCE)
+    expect_lt(sum(abs(tail(pred$random_effect_cov)-c(rep(0.2166956 ,3),
+                                                     rep(0.9927358 ,n_new)))),TOLERANCE)
     
   })
   
@@ -1014,6 +1012,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
   })
   
   
+  # This is a slow test
   test_that("GPBoost algorithm for binary classification with combined Gaussian process and grouped random effects model", {
     
     ntrain <- ntest <- 500
@@ -1108,9 +1107,9 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     pred <- predict(bst, data = X_test, gp_coords_pred = coords_test,
                     group_data_pred = group_data_test,
                     predict_var = TRUE, rawscore = TRUE)
-    expect_lt(sum(abs(tail(pred$random_effect_mean, n=4)-c(0.289869345, -0.005528924, -0.477569315, -0.202396296))),TOLERANCE)
-    expect_lt(sum(abs(tail(pred$random_effect_cov, n=4)-c(0.2219169, 0.3440730, 0.3523430, 0.3414794))),TOLERANCE)
-    expect_lt(sum(abs(tail(pred$fixed_effect, n=4)-c(0.4913889, 0.1638588, -0.9722384, 0.3293834))),TOLERANCE)
+    expect_lt(sum(abs(tail(pred$random_effect_mean, n=4)-c(0.290144339, -0.005138535, -0.477228489, -0.201850869))),TOLERANCE)
+    expect_lt(sum(abs(tail(pred$random_effect_cov, n=4)-c(0.2219624, 0.3440523, 0.3523278, 0.3414581))),TOLERANCE)
+    expect_lt(sum(abs(tail(pred$fixed_effect, n=4)-c(0.4909556,0.1634722, -0.9726520, 0.3289525))),TOLERANCE)
     
     # Use validation set to determine number of boosting iteration
     dtest <- gpb.Dataset.create.valid(dtrain, data = X_test, label = y_test)

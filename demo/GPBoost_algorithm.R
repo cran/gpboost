@@ -35,10 +35,10 @@ Xtest <- cbind(x_test,rep(0,length(x_test)))
 #--------------------Training----------------
 # Create random effects model
 gp_model <- GPModel(group_data = group)
-# The default optimizer for covariance parameters is Fisher scoring.
-# This can be changed to e.g. Nesterov accelerated gradient descent as follows:
-# re_params <- list(trace=TRUE,optimizer_cov="gradient_descent",
-#                   lr_cov = 0.05, use_nesterov_acc = TRUE)
+# The default optimizer for covariance parameters (hyperparameters) is 
+# Nesterov-accelerated gradient descent.
+# This can be changed to, e.g., Nelder-Mead as follows:
+# re_params <- list(trace=TRUE, optimizer_cov="nelder_mead")
 # gp_model$set_optim_params(params=re_params)
 
 # Train boosting with random effects model
@@ -70,6 +70,12 @@ summary(gp_model)
 
 #--------------------Prediction--------------
 pred <- predict(bst, data = Xtest, group_data_pred = group_test)
+# pred$fixed_effect contains the predictions for the fixed effects / tree ensemble
+# pred$random_effect_mean contains the mean predictions for the latent random effects
+# pred$random_effect_cov contains the predictive (co-)variances (if predict_var=True) of the random effects
+# To obtain a unique prediction which combines fixed and random effects,
+#   sum the two components up: pred_combined = pred$fixed_effect + pred$random_effect_mean
+
 # Compare fit to truth: random effects
 pred_random_effect <- pred$random_effect_mean
 plot(b1, pred_random_effect, xlab="truth", ylab="predicted",
@@ -282,11 +288,12 @@ y <- y + eps + xi # add random effects and error to data
 
 # Create Gaussian process model
 gp_model <- GPModel(gp_coords = coords, cov_function = "exponential")
-# The default optimizer for covariance parameters is Fisher scoring.
-# This can be changed to e.g. Nesterov accelerated gradient descent as follows:
-# re_params <- list(optimizer_cov = "gradient_descent", lr_cov = 0.05,
-#                   use_nesterov_acc = TRUE, acc_rate_cov = 0.5)
+# The default optimizer for covariance parameters (hyperparameters) is 
+# Nesterov-accelerated gradient descent.
+# This can be changed to, e.g., Nelder-Mead as follows:
+# re_params <- list(trace=TRUE, optimizer_cov="nelder_mead")
 # gp_model$set_optim_params(params=re_params)
+
 # Train model
 print("Train boosting with Gaussian process model")
 bst <- gpboost(data = X,
