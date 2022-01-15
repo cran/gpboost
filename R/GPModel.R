@@ -7,18 +7,23 @@
 #' @description Parameter docs shared by \code{GPModel}, \code{gpb.cv}, and \code{gpboost}
 #' @param likelihood A \code{string} specifying the likelihood function (distribution) of the response variable
 #' Default = "gaussian"
-#' @param group_data A \code{vector} or \code{matrix} with labels of group levels for grouped random effects
-#' @param group_rand_coef_data A \code{vector} or \code{matrix} with covariate data for grouped random coefficients
-#' @param ind_effect_group_rand_coef A \code{vector} with indices that indicate the corresponding random effects 
-#' (=columns) in 'group_data' for every covariate in 'group_rand_coef_data'.
+#' @param group_data A \code{vector} or \code{matrix} with elements being group levels for defining 
+#' grouped random effects. I.e., this is either a \code{vector} consisting of a 
+#' categorical variable or a \code{matrix} whose columns are categorical variables.
+#' The elements of 'group_data' can be integer, double, or character.
+#' @param group_rand_coef_data A \code{vector} or \code{matrix} with numeric covariate data 
+#' for grouped random coefficients
+#' @param ind_effect_group_rand_coef A \code{vector} with integer indices that 
+#' indicate the corresponding random effects (=columns) in 'group_data' for 
+#' every covariate in 'group_rand_coef_data'. Counting starts at 1.
+#' The length of this index vector must equal the number of covariates in 'group_rand_coef_data'.
 #' For instance, c(1,1,2) means that the first two covariates (=first two columns) in 'group_rand_coef_data'
 #' have random coefficients corresponding to the first random effect (=first column) in 'group_data',
 #' and the third covariate (=third column) in 'group_rand_coef_data' has a random coefficient
 #' corresponding to the second random  effect (=second column) in 'group_data'.
-#' The length of this index vector must equal the number of covariates in 'group_rand_coef_data'.
-#' Counting starts at 1.
-#' @param gp_coords A \code{matrix} with coordinates (features) for Gaussian process
-#' @param gp_rand_coef_data A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients
+#' @param gp_coords A \code{matrix} with numeric coordinates (=features) for defining Gaussian processes
+#' @param gp_rand_coef_data A \code{vector} or \code{matrix} with numeric covariate data for  
+#' Gaussian process random coefficients
 #' @param cov_function A \code{string} specifying the covariance function for the Gaussian process. 
 #' The following covariance functions are available:
 #' "exponential", "gaussian", "matern", "powered_exponential", "wendland", and "exponential_tapered".
@@ -45,26 +50,33 @@
 #' for the latent process and observed data is ordered first and neighbors are selected among all points
 #' @param num_neighbors_pred an \code{integer} specifying the number of neighbors for the Vecchia approximation 
 #' for making predictions
-#' @param cluster_ids A \code{vector} with IDs / labels indicating independent realizations of 
-#' random effects / Gaussian processes (same values = same process realization)
+#' @param cluster_ids A \code{vector} with elements indicating independent realizations of 
+#' random effects / Gaussian processes (same values = same process realization).
+#' The elements of 'cluster_ids' can be integer, double, or character.
 #' @param free_raw_data A \code{boolean}. If TRUE, the data (groups, coordinates, covariate data for random coefficients) 
 #' is freed in R after initialization
 #' @param y A \code{vector} with response variable data
-#' @param X A \code{matrix} with covariate data for fixed effects ( = linear regression term)
+#' @param X A \code{matrix} with numeric covariate data for the 
+#' fixed effects linear regression term (if there is one)
 #' @param params A \code{list} with parameters for the model fitting / optimization
 #'             \itemize{
 #'                \item{optimizer_cov}{ Optimizer used for estimating covariance parameters. 
-#'                Options: "gradient_descent", "fisher_scoring", and "nelder_mead".
+#'                Options: "gradient_descent", "fisher_scoring", "nelder_mead", and "bfgs".
 #'                Default= gradient_descent"}
 #'                \item{optimizer_coef}{ Optimizer used for estimating linear regression coefficients, if there are any 
 #'                (for the GPBoost algorithm there are usually none). 
-#'                Options: "gradient_descent", "wls", and "nelder_mead". Gradient descent steps are done simultaneously 
+#'                Options: "gradient_descent", "wls", "nelder_mead", and "bfgs". Gradient descent steps are done simultaneously 
 #'                with gradient descent steps for the covariance parameters. 
 #'                "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
-#'                Default="wls" for Gaussian data and "gradient_descent" for other likelihoods}
+#'                Default="wls" for Gaussian data and "gradient_descent" for other likelihoods.
+#'                If 'optimizer_cov' is set to "nelder_mead" or "bfgs", 'optimizer_coef' is automatically also set to the same value.}
 #'                \item{maxit}{ Maximal number of iterations for optimization algorithm. Default=1000}
-#'                \item{delta_rel_conv}{ Convergence criterion: stop optimization if relative change 
-#'                in parameters is below this value. Default=1E-6}
+#'                \item{delta_rel_conv}{ Convergence tolerance. The algorithm stops if the relative change 
+#'                in eiher the log-likelihood or the parameters is below this value. 
+#'                For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
+#'                Default=1E-6}
+#'                \item{convergence_criterion}{ The convergence criterion used for terminating the optimization algorithm.
+#'                Options: "relative_change_in_log_likelihood" (default) or "relative_change_in_parameters"}
 #'                \item{init_coef}{ Initial values for the regression coefficients (if there are any, can be NULL).
 #'                Default=NULL}
 #'                \item{init_cov_pars}{ Initial values for covariance parameters of Gaussian process and 
@@ -83,18 +95,26 @@
 #'                Default=2}
 #'                \item{trace}{ If TRUE, information on the progress of the parameter
 #'                optimization is printed. Default=FALSE}
-#'                \item{convergence_criterion}{ The convergence criterion used for terminating the optimization algorithm.
-#'                Options: "relative_change_in_log_likelihood" (default) or "relative_change_in_parameters"}
 #'                \item{std_dev}{ If TRUE, (asymptotic) standard deviations are calculated for the covariance parameters}
 #'            }
 #' @param fixed_effects A \code{vector} of optional external fixed effects which are held fixed during training. 
-#' @param group_data_pred A \code{vector} or \code{matrix} with labels of group levels for which predictions are made (if there are grouped random effects in the \code{GPModel})
-#' @param group_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for grouped random coefficients (if there are some in the \code{GPModel})
-#' @param gp_coords_pred A \code{matrix} with prediction coordinates (features) for Gaussian process (if there is a GP in the \code{GPModel})
-#' @param gp_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients (if there are some in the \code{GPModel})
-#' @param cluster_ids_pred A \code{vector} with IDs / labels indicating the realizations of random effects / Gaussian processes for which predictions are made (set to NULL if you have not specified this when creating the \code{GPModel})
-#' @param predict_cov_mat A \code{boolean}. If TRUE, the (posterior / conditional) predictive covariance is calculated in addition to the (posterior / conditional) predictive mean
-#' @param predict_var A \code{boolean}. If TRUE, the (posterior / conditional) predictive variances are calculated
+#' @param group_data_pred A \code{vector} or \code{matrix} with elements being group levels 
+#' for which predictions are made (if there are grouped random effects in the \code{GPModel})
+#' @param group_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data 
+#' for grouped random coefficients (if there are some in the \code{GPModel})
+#' @param gp_coords_pred A \code{matrix} with prediction coordinates (=features) for 
+#' Gaussian process (if there is a GP in the \code{GPModel})
+#' @param gp_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for 
+#' Gaussian process random coefficients (if there are some in the \code{GPModel})
+#' @param cluster_ids_pred A \code{vector} with elements indicating the realizations of 
+#' random effects / Gaussian processes for which predictions are made 
+#' (set to NULL if you have not specified this when creating the \code{GPModel})
+#' @param X_pred A \code{matrix} with prediction covariate data for the 
+#' fixed effects linear regression term (if there is one in the \code{GPModel})
+#' @param predict_cov_mat A \code{boolean}. If TRUE, the (posterior / conditional) 
+#' predictive covariance is calculated in addition to the (posterior / conditional) predictive mean
+#' @param predict_var A \code{boolean}. If TRUE, the (posterior / conditional) 
+#' predictive variances are calculated
 
 
 NULL
@@ -237,7 +257,7 @@ gpb.GPModel <- R6::R6Class(
         group_data_unique <- unique(group_data)
         group_data_unique_c_str <- lapply(group_data_unique,gpb.c_str)
         group_data_c_str <- unlist(group_data_unique_c_str[match(group_data,group_data_unique)])
-        # Version 2: slower than above
+        # Version 2: slower than above (not used)
         # group_data_c_str <- unlist(lapply(group_data,gpb.c_str))
         # group_data_c_str <- c()# Version 3: much slower
         # for (i in 1:length(group_data)) {
@@ -379,8 +399,17 @@ gpb.GPModel <- R6::R6Class(
           private$cluster_ids = cluster_ids
           # Convert cluster_ids to int and save conversion map
           if (storage.mode(cluster_ids) != "integer") {
-            private$cluster_ids_map_to_int <- structure(1:length(unique(cluster_ids)),names=c(unique(cluster_ids)))
-            cluster_ids = private$cluster_ids_map_to_int[cluster_ids]
+            create_map <- TRUE
+            if (storage.mode(cluster_ids) == "double") {
+              if (all(cluster_ids == floor(cluster_ids))) {
+                create_map <- FALSE
+                cluster_ids <- as.integer(cluster_ids)
+              }
+            }
+            if (create_map) {
+              private$cluster_ids_map_to_int <- structure(1:length(unique(cluster_ids)),names=c(unique(cluster_ids)))
+              cluster_ids = private$cluster_ids_map_to_int[cluster_ids] 
+            }
           }
         } else {
           stop("GPModel: Can only use ", sQuote("vector"), " as ", sQuote("cluster_ids"))
@@ -437,7 +466,6 @@ gpb.GPModel <- R6::R6Class(
       }
       if (!is.null(modelfile)){
         self$set_optim_params(params = model_list[["params"]])
-        self$set_optim_coef_params(params = model_list[["params"]])
       }
     }, # End initialize
     
@@ -513,7 +541,6 @@ gpb.GPModel <- R6::R6Class(
           private$coef_names <- c(private$coef_names,colnames(X))
         }
         X <- as.vector(matrix(X))#matrix() is needed in order that all values are contiguous in memory (when colnames is not NULL)
-        self$set_optim_coef_params(params)
       } else {
         private$has_covariates <- FALSE
       }
@@ -859,7 +886,16 @@ gpb.GPModel <- R6::R6Class(
       if (!is.null(cluster_ids_pred)) {
         if (is.vector(cluster_ids_pred)) {
           if (is.null(private$cluster_ids_map_to_int) & storage.mode(cluster_ids_pred) != "integer") {
-            stop("predict.GPModel: cluster_ids_pred needs to be of type int as the data provided in cluster_ids when initializing the model was also int (or cluster_ids was not provided)")
+            error_message <- TRUE
+            if (storage.mode(cluster_ids_pred) == "double") {
+              if (all(cluster_ids_pred == floor(cluster_ids_pred))) {
+                error_message <- FALSE
+                cluster_ids_pred <- as.integer(cluster_ids_pred)
+              }
+            }
+            if (error_message) {
+              stop("predict.GPModel: cluster_ids_pred needs to be of type int as the data provided in cluster_ids when initializing the model was also int (or cluster_ids was not provided)")
+            }
           }
           if (!is.null(private$cluster_ids_map_to_int)) {
             cluster_ids_pred_map_to_int <- structure(1:length(unique(cluster_ids_pred)),names=c(unique(cluster_ids_pred)))
@@ -1094,7 +1130,16 @@ gpb.GPModel <- R6::R6Class(
         if (!is.null(cluster_ids_pred)) {
           if (is.vector(cluster_ids_pred)) {
             if (is.null(private$cluster_ids_map_to_int) & storage.mode(cluster_ids_pred) != "integer") {
-              stop("predict.GPModel: cluster_ids_pred needs to be of type int as the data provided in cluster_ids when initializing the model was also int (or cluster_ids was not provided)")
+              error_message <- TRUE
+              if (storage.mode(cluster_ids_pred) == "double") {
+                if (all(cluster_ids_pred == floor(cluster_ids_pred))) {
+                  error_message <- FALSE
+                  cluster_ids_pred <- as.integer(cluster_ids_pred)
+                }
+              }
+              if (error_message) {
+                stop("predict.GPModel: cluster_ids_pred needs to be of type int as the data provided in cluster_ids when initializing the model was also int (or cluster_ids was not provided)")
+              }
             }
             if (!is.null(private$cluster_ids_map_to_int)) {
               cluster_ids_pred_map_to_int <- structure(1:length(unique(cluster_ids_pred)),names=c(unique(cluster_ids_pred)))
@@ -1859,7 +1904,6 @@ summary.GPModel <- function(object, ...){
 #' @param object a \code{GPModel}
 #' @param y Observed data (can be NULL, e.g. when the model has been estimated already and the same data is used for making predictions)#' @param cov_pars A \code{vector} containing covariance parameters (used if the \code{GPModel} has not been trained or if predictions should be made for other parameters than the estimated ones)
 #' @param cov_pars A \code{vector} containing covariance parameters (used if the \code{GPModel} has not been trained or if predictions should be made for other parameters than the trained ones
-#' @param X_pred A \code{matrix} with covariate data for the linear regression term (if there is one in the \code{GPModel})
 #' @param use_saved_data A \code{boolean}. If TRUE, predictions are done using a priory set data via the function '$set_prediction_data'  (this option is not used by users directly)
 #' @param predict_response A \code{boolean}. If TRUE, the response variable (label) is predicted, otherwise the latent random effects (this is only relevant for non-Gaussian data)
 #' @param ... (not used, ignore this, simply here that there is no CRAN warning)
@@ -2028,12 +2072,7 @@ loadGPModel <- function(filename){
 #' Generic 'set_prediction_data' method for a \code{GPModel}
 #' 
 #' @param gp_model A \code{GPModel}
-#' @param group_data_pred A \code{vector} or \code{matrix} with labels of group levels for which predictions are made (if there are grouped random effects in the \code{GPModel})
-#' @param group_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for grouped random coefficients (if there are some in the \code{GPModel})
-#' @param gp_coords_pred A \code{matrix} with prediction coordinates (features) for Gaussian process (if there is a GP in the \code{GPModel})
-#' @param gp_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients (if there are some in the \code{GPModel})
-#' @param cluster_ids_pred A \code{vector} with IDs / labels indicating the realizations of random effects / Gaussian processes for which predictions are made (set to NULL if you have not specified this when creating the \code{GPModel})
-#' @param X_pred A \code{matrix} with covariate data for the linear regression term (if there is one in the \code{GPModel})
+#' @inheritParams GPModel_shared_params
 #'
 #' @examples
 #' \donttest{
@@ -2061,12 +2100,7 @@ set_prediction_data <- function(gp_model,
 #' Set the data required for making predictions with a \code{GPModel} 
 #' 
 #' @param gp_model A \code{GPModel}
-#' @param group_data_pred A \code{vector} or \code{matrix} with labels of group levels for which predictions are made (if there are grouped random effects in the \code{GPModel})
-#' @param group_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for grouped random coefficients (if there are some in the \code{GPModel})
-#' @param gp_coords_pred A \code{matrix} with prediction coordinates (features) for Gaussian process (if there is a GP in the \code{GPModel})
-#' @param gp_rand_coef_data_pred A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients (if there are some in the \code{GPModel})
-#' @param cluster_ids_pred A \code{vector} with IDs / labels indicating the realizations of random effects / Gaussian processes for which predictions are made (set to NULL if you have not specified this when creating the \code{GPModel})
-#' @param X_pred A \code{matrix} with covariate data for the linear regression term (if there is one in the \code{GPModel})
+#' @inheritParams GPModel_shared_params
 #'
 #' @return A \code{GPModel}
 #'

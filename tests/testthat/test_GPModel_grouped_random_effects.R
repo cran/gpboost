@@ -183,18 +183,70 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     gp_model <- fitGPModel(group_data = group,
                            y = y, X = X,
                            params = list(optimizer_cov = "nelder_mead",
-                                         optimizer_coef = "gradient_descent", lr_coef=0.1, std_dev = TRUE))
-    cov_pars <- c(0.49175276, 0.02318145, 1.22767304, 0.18058850)
-    coef <- c(2.07357920, 0.11300277, 1.94743042, 0.03381487)
+                                         optimizer_coef = "nelder_mead", std_dev = TRUE))
+    cov_pars <- c(0.47524382, 0.02240321, 2.38806490, 0.34445163)
+    coef <- c(1.45083178, 0.15606729, 1.95360294, 0.03327804)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),1E-6)
     expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),1E-6)
-    expect_equal(gp_model$get_num_optim_iter(), 171)
+    expect_equal(gp_model$get_num_optim_iter(), 133)
+    
+    # Fit model using BFGS
+    gp_model <- fitGPModel(group_data = group,
+                           y = y, X = X,
+                           params = list(optimizer_cov = "bfgs", std_dev = TRUE))
+    cov_pars <- c(0.49205229, 0.02319557, 1.22064060, 0.17959830)
+    coef <- c(2.07499895, 0.11269251, 1.94766254, 0.03382472)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),1E-6)
+    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),1E-6)
+    expect_equal(gp_model$get_num_optim_iter(), 12)
   })
   
-  
-  # Ignore [GPBoost] [Warning]
-  test_that("two crossed random effects and a random slope ", {
+
+  test_that("Multiple grouped random effects ", {
     
+    ## Two crossed random effects
+    y <- Z1%*%b1 + Z2%*%b2 + xi
+    # Fisher scoring
+    gp_model <- fitGPModel(group_data = cbind(group,group2), y = y, 
+                           params = list(optimizer_cov = "fisher_scoring", std_dev = TRUE))
+    expected_values <- c(0.49792062, 0.02408196, 1.21972166, 0.18357646, 1.06962710, 0.22567292)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-expected_values)),1E-6)
+    expect_equal(gp_model$get_num_optim_iter(), 5)
+    
+    # Prediction after training
+    group_data_pred = cbind(c(1,1,m+1),c(2,1,length(group2)+1))
+    pred <- gp_model$predict(y = y, group_data_pred=group_data_pred, predict_var = TRUE)
+    expected_mu <- c(0.7509175, -0.4208015, 0.0000000)
+    expected_var <- c(0.5677178, 0.5677178, 2.7872694)
+    expect_lt(sum(abs(pred$mu-expected_mu)),1E-6)
+    expect_lt(sum(abs(as.vector(pred$var)-expected_var)),1E-4)
+    # Prediction without training and parameters given
+    gp_model <- GPModel(group_data = cbind(group,group2))
+    pred <- gp_model$predict(y = y, group_data_pred=group_data_pred,
+                             cov_pars = c(0.1,1,2), predict_cov_mat = TRUE)
+    expected_mu <- c(0.7631462, -0.4328551, 0.000000000)
+    expected_cov <- c(0.114393721, 0.009406189, 0.0000000, 0.009406189,
+                      0.114393721 , 0.0000000, 0.0000000, 0.0000000, 3.100000000)
+    expect_lt(sum(abs(pred$mu-expected_mu)),1E-6)
+    expect_lt(sum(abs(as.vector(pred$cov)-expected_cov)),1E-3)
+    # Prediction for only existing random effects
+    group_data_pred_in = cbind(c(1,1),c(2,1))
+    pred <- gp_model$predict(y = y, group_data_pred=group_data_pred_in,
+                             cov_pars = c(0.1,1,2), predict_cov_mat = TRUE)
+    expected_mu <- c(0.7631462, -0.4328551)
+    expected_cov <- c(0.114393721, 0.009406189, 0.009406189, 0.114393721)
+    expect_lt(sum(abs(pred$mu-expected_mu)),1E-6)
+    expect_lt(sum(abs(as.vector(pred$cov)-expected_cov)),1E-3)
+    # Prediction for only new random effects
+    group_data_pred_out = cbind(c(m+1,m+1,m+1),c(length(group2)+1,length(group2)+2,length(group2)+1))
+    pred <- gp_model$predict(y = y, group_data_pred=group_data_pred_out,
+                             cov_pars = c(0.1,1,2), predict_cov_mat = TRUE)
+    expected_mu <- c(rep(0,3))
+    expected_cov <- c(3.1, 1.0, 3.0, 1.0, 3.1, 1.0, 3.0, 1.0, 3.1)
+    expect_lt(sum(abs(pred$mu-expected_mu)),1E-6)
+    expect_lt(sum(abs(as.vector(pred$cov)-expected_cov)),1E-3)
+    
+    ## Two crossed random effects and a random slope
     y <- Z1%*%b1 + Z2%*%b2 + Z3%*%b3 + xi
     # Fisher scoring
     gp_model <- fitGPModel(group_data = cbind(group,group2),
@@ -210,15 +262,15 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     gp_model <- GPModel(group_data = cbind(group,group2),
                         group_rand_coef_data = x, ind_effect_group_rand_coef = 1)
     group_data_pred = cbind(c(1,1,m+1),c(2,1,length(group2)+1))
-    group_rand_coef_data_pred = c(0,0.1,0.3)
+    group_rand_coef_data_pred = c(0,10,0.3)
     expect_error(gp_model$predict(group_data_pred = group_data_pred,
                                   cov_pars = c(0.1,1,2,1.5), y=y))# random slope data not provided
     pred <- gp_model$predict(y = y, group_data_pred=group_data_pred,
                              group_rand_coef_data_pred=group_rand_coef_data_pred,
                              cov_pars = c(0.1,1,2,1.5), predict_cov_mat = TRUE)
-    expected_mu <- c(0.7579961, -0.3755475, 0.000000000)
-    expected_cov <- c(0.115340856 , 0.009310105 , 0.0000000, 0.009310105 ,
-                      0.115340856 , 0.0000000, 0.0000000, 0.0000000, 3.235)
+    expected_mu <- c(0.7579961, -0.2868530, 0.000000000)
+    expected_cov <- c(0.11534086, -0.01988167, 0.0000000, -0.01988167, 2.4073302,
+                      0.0000000, 0.0000000, 0.0000000, 3.235)
     expect_lt(sum(abs(pred$mu-expected_mu)),1E-6)
     expect_lt(sum(abs(as.vector(pred$cov)-expected_cov)),1E-3)
     # Predict variances
@@ -245,6 +297,15 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                            y = y,
                            params = list(optimizer_cov = "nelder_mead", std_dev = FALSE))
     cov_pars <- c(0.4959521, 1.2408579, 1.0560989, 1.1373089 )
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),1E-6)
+    
+    # BFGS
+    gp_model <- fitGPModel(group_data = cbind(group,group2),
+                           group_rand_coef_data = x,
+                           ind_effect_group_rand_coef = 1,
+                           y = y,
+                           params = list(optimizer_cov = "bfgs", std_dev = FALSE))
+    cov_pars <- c(0.4955502, 1.2488000, 1.0550351, 1.1383709 )
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),1E-6)
     
     # Evaluate negative log-likelihood
@@ -305,6 +366,27 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                              cov_pars = c(0.75,1.25), predict_cov_mat = TRUE)
     expect_lt(sum(abs(pred$mu-expected_mu)),1E-6)
     expect_lt(sum(abs(as.vector(pred$cov)-expected_cov)),1E-6)
+    
+    # Prediction when cluster_ids are not in ascending order
+    group_data_pred = c(1,1,m,m)
+    cluster_ids_pred = c(2,2,1,2)
+    gp_model <- GPModel(group_data = group, cluster_ids = cluster_ids)
+    pred <- gp_model$predict(y = y, group_data_pred = group_data_pred,
+                             cluster_ids_pred = cluster_ids_pred,
+                             cov_pars = c(0.75,1.25), predict_var = TRUE)
+    expected_mu <- c(rep(0,3), 1.179557)
+    expected_var <- c(rep(2,3), 0.8207547)
+    expect_lt(sum(abs(pred$mu-expected_mu)),1E-6)
+    expect_lt(sum(abs(as.vector(pred$var)-expected_var)),1E-6)
+    # same thing when cluster_ids are strings
+    group_data_pred = c(1,1,m,m)
+    cluster_ids_pred_string = paste0(as.character(c(2,2,1,2)),"_s")
+    gp_model <- GPModel(group_data = group, cluster_ids = cluster_ids_string)
+    pred <- gp_model$predict(y = y, group_data_pred = group_data_pred,
+                             cluster_ids_pred = cluster_ids_pred_string,
+                             cov_pars = c(0.75,1.25), predict_var = TRUE)
+    expect_lt(sum(abs(pred$mu-expected_mu)),1E-6)
+    expect_lt(sum(abs(as.vector(pred$var)-expected_var)),1E-6)
 
     # cluster_ids and random coefficients
     y <- Z1%*%b1 + Z3%*%b3 + xi

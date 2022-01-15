@@ -15,22 +15,27 @@ fitGPModel(group_data = NULL, group_rand_coef_data = NULL,
   params = list())
 }
 \arguments{
-\item{group_data}{A \code{vector} or \code{matrix} with labels of group levels for grouped random effects}
+\item{group_data}{A \code{vector} or \code{matrix} with elements being group levels for defining 
+grouped random effects. I.e., this is either a \code{vector} consisting of a 
+categorical variable or a \code{matrix} whose columns are categorical variables.
+The elements of 'group_data' can be integer, double, or character.}
 
-\item{group_rand_coef_data}{A \code{vector} or \code{matrix} with covariate data for grouped random coefficients}
+\item{group_rand_coef_data}{A \code{vector} or \code{matrix} with numeric covariate data 
+for grouped random coefficients}
 
-\item{ind_effect_group_rand_coef}{A \code{vector} with indices that indicate the corresponding random effects 
-(=columns) in 'group_data' for every covariate in 'group_rand_coef_data'.
+\item{ind_effect_group_rand_coef}{A \code{vector} with integer indices that 
+indicate the corresponding random effects (=columns) in 'group_data' for 
+every covariate in 'group_rand_coef_data'. Counting starts at 1.
+The length of this index vector must equal the number of covariates in 'group_rand_coef_data'.
 For instance, c(1,1,2) means that the first two covariates (=first two columns) in 'group_rand_coef_data'
 have random coefficients corresponding to the first random effect (=first column) in 'group_data',
 and the third covariate (=third column) in 'group_rand_coef_data' has a random coefficient
-corresponding to the second random  effect (=second column) in 'group_data'.
-The length of this index vector must equal the number of covariates in 'group_rand_coef_data'.
-Counting starts at 1.}
+corresponding to the second random  effect (=second column) in 'group_data'.}
 
-\item{gp_coords}{A \code{matrix} with coordinates (features) for Gaussian process}
+\item{gp_coords}{A \code{matrix} with numeric coordinates (=features) for defining Gaussian processes}
 
-\item{gp_rand_coef_data}{A \code{vector} or \code{matrix} with covariate data for Gaussian process random coefficients}
+\item{gp_rand_coef_data}{A \code{vector} or \code{matrix} with numeric covariate data for
+Gaussian process random coefficients}
 
 \item{cov_function}{A \code{string} specifying the covariance function for the Gaussian process. 
 The following covariance functions are available:
@@ -66,8 +71,9 @@ for the latent process and observed data is ordered first and neighbors are sele
 \item{num_neighbors_pred}{an \code{integer} specifying the number of neighbors for the Vecchia approximation 
 for making predictions}
 
-\item{cluster_ids}{A \code{vector} with IDs / labels indicating independent realizations of 
-random effects / Gaussian processes (same values = same process realization)}
+\item{cluster_ids}{A \code{vector} with elements indicating independent realizations of 
+random effects / Gaussian processes (same values = same process realization).
+The elements of 'cluster_ids' can be integer, double, or character.}
 
 \item{free_raw_data}{A \code{boolean}. If TRUE, the data (groups, coordinates, covariate data for random coefficients) 
 is freed in R after initialization}
@@ -77,22 +83,28 @@ Default = "gaussian"}
 
 \item{y}{A \code{vector} with response variable data}
 
-\item{X}{A \code{matrix} with covariate data for fixed effects ( = linear regression term)}
+\item{X}{A \code{matrix} with numeric covariate data for the 
+fixed effects linear regression term (if there is one)}
 
 \item{params}{A \code{list} with parameters for the model fitting / optimization
  \itemize{
     \item{optimizer_cov}{ Optimizer used for estimating covariance parameters. 
-    Options: "gradient_descent", "fisher_scoring", and "nelder_mead".
+    Options: "gradient_descent", "fisher_scoring", "nelder_mead", and "bfgs".
     Default= gradient_descent"}
     \item{optimizer_coef}{ Optimizer used for estimating linear regression coefficients, if there are any 
     (for the GPBoost algorithm there are usually none). 
-    Options: "gradient_descent", "wls", and "nelder_mead". Gradient descent steps are done simultaneously 
+    Options: "gradient_descent", "wls", "nelder_mead", and "bfgs". Gradient descent steps are done simultaneously 
     with gradient descent steps for the covariance parameters. 
     "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
-    Default="wls" for Gaussian data and "gradient_descent" for other likelihoods}
+    Default="wls" for Gaussian data and "gradient_descent" for other likelihoods.
+    If 'optimizer_cov' is set to "nelder_mead" or "bfgs", 'optimizer_coef' is automatically also set to the same value.}
     \item{maxit}{ Maximal number of iterations for optimization algorithm. Default=1000}
-    \item{delta_rel_conv}{ Convergence criterion: stop optimization if relative change 
-    in parameters is below this value. Default=1E-6}
+    \item{delta_rel_conv}{ Convergence tolerance. The algorithm stops if the relative change 
+    in eiher the log-likelihood or the parameters is below this value. 
+    For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
+    Default=1E-6}
+    \item{convergence_criterion}{ The convergence criterion used for terminating the optimization algorithm.
+    Options: "relative_change_in_log_likelihood" (default) or "relative_change_in_parameters"}
     \item{init_coef}{ Initial values for the regression coefficients (if there are any, can be NULL).
     Default=NULL}
     \item{init_cov_pars}{ Initial values for covariance parameters of Gaussian process and 
@@ -111,8 +123,6 @@ Default = "gaussian"}
     Default=2}
     \item{trace}{ If TRUE, information on the progress of the parameter
     optimization is printed. Default=FALSE}
-    \item{convergence_criterion}{ The convergence criterion used for terminating the optimization algorithm.
-    Options: "relative_change_in_log_likelihood" (default) or "relative_change_in_parameters"}
     \item{std_dev}{ If TRUE, (asymptotic) standard deviations are calculated for the covariance parameters}
 }}
 }
