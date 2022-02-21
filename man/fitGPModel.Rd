@@ -100,7 +100,7 @@ fixed effects linear regression term (if there is one)}
     If 'optimizer_cov' is set to "nelder_mead" or "bfgs", 'optimizer_coef' is automatically also set to the same value.}
     \item{maxit}{ Maximal number of iterations for optimization algorithm. Default=1000}
     \item{delta_rel_conv}{ Convergence tolerance. The algorithm stops if the relative change 
-    in eiher the log-likelihood or the parameters is below this value. 
+    in eiher the (approximate) log-likelihood or the parameters is below this value. 
     For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
     Default=1E-6}
     \item{convergence_criterion}{ The convergence criterion used for terminating the optimization algorithm.
@@ -110,7 +110,7 @@ fixed effects linear regression term (if there is one)}
     \item{init_cov_pars}{ Initial values for covariance parameters of Gaussian process and 
     random effects (can be NULL). Default=NULL}
     \item{lr_coef}{ Learning rate for fixed effect regression coefficients if gradient descent is used.
-    Default=1}
+    Default=0.1}
     \item{lr_cov}{ Learning rate for covariance parameters. If <= 0, internal default values are used.
     Default value = 0.1 for "gradient_descent" and 1. for "fisher_scoring"}
     \item{use_nesterov_acc}{ If TRUE Nesterov acceleration is used.

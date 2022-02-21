@@ -2841,7 +2841,7 @@ int GPB_PredictREModel(REModelHandle handle,
 	const int32_t* cluster_ids_data_pred,
 	const char* re_group_data_pred,
 	const double* re_group_rand_coef_data_pred,
-	double* gp_coords_pred,
+	double* gp_coords_data_pred,
 	const double* gp_rand_coef_data_pred,
 	const double* cov_pars,
 	const double* covariate_data_pred,
@@ -2855,7 +2855,7 @@ int GPB_PredictREModel(REModelHandle handle,
 	ref_remodel->Predict(y_data, num_data_pred, out_predict,
 		predict_cov_mat, predict_var, predict_response,
 		cluster_ids_data_pred, re_group_data_pred, re_group_rand_coef_data_pred,
-		gp_coords_pred, gp_rand_coef_data_pred,
+		gp_coords_data_pred, gp_rand_coef_data_pred,
 		cov_pars, covariate_data_pred,
 		use_saved_data, vecchia_pred_type, num_neighbors_pred,
 		fixed_effects, fixed_effects_pred,
@@ -2865,33 +2865,33 @@ int GPB_PredictREModel(REModelHandle handle,
 
 int GPB_GetLikelihoodName(REModelHandle handle,
 	char* out_str,
-	int& num_char) {
+	int* num_char) {
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	std::string name = ref_remodel->GetLikelihood();
-	num_char = (int)name.size() + 1;
+	*num_char = (int)name.size() + 1;
 	std::memcpy(out_str, name.c_str(), name.size() + 1);
 	API_END();
 }
 
 int GPB_GetOptimizerCovPars(REModelHandle handle,
 	char* out_str,
-	int& num_char) {
+	int* num_char) {
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	std::string name = ref_remodel->GetOptimizerCovPars();
-	num_char = (int)name.size() + 1;
+	*num_char = (int)name.size() + 1;
 	std::memcpy(out_str, name.c_str(), name.size() + 1);
 	API_END();
 }
 
 int GPB_GetOptimizerCoef(REModelHandle handle,
 	char* out_str,
-	int& num_char) {
+	int* num_char) {
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	std::string name = ref_remodel->GetOptimizerCoef();
-	num_char = (int)name.size() + 1;
+	*num_char = (int)name.size() + 1;
 	std::memcpy(out_str, name.c_str(), name.size() + 1);
 	API_END();
 }

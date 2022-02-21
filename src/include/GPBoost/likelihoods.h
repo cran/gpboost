@@ -15,6 +15,7 @@
 #include <GPBoost/type_defs.h>
 #include <GPBoost/sparse_matrix_utils.h>
 #include <GPBoost/DF_utils.h>
+#include <GPBoost/utils.h>
 
 #include <string>
 #include <set>
@@ -149,7 +150,7 @@ namespace GPBoost {
 			if (likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "bernoulli_logit") {
 				//#pragma omp parallel for schedule(static)//problematic with error message below... 
 				for (data_size_t i = 0; i < num_data; ++i) {
-					if (fabs(y_data[i]) >= EPSILON_ && !AreSame<T>(y_data[i], 1.)) {
+					if (fabs(y_data[i]) >= EPSILON_NUMBERS && !TwoNumbersAreEqual<T>(y_data[i], 1.)) {
 						Log::REFatal("Response variable (label) data needs to be 0 or 1 for likelihood of type '%s'.", likelihood_type_.c_str());
 					}
 				}
@@ -174,6 +175,49 @@ namespace GPBoost {
 					}
 				}
 			}
+			else {
+				Log::REFatal("CheckY: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
+			}
+		}
+
+		/*!
+		* \brief Determine initial value for intercept (=constant)
+		* \param y_data Response variable data
+		* \param num_data Number of data points
+		*/
+		double FindInitialIntercept(const double* y_data, const data_size_t num_data) const {
+			double init_intercept = 0.;
+			if (likelihood_type_ == "gaussian") {
+#pragma omp parallel for schedule(static) reduction(+:init_intercept)
+				for (data_size_t i = 0; i < num_data; ++i) {
+					init_intercept += y_data[i];
+				}
+				init_intercept /= num_data;
+			}
+			else if (likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "bernoulli_logit") {
+				double pavg = 0.;
+#pragma omp parallel for schedule(static) reduction(+:pavg)
+				for (data_size_t i = 0; i < num_data; ++i) {
+					pavg += bool(y_data[i] > 0);
+				}
+				pavg /= num_data;
+				pavg = std::min(pavg, 1.0 - 1e-15);
+				pavg = std::max<double>(pavg, 1e-15);
+				init_intercept = std::log(pavg / (1.0 - pavg));
+			}
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma") {
+				double avg = 0.;
+#pragma omp parallel for schedule(static) reduction(+:avg)
+				for (data_size_t i = 0; i < num_data; ++i) {
+					avg += y_data[i];
+				}
+				avg /= num_data;
+				init_intercept = SafeLog(avg);
+			}
+			else {
+				Log::REFatal("FindInitialIntercept: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
+			}
+			return(init_intercept);
 		}
 
 		/*!
@@ -205,7 +249,13 @@ namespace GPBoost {
 				//					log_normalizing_constant += -(aux_pars_[0] - 1.) * std::log(y_data[i]) - aux_pars_[0] * std::log(aux_pars_[0]) + std::tgamma(aux_pars_[0]);
 				//				}
 				//				log_normalizing_constant_ = log_normalizing_constant;
-				log_normalizing_constant_ = 0. * y_data[0];//y_data[0] is just a trick to avoid compiler warnings complaning about unreferenced parameters...
+				log_normalizing_constant_ = 0. * y_data[0];//y_data[0] is just a trick to avoid compiler warnings complaining about unreferenced parameters...
+			}
+			else if (likelihood_type_ == "gaussian" | likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "bernoulli_logit") {
+				log_normalizing_constant_ = 0. * y_data[0];//y_data[0] is just a trick to avoid compiler warnings complaining about unreferenced parameters...
+			}
+			else {
+				Log::REFatal("CalculateNormalizingConstant: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
 			}
 			normalizing_constant_has_been_calculated_ = true;
 		}
@@ -261,6 +311,9 @@ namespace GPBoost {
 				}
 				ll -= log_normalizing_constant_;
 			}
+			else {
+				Log::REFatal("LogLikelihood: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
+			}
 			return(ll);
 		}
 
@@ -301,6 +354,9 @@ namespace GPBoost {
 				for (data_size_t i = 0; i < num_data; ++i) {
 					first_deriv_ll_[i] = aux_pars_[0] * (y_data[i] * std::exp(-location_par[i]) - 1.);
 				}
+			}
+			else {
+				Log::REFatal("CalcFirstDerivLogLik: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
 			}
 		}
 
@@ -346,6 +402,9 @@ namespace GPBoost {
 				for (data_size_t i = 0; i < num_data; ++i) {
 					second_deriv_neg_ll_[i] = aux_pars_[0] * y_data[i] * std::exp(-location_par[i]);
 				}
+			}
+			else {
+				Log::REFatal("CalcSecondDerivNegLogLik: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
 			}
 		}
 
@@ -394,6 +453,9 @@ namespace GPBoost {
 				for (data_size_t i = 0; i < num_data; ++i) {
 					third_deriv[i] = aux_pars_[0] * y_data[i] * std::exp(-location_par[i]);
 				}
+			}
+			else {
+				Log::REFatal("CalcThirdDerivLogLik: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
 			}
 		}
 
@@ -582,6 +644,7 @@ namespace GPBoost {
 					Log::REDebug(NA_OR_INF_WARNING_);
 					break;
 				}
+				// Check convergence
 				if (it == 0) {
 					if (std::abs(approx_marginal_ll_new - approx_marginal_ll) < DELTA_REL_CONV_ * std::abs(approx_marginal_ll)) { // allow for decreases in first iteration
 						terminate_optim = true;
@@ -731,10 +794,6 @@ namespace GPBoost {
 				diag_sqrt_ZtWZ.array() = diag_sqrt_ZtWZ.array().sqrt();
 				Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt = Id + diag_sqrt_ZtWZ.asDiagonal() * (*Sigma) * diag_sqrt_ZtWZ.asDiagonal();
 				CalcChol<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_, Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt);//this is the bottleneck (for large data and sparse matrices)
-				////only for debugging
-				//Log::REInfo("FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale: Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt: number non zeros = %d", GetNumberNonZeros<T_mat>(Id_plus_ZtWZsqrt_Sigma_ZtWZsqrt));//only for debugging
-				//T_mat chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt = chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_.matrixL();//only for debugging
-				//Log::REInfo("FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale: chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt_: number non zeros = %d", GetNumberNonZeros<T_mat>(chol_fact_Id_plus_Wsqrt_Sigma_Wsqrt));//only for debugging
 				// Update mode and a_vec_
 				v_aux = (*Sigma) * rhs;
 				v_aux.array() *= diag_sqrt_ZtWZ.array();
@@ -761,7 +820,12 @@ namespace GPBoost {
 					Log::REDebug(NA_OR_INF_WARNING_);
 					break;
 				}
-				//Log::REInfo("it = %d, approx_marginal_ll = %g, approx_marginal_ll_new = %g", it, approx_marginal_ll, approx_marginal_ll_new);///Only for debugging
+				////Only for debugging
+				//Log::REInfo("it = %d, approx_marginal_ll = %g, approx_marginal_ll_new = %g", it, approx_marginal_ll, approx_marginal_ll_new);
+				//for (int i = 0; i < 10; ++i) {
+				//	Log::REInfo("mode_[%d]: %g", i, mode_[i]);
+				//}
+				// Check convergence
 				if (it == 0) {
 					if (std::abs(approx_marginal_ll_new - approx_marginal_ll) < DELTA_REL_CONV_ * std::abs(approx_marginal_ll)) { // allow for decreases in first iteration
 						terminate_optim = true;
@@ -896,6 +960,7 @@ namespace GPBoost {
 					Log::REDebug(NA_OR_INF_WARNING_);
 					break;
 				}
+				// Check convergence
 				if (it == 0) {
 					if (std::abs(approx_marginal_ll_new - approx_marginal_ll) < DELTA_REL_CONV_ * std::abs(approx_marginal_ll)) { // allow for decreases in first iteration
 						terminate_optim = true;
@@ -1044,10 +1109,16 @@ namespace GPBoost {
 				}
 				// Calculate new objective function
 				approx_marginal_ll_new = -0.5 / sigma2 * (mode_.dot(mode_)) + LogLikelihood(y_data, y_data_int, location_par.data(), num_data);
+				//// Only for debugging
+				//Log::REInfo("it = %d, approx_marginal_ll = %g, approx_marginal_ll_new = %g", it, approx_marginal_ll, approx_marginal_ll_new);
+				//for (int i = 0; i < 10; ++i) {
+				//	Log::REInfo("mode_[%d]: %g", i, mode_[i]);
+				//}
 				if (std::isnan(approx_marginal_ll_new) || std::isinf(approx_marginal_ll_new)) {
 					Log::REDebug(NA_OR_INF_WARNING_);
 					break;
 				}
+				// Check convergence
 				if (it == 0) {
 					if (std::abs(approx_marginal_ll_new - approx_marginal_ll) < DELTA_REL_CONV_ * std::abs(approx_marginal_ll)) { // allow for decreases in first iteration
 						terminate_optim = true;
@@ -1194,6 +1265,7 @@ namespace GPBoost {
 					Log::REDebug(NA_OR_INF_WARNING_);
 					break;
 				}
+				// Check convergence
 				if (it == 0) {
 					if (std::abs(approx_marginal_ll_new - approx_marginal_ll) < DELTA_REL_CONV_ * std::abs(approx_marginal_ll)) { // allow for decreases in first iteration
 						terminate_optim = true;
@@ -2422,11 +2494,6 @@ namespace GPBoost {
 			return mean_resp;
 		}
 
-		template <typename T>//T can be double or float
-		bool AreSame(const T a, const T b) const {
-			return fabs(a - b) < a * EPSILON_;
-		}
-
 	private:
 		/*! \brief Number of data points */
 		data_size_t num_data_;
@@ -2474,8 +2541,6 @@ namespace GPBoost {
 		string_t likelihood_type_ = "gaussian";
 		/*! \brief List of supported covariance likelihoods */
 		const std::set<string_t> SUPPORTED_LIKELIHOODS_{ "gaussian", "bernoulli_probit", "bernoulli_logit", "poisson", "gamma" };
-		/*! \brief Tolerance level when comparing two doubles for equality */
-		double EPSILON_ = 1e-6;
 		/*! \brief Maximal number of iteration done for finding posterior mode with Newton's method */
 		int MAXIT_MODE_NEWTON_ = 1000;
 		/*! \brief Used for cheking convergence in mode finding algorithm (terminate if relative change in Laplace approx. is below this value) */
@@ -2591,16 +2656,6 @@ namespace GPBoost {
 		const char* NA_OR_INF_WARNING_ = "Mode finding algorithm for Laplace approximation: NA or Inf occurred. This is not necessary a problem as it might have been the cause of a too large learning rate which, consequently, has been decreased by the algorithm";
 		const char* NO_INCREASE_IN_MLL_WARNING_ = "Mode finding algorithm for Laplace approximation: The approximate marginal log-likelihood (=convergence criterion) has decreased and the algorithm has thus been terminated.";
 		const char* NO_CONVERGENCE_WARNING_ = "Algorithm for finding mode for Laplace approximation has not converged after the maximal number of iterations";
-
-		/*! \brief Get number of non-zero entries in matrix */
-		template <class T_mat1, typename std::enable_if< std::is_same<sp_mat_t, T_mat1>::value>::type * = nullptr  >
-		int GetNumberNonZeros(T_mat1 M) {
-			return((int)M.nonZeros());
-		};
-		template <class T_mat1, typename std::enable_if< std::is_same<den_mat_t, T_mat1>::value>::type * = nullptr  >
-		int GetNumberNonZeros(T_mat1 M) {
-			return((int)M.cols() * M.rows());
-		};
 
 	};//end class Likelihood
 
