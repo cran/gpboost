@@ -1,7 +1,7 @@
-d0b9b42b1f5dbedb808436cde8068de3 *DESCRIPTION
+5057a1b7e6f365b941a940e8905d052b *DESCRIPTION
 62aa7e7a29985341875a00e6ac33d872 *LICENSE
 b39983897baef56b4a27691076f2b7ff *NAMESPACE
-024c317401ab3edcd8636f6556f16b0c *R/GPModel.R
+b0cccda5dfc49119ead17b976eb5a6de *R/GPModel.R
 29c9ddd8a8fa21ec45a20e4fceb12183 *R/aliases.R
 6519e1bf9d576806fc876a9d1d1fb07c *R/callback.R
 ad8d860059483f6e0687a830a755d9a4 *R/gpb.Booster.R
@@ -24,7 +24,7 @@ e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 90d6a440da0ac23394caf66fe9c63b85 *README.md
 6071edd604dbeb75308cfbedc7790398 *cleanup
 88dabd4c7d3f42283b20d035b85649e3 *configure
-80b978386dff2d4f8960398ca43f4df2 *configure.ac
+6278c126d9b54767e76dd28138d68724 *configure.ac
 f7903a18e3588e74fc12aba8a303ae5e *configure.win
 0276a7e04cef5f86e4146107bfb24e98 *data/GPBoost_data.RData
 05e29359ef24243df589703588987c0e *data/agaricus.test.rda
@@ -436,7 +436,7 @@ ac20697d89fc471900f7f0fcef82d4b6 *src/include/GPBoost/cov_fcts.h
 9aa7a806d8e23c1705091bfdaf5b9ddc *src/include/GPBoost/likelihoods.h
 acfd6c834920129a5a1e3fd4fcab57f2 *src/include/GPBoost/re_comp.h
 ab0b8df3635f92ad8958fdfbb70e7e4b *src/include/GPBoost/re_model.h
-9a6585172f80ee7d732f090dfe91df1f *src/include/GPBoost/re_model_template.h
+3e697e15ae9f922e47588e4333b638bc *src/include/GPBoost/re_model_template.h
 84ec9b6c4bbe6d7d8f3d423f06793568 *src/include/GPBoost/sparse_matrix_utils.h
 62bdb683b8e7f50c2ae1e7cb8ba3a74b *src/include/GPBoost/type_defs.h
 dc629d9fa6193ec7ecbe60cc4b4bfced *src/include/GPBoost/utils.h
