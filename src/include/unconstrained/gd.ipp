@@ -33,7 +33,7 @@ namespace internal
 inline
 Vec_t
 gd_update(const Vec_t& vals_inp,
-          const Vec_t& grad,
+          const Vec_t&, //ChangedForGPBoost
           const Vec_t& grad_p,
           const Vec_t& direc,
           std::function<double (const Vec_t& vals_inp, Vec_t* grad_out, void* opt_data)> box_objfn,
@@ -156,7 +156,9 @@ gd_update(const Vec_t& vals_inp,
 
         default:
         {
-            printf("gd error: unknown value for gd_settings.method");
+            //ChangedForGPBoost
+            //printf("gd error: unknown value for gd_settings.method");
+            Log::REFatal("gd error : unknown value for gd_settings.method");
             break;
         }
     }

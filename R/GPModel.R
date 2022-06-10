@@ -7,21 +7,25 @@
 #' @description Parameter docs shared by \code{GPModel}, \code{gpb.cv}, and \code{gpboost}
 #' @param likelihood A \code{string} specifying the likelihood function (distribution) of the response variable
 #' Default = "gaussian"
-#' @param group_data A \code{vector} or \code{matrix} with elements being group levels for defining 
-#' grouped random effects. I.e., this is either a \code{vector} consisting of a 
-#' categorical variable or a \code{matrix} whose columns are categorical variables.
+#' @param group_data A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
+#' The elements being group levels defining grouped random effects.
 #' The elements of 'group_data' can be integer, double, or character.
+#' The number of columns corresponds to the number of grouped (intercept) random effects
 #' @param group_rand_coef_data A \code{vector} or \code{matrix} with numeric covariate data 
 #' for grouped random coefficients
 #' @param ind_effect_group_rand_coef A \code{vector} with integer indices that 
-#' indicate the corresponding random effects (=columns) in 'group_data' for 
+#' indicate the corresponding categorical grouping variable (=columns) in 'group_data' for 
 #' every covariate in 'group_rand_coef_data'. Counting starts at 1.
 #' The length of this index vector must equal the number of covariates in 'group_rand_coef_data'.
 #' For instance, c(1,1,2) means that the first two covariates (=first two columns) in 'group_rand_coef_data'
-#' have random coefficients corresponding to the first random effect (=first column) in 'group_data',
+#' have random coefficients corresponding to the first categorical grouping variable (=first column) in 'group_data',
 #' and the third covariate (=third column) in 'group_rand_coef_data' has a random coefficient
-#' corresponding to the second random  effect (=second column) in 'group_data'.
-#' @param gp_coords A \code{matrix} with numeric coordinates (=features) for defining Gaussian processes
+#' corresponding to the second grouping variable (=second column) in 'group_data'
+#' @param drop_intercept_group_rand_effect A \code{vector} of type \code{logical} (boolean). 
+#' Indicates whether intercept random effects are dropped (only for random coefficients). 
+#' If drop_intercept_group_rand_effect[k] is TRUE, the intercept random effect number k is dropped / not included. 
+#' Only random effects with random slopes can be dropped.
+#' @param gp_coords A \code{matrix} with numeric coordinates (= inputs / features) for defining Gaussian processes
 #' @param gp_rand_coef_data A \code{vector} or \code{matrix} with numeric covariate data for  
 #' Gaussian process random coefficients
 #' @param cov_function A \code{string} specifying the covariance function for the Gaussian process. 
@@ -35,8 +39,9 @@
 #' @param cov_fct_shape A \code{numeric} specifying the shape parameter of the covariance function 
 #' (=smoothness parameter for Matern and Wendland covariance). For the Wendland covariance function, 
 #' we follow the notation of Bevilacqua et al. (2019)). 
-#' This parameter is irrelevant for some covariance functions such as the exponential or Gaussian.
-#' @param cov_fct_taper_range A \code{numeric} specifying the range parameter of the Wendland covariance function / taper. We follow the notation of Bevilacqua et al. (2019)
+#' This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+#' @param cov_fct_taper_range A \code{numeric} specifying the range parameter of the Wendland covariance function / taper. 
+#' We follow the notation of Bevilacqua et al. (2019)
 #' @param vecchia_approx A \code{boolean}. If TRUE, the Vecchia approximation is used 
 #' @param num_neighbors An \code{integer} specifying the number of neighbors for the Vecchia approximation
 #' @param vecchia_ordering A \code{string} specifying the ordering used in the Vecchia approximation. 
@@ -61,19 +66,19 @@
 #' @param params A \code{list} with parameters for the model fitting / optimization
 #'             \itemize{
 #'                \item{optimizer_cov}{ Optimizer used for estimating covariance parameters. 
-#'                Options: "gradient_descent", "fisher_scoring", "nelder_mead", and "bfgs".
+#'                Options: "gradient_descent", "fisher_scoring", "nelder_mead", "bfgs", "adam".
 #'                Default= gradient_descent"}
 #'                \item{optimizer_coef}{ Optimizer used for estimating linear regression coefficients, if there are any 
 #'                (for the GPBoost algorithm there are usually none). 
-#'                Options: "gradient_descent", "wls", "nelder_mead", and "bfgs". Gradient descent steps are done simultaneously 
+#'                Options: "gradient_descent", "wls", "nelder_mead", "bfgs", "adam". Gradient descent steps are done simultaneously 
 #'                with gradient descent steps for the covariance parameters. 
 #'                "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
 #'                Default="wls" for Gaussian data and "gradient_descent" for other likelihoods.
-#'                If 'optimizer_cov' is set to "nelder_mead" or "bfgs", 'optimizer_coef' is automatically also set to the same value.}
+#'                If 'optimizer_cov' is set to "nelder_mead", "bfgs", or "adam", 'optimizer_coef' is automatically also set to the same value.}
 #'                \item{maxit}{ Maximal number of iterations for optimization algorithm. Default=1000}
 #'                \item{delta_rel_conv}{ Convergence tolerance. The algorithm stops if the relative change 
 #'                in eiher the (approximate) log-likelihood or the parameters is below this value. 
-#'                For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
+#'                For "bfgs" and "adam", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
 #'                Default=1E-6}
 #'                \item{convergence_criterion}{ The convergence criterion used for terminating the optimization algorithm.
 #'                Options: "relative_change_in_log_likelihood" (default) or "relative_change_in_parameters"}
@@ -143,6 +148,7 @@ gpb.GPModel <- R6::R6Class(
                           group_data = NULL,
                           group_rand_coef_data = NULL,
                           ind_effect_group_rand_coef = NULL,
+                          drop_intercept_group_rand_effect = NULL,
                           gp_coords = NULL,
                           gp_rand_coef_data = NULL,
                           cov_function = "exponential",
@@ -193,8 +199,10 @@ gpb.GPModel <- R6::R6Class(
         }
         # Set feature data overwriting arguments for constructor
         group_data = model_list[["group_data"]]
+        private$nb_groups = model_list[["nb_groups"]]
         group_rand_coef_data = model_list[["group_rand_coef_data"]]
         ind_effect_group_rand_coef = model_list[["ind_effect_group_rand_coef"]]
+        drop_intercept_group_rand_effect = model_list[["drop_intercept_group_rand_effect"]]
         gp_coords = model_list[["gp_coords"]]
         gp_rand_coef_data = model_list[["gp_rand_coef_data"]]
         cov_function = model_list[["cov_function"]]
@@ -219,7 +227,9 @@ gpb.GPModel <- R6::R6Class(
           private$num_coef = model_list[["num_coef"]]
           private$X_loaded_from_file = model_list[["X"]]
         }
-      }# end !is.null(modelfile)
+        private$model_fitted = model_list[["model_fitted"]]
+      }# end !is.null(modelfile) | !is.null(model_list)
+      
       if(likelihood == "gaussian"){
         private$cov_par_names <- c("Error_term")
       }else{
@@ -248,23 +258,25 @@ gpb.GPModel <- R6::R6Class(
         private$num_data <- as.integer(dim(group_data)[1])
         private$group_data <- group_data
         if (is.null(colnames(private$group_data))) {
-          new_name <- paste0("Group_",1:private$num_group_re)
+          new_name <- paste0("Group_", 1:private$num_group_re)
         } else {
           new_name <- colnames(private$group_data)
         }
-        private$cov_par_names <- c(private$cov_par_names,new_name)
-        private$re_comp_names <- c(private$re_comp_names,new_name)
+        private$cov_par_names <- c(private$cov_par_names, new_name)
+        private$re_comp_names <- c(private$re_comp_names, new_name)
         # Convert to correct format for passing to C
         group_data <- as.vector(group_data)
         group_data_unique <- unique(group_data)
-        group_data_unique_c_str <- lapply(group_data_unique,gpb.c_str)
-        group_data_c_str <- unlist(group_data_unique_c_str[match(group_data,group_data_unique)])
+        group_data_unique_c_str <- lapply(group_data_unique, gpb.c_str)
+        group_data_c_str <- unlist(group_data_unique_c_str[match(group_data, group_data_unique)])
         # Version 2: slower than above (not used)
         # group_data_c_str <- unlist(lapply(group_data,gpb.c_str))
         # group_data_c_str <- c()# Version 3: much slower
         # for (i in 1:length(group_data)) {
         #   group_data_c_str <- c(group_data_c_str,gpb.c_str(group_data[i]))
         # }
+        faux <- function(x) length(unique(x))
+        private$nb_groups <- apply(private$group_data,2,faux)
         # Set data for grouped random coefficients
         if (!is.null(group_rand_coef_data)) {
           if (is.numeric(group_rand_coef_data)) {
@@ -276,25 +288,41 @@ gpb.GPModel <- R6::R6Class(
               storage.mode(group_rand_coef_data) <- "double"
             }
           } else {
-            stop("GPModel: Can only use ", sQuote("matrix"), " as ",sQuote("group_rand_coef_data"))
+            stop("GPModel: Can only use ", sQuote("matrix"), " as ", sQuote("group_rand_coef_data"))
           }
           if (dim(group_rand_coef_data)[1] != private$num_data) {
-            stop("GPModel: Number of data points in ", sQuote("group_rand_coef_data"), " does not match number of data points in ", sQuote("group_data"))
+            stop("GPModel: Number of data points in ", sQuote("group_rand_coef_data"), 
+                 " does not match number of data points in ", sQuote("group_data"))
           }
           if (is.null(ind_effect_group_rand_coef)) {
-            stop("GPModel: Indices of grouped random effects (", sQuote("ind_effect_group_rand_coef"), ") for random slopes in ", sQuote("group_rand_coef_data"), " not provided")
+            stop("GPModel: Indices of grouped random effects (", 
+                 sQuote("ind_effect_group_rand_coef"), ") for random slopes in ", 
+                 sQuote("group_rand_coef_data"), " not provided")
           }
           if (dim(group_rand_coef_data)[2] != length(ind_effect_group_rand_coef)) {
-            stop("GPModel: Number of random coefficients in ", sQuote("group_rand_coef_data"), "does not match number in ", sQuote("ind_effect_group_rand_coef"))
+            stop("GPModel: Number of random coefficients in ", 
+                 sQuote("group_rand_coef_data"), "does not match number in ", 
+                 sQuote("ind_effect_group_rand_coef"))
           }
           if (storage.mode(ind_effect_group_rand_coef) != "integer") {
             storage.mode(ind_effect_group_rand_coef) <- "integer"
+          }
+          if (!is.null(drop_intercept_group_rand_effect)) {
+            if (length(drop_intercept_group_rand_effect) != private$num_group_re) {
+              stop("GPModel: Length of ", sQuote("drop_intercept_group_rand_effect"), 
+                   "does not match number of random effects")
+            }
+            if (storage.mode(drop_intercept_group_rand_effect) != "logical") {
+              stop("GPModel: Can only use ", sQuote("logical"), " as ",
+                   sQuote("drop_intercept_group_rand_effect"))
+            }
           }
           private$num_group_rand_coef <- as.integer(dim(group_rand_coef_data)[2])
           private$group_rand_coef_data <- group_rand_coef_data
           group_rand_coef_data <- as.vector(matrix((private$group_rand_coef_data))) #convert to correct format for sending to C
           ind_effect_group_rand_coef <- as.vector(ind_effect_group_rand_coef)
           private$ind_effect_group_rand_coef <- ind_effect_group_rand_coef
+          private$drop_intercept_group_rand_effect <- drop_intercept_group_rand_effect
           offset = 1
           if(likelihood != "gaussian"){
             offset = 0
@@ -311,6 +339,13 @@ gpb.GPModel <- R6::R6Class(
             }
             private$cov_par_names <- c(private$cov_par_names,new_name)
             private$re_comp_names <- c(private$re_comp_names,new_name)
+          }
+          if (!is.null(private$drop_intercept_group_rand_effect)) {
+            if (sum(private$drop_intercept_group_rand_effect) > 0) {
+              ind_drop <- ((1:private$num_group_re) + (likelihood == "gaussian"))[private$drop_intercept_group_rand_effect]
+              private$cov_par_names <- private$cov_par_names[-ind_drop]
+              private$re_comp_names <- private$re_comp_names[-which(private$drop_intercept_group_rand_effect)]
+            }
           }
         } # End set data for grouped random coefficients
       } # End set data for grouped random effects
@@ -329,7 +364,8 @@ gpb.GPModel <- R6::R6Class(
         }
         if (!is.null(private$num_data)) {
           if (dim(gp_coords)[1] != private$num_data) {
-            stop("GPModel: Number of data points in ", sQuote("gp_coords"), " does not match number of data points in ", sQuote("group_data"))
+            stop("GPModel: Number of data points in ", sQuote("gp_coords"), 
+                 " does not match number of data points in ", sQuote("group_data"))
           }
         } else {
           private$num_data <- as.integer(dim(gp_coords)[1])
@@ -432,8 +468,9 @@ gpb.GPModel <- R6::R6Class(
         , group_data_c_str
         , private$num_group_re
         , group_rand_coef_data
-        , ind_effect_group_rand_coef
+        , private$ind_effect_group_rand_coef
         , private$num_group_rand_coef
+        , private$drop_intercept_group_rand_effect
         , private$num_gp
         , gp_coords
         , private$dim_coords
@@ -566,13 +603,15 @@ gpb.GPModel <- R6::R6Class(
         )
       }
       if (private$params$trace) {
-        message(paste0("GPModel: Number of iterations until convergence: ", self$get_num_optim_iter()))
+        message(paste0("GPModel: Number of iterations until convergence: ", 
+                       self$get_num_optim_iter()))
       }
+      private$model_fitted <- TRUE
       return(invisible(self))
     },
     
     # Evaluate the negative log-likelihood
-    neg_log_likelihood = function(cov_pars, y) {
+    neg_log_likelihood = function(cov_pars, y, fixed_effects = NULL) {
       if (gpb.is.null.handle(private$handle)) {
         stop("GPModel: Gaussian process model has not been initialized")
       }
@@ -586,10 +625,12 @@ gpb.GPModel <- R6::R6Class(
         }
         cov_pars <- as.vector(cov_pars)
       } else {
-        stop("GPModel.neg_log_likelihood: Can only use ", sQuote("vector"), " as ", sQuote("cov_pars"))
+        stop("GPModel.neg_log_likelihood: Can only use ", sQuote("vector"), " as ", 
+             sQuote("cov_pars"))
       }
       if (length(cov_pars) != private$num_cov_pars) {
-        stop("GPModel.neg_log_likelihood: Number of parameters in ", sQuote("cov_pars"), " does not correspond to numbers of parameters")
+        stop("GPModel.neg_log_likelihood: Number of parameters in ", sQuote("cov_pars"), 
+             " does not correspond to numbers of parameters")
       }
       if (!is.vector(y)) {
         if (is.matrix(y)) {
@@ -607,12 +648,26 @@ gpb.GPModel <- R6::R6Class(
       if (length(y) != private$num_data) {
         stop("GPModel.neg_log_likelihood: Number of data points in ", sQuote("y"), " does not match number of data points of initialized model")
       }
+      if (!is.null(fixed_effects)) {
+        if (is.vector(fixed_effects)) {
+          if (storage.mode(fixed_effects) != "double") {
+            storage.mode(fixed_effects) <- "double"
+          }
+          fixed_effects <- as.vector(fixed_effects)
+        } else {
+          stop("GPModel.neg_log_likelihood: Can only use ", sQuote("vector"), " as ", sQuote("fixed_effects"))
+        }
+        if (length(fixed_effects) != private$num_data) {
+          stop("GPModel.neg_log_likelihood: Length of ", sQuote("fixed_effects"), " does not match number of observed data points")
+        }
+      }# end fixed_effects
       negll <- 0.
       .Call(
         GPB_EvalNegLogLikelihood_R
         , private$handle
         , y
         , cov_pars
+        , fixed_effects
         , negll
       )
       return(negll)
@@ -1176,7 +1231,8 @@ gpb.GPModel <- R6::R6Class(
             stop("predict.GPModel: Can only use ", sQuote("vector"), " as ", sQuote("cluster_ids_pred"))
           }
           if (length(cluster_ids_pred) != num_data_pred) {
-            stop("predict.GPModel: Length of ", sQuote("cluster_ids_pred"), " does not match number of predicted data points")
+            stop("predict.GPModel: Length of ", sQuote("cluster_ids_pred"), 
+                 " does not match number of predicted data points")
           }
           cluster_ids_pred <- as.vector(cluster_ids_pred)
         } # End set cluster_ids for independent processes
@@ -1189,7 +1245,8 @@ gpb.GPModel <- R6::R6Class(
         X_pred <- NULL
         num_data_pred <- private$num_data_pred
         if (is.null(private$num_data_pred)) {
-          stop("predict.GPModel: No data has been set for making predictions. Call set_prediction_data first")
+          stop("predict.GPModel: No data has been set for making predictions. 
+               Call set_prediction_data first")
         }
       }
       if (storage.mode(predict_cov_mat) != "logical") {
@@ -1276,6 +1333,9 @@ gpb.GPModel <- R6::R6Class(
       }
       num_re_comps = private$num_group_re + private$num_group_rand_coef + 
         private$num_gp + private$num_gp_rand_coef
+      if (!is.null(private$drop_intercept_group_rand_effect)) {
+        num_re_comps <- num_re_comps - sum(private$drop_intercept_group_rand_effect)
+      }
       re_preds <- numeric(private$num_data * num_re_comps)
       .Call(
         GPB_PredictREModelTrainingDataRandomEffects_R
@@ -1370,6 +1430,10 @@ gpb.GPModel <- R6::R6Class(
       return(private$ind_effect_group_rand_coef)
     },
     
+    get_drop_intercept_group_rand_effect = function() {
+      return(private$drop_intercept_group_rand_effect)
+    },
+    
     get_num_data = function() {
       return(private$num_data)
     },
@@ -1382,6 +1446,16 @@ gpb.GPModel <- R6::R6Class(
         , num_it
       )
       return(num_it)
+    },
+    
+    get_current_neg_log_likelihood = function() {
+      negll <- 0.
+      .Call(
+        GPB_GetCurrentNegLogLikelihood_R
+        , private$handle
+        , negll
+      )
+      return(negll)
     },
     
     get_likelihood_name = function() {
@@ -1426,10 +1500,12 @@ gpb.GPModel <- R6::R6Class(
       }
       # Feature data
       model_list[["group_data"]] <- self$get_group_data()
+      model_list[["nb_groups"]] <- private$nb_groups
       model_list[["group_rand_coef_data"]] <- self$get_group_rand_coef_data()
       model_list[["gp_coords"]] <- self$get_gp_coords()
       model_list[["gp_rand_coef_data"]] <- self$get_gp_rand_coef_data()
       model_list[["ind_effect_group_rand_coef"]] <- self$get_ind_effect_group_rand_coef()
+      model_list[["drop_intercept_group_rand_effect"]] <- self$get_drop_intercept_group_rand_effect()
       model_list[["cluster_ids"]] <- self$get_cluster_ids()
       model_list[["vecchia_approx"]] <- private$vecchia_approx
       model_list[["num_neighbors"]] <- private$num_neighbors
@@ -1446,11 +1522,13 @@ gpb.GPModel <- R6::R6Class(
         model_list[["num_coef"]] <- private$num_coef
         model_list[["X"]] <- self$get_covariate_data()
       }
+      model_list[["model_fitted"]] <- private$model_fitted
       # Make sure that data is saved in correct format by RJSONIO::toJSON
       MAYBE_CONVERT_TO_VECTOR <- c("cov_pars","group_data", "group_rand_coef_data",
                                    "gp_coords", "gp_rand_coef_data",
                                    "ind_effect_group_rand_coef",
-                                   "cluster_ids","coefs","X")
+                                   "drop_intercept_group_rand_effect",
+                                   "cluster_ids","coefs","X","nb_groups")
       for (feature in MAYBE_CONVERT_TO_VECTOR) {
         if (!is.null(model_list[[feature]])) {
           if (is.vector(model_list[[feature]])) {
@@ -1477,7 +1555,60 @@ gpb.GPModel <- R6::R6Class(
       save_data_json <- RJSONIO::toJSON(self$model_to_list(include_response_data=TRUE), digits=17)
       write(save_data_json, file=filename)
       return(invisible(self))
+    },
+    
+    summary = function() {
+      cov_pars <- self$get_cov_pars()
+      cat("=====================================================\n")
+      if (private$model_fitted) {
+        cat("Model summary:\n")
+        ll <- -self$get_current_neg_log_likelihood()
+        npar <- private$num_cov_pars
+        if (private$has_covariates) {
+          npar <- npar + private$num_coef
+        }
+        aic <- 2*npar - 2*ll
+        bic <- npar*log(self$get_num_data()) - 2*ll
+        print(round(c("Log-lik"=ll, "AIC"=aic, "BIC"=bic),digits=2))
+        cat(paste0("Nb. observations: ", self$get_num_data(),"\n"))
+        if ((private$num_group_re + private$num_group_rand_coef) > 0) {
+          nb_groups <- t(private$nb_groups)
+          rownames(nb_groups) <- "Nb. groups: "
+          colnames(nb_groups) <- private$re_comp_names[1:private$num_group_re]
+          print(nb_groups)
+        }
+        cat("---------------------------------------------------\n")
+      }
+      cat("Covariance parameters (random effects):\n")
+      if (is.matrix(cov_pars)) {
+        print(round(t(cov_pars),4))
+      } else {
+        cov_pars <- t(t(cov_pars))
+        colnames(cov_pars) <- "Param."
+        print(round(cov_pars,4))
+      }
+      if (private$has_covariates) {
+        coefs <- self$get_coef()
+        cat("---------------------------------------------------\n")
+        cat("Linear regression coefficients (fixed effects):\n")
+        if (private$params$std_dev) {
+          z_values <- coefs[1,] / coefs[2,]
+          p_values <- 2 * exp(pnorm(-abs(z_values), log.p = TRUE))
+          coefs_summary <- cbind(t(coefs),"z value"=z_values,"P(>|z|)"=p_values)
+          print(round(coefs_summary,4))
+        } else {
+          coefs <- t(t(coefs))
+          colnames(coefs) <- "Param."
+          print(round(coefs,4))
+        }
+      }
+      if (private$params$maxit == self$get_num_optim_iter()) {
+        cat("\n")
+        cat("Note: no convergence after the maximal number of iterations\n")
+      }
+      cat("=====================================================\n")
     }
+    
   ), # end public
   
   private = list(
@@ -1492,8 +1623,10 @@ gpb.GPModel <- R6::R6Class(
     has_covariates = FALSE,
     num_coef = 0,
     group_data = NULL,
+    nb_groups = NULL,
     group_rand_coef_data = NULL,
     ind_effect_group_rand_coef = NULL,
+    drop_intercept_group_rand_effect = NULL,
     gp_coords = NULL,
     gp_rand_coef_data = NULL,
     cov_function = "exponential",
@@ -1516,6 +1649,7 @@ gpb.GPModel <- R6::R6Class(
     cov_pars_loaded_from_file = NULL,
     coefs_loaded_from_file = NULL,
     X_loaded_from_file = NULL,
+    model_fitted = FALSE,
     params = list(maxit = 1000L,
                   delta_rel_conv = 1E-6,
                   init_coef = NULL,
@@ -1538,6 +1672,9 @@ gpb.GPModel <- R6::R6Class(
       }
       private$num_cov_pars <- private$num_group_re + private$num_group_rand_coef + 
         num_par_per_GP * (private$num_gp + private$num_gp_rand_coef)
+      if (!is.null(private$drop_intercept_group_rand_effect)) {
+        private$num_cov_pars <- private$num_cov_pars - sum(private$drop_intercept_group_rand_effect)
+      }
       if (likelihood == "gaussian"){
         private$num_cov_pars <- private$num_cov_pars + 1L
       }
@@ -1650,6 +1787,7 @@ gpb.GPModel <- R6::R6Class(
 GPModel <- function(group_data = NULL,
                     group_rand_coef_data = NULL,
                     ind_effect_group_rand_coef = NULL,
+                    drop_intercept_group_rand_effect = NULL,
                     gp_coords = NULL,
                     gp_rand_coef_data = NULL,
                     cov_function = "exponential",
@@ -1668,6 +1806,7 @@ GPModel <- function(group_data = NULL,
   invisible(gpb.GPModel$new(group_data = group_data,
                             group_rand_coef_data = group_rand_coef_data,
                             ind_effect_group_rand_coef = ind_effect_group_rand_coef,
+                            drop_intercept_group_rand_effect = drop_intercept_group_rand_effect,
                             gp_coords = gp_coords,
                             gp_rand_coef_data = gp_rand_coef_data,
                             cov_function = cov_function,
@@ -1837,6 +1976,7 @@ fit.GPModel <- function(gp_model,
 fitGPModel <- function(group_data = NULL,
                        group_rand_coef_data = NULL,
                        ind_effect_group_rand_coef = NULL,
+                       drop_intercept_group_rand_effect = NULL,
                        gp_coords = NULL,
                        gp_rand_coef_data = NULL,
                        cov_function = "exponential",
@@ -1857,6 +1997,7 @@ fitGPModel <- function(group_data = NULL,
   gpmodel <- gpb.GPModel$new(group_data = group_data,
                              group_rand_coef_data = group_rand_coef_data,
                              ind_effect_group_rand_coef = ind_effect_group_rand_coef,
+                             drop_intercept_group_rand_effect = drop_intercept_group_rand_effect,
                              gp_coords = gp_coords,
                              gp_rand_coef_data = gp_rand_coef_data,
                              cov_function = cov_function,
@@ -1913,18 +2054,7 @@ fitGPModel <- function(group_data = NULL,
 #' @author Fabio Sigrist
 #' @export
 summary.GPModel <- function(object, ...){
-  cov_pars <- object$get_cov_pars()
-  message("Covariance parameters:")
-  print(signif(cov_pars,6))
-  if (object$.__enclos_env__$private$has_covariates) {
-    coef <- object$get_coef()
-    message("Linear regression coefficients:")
-    print(signif(coef,6))
-  }
-  if (object$.__enclos_env__$private$params$maxit == object$get_num_optim_iter()) {
-    cat("\n")
-    message("Note: no convergence after the maximal number of iterations")
-  }
+  object$summary()
   return(invisible(object))
 }
 

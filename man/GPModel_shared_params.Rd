@@ -7,24 +7,29 @@
 \item{likelihood}{A \code{string} specifying the likelihood function (distribution) of the response variable
 Default = "gaussian"}
 
-\item{group_data}{A \code{vector} or \code{matrix} with elements being group levels for defining 
-grouped random effects. I.e., this is either a \code{vector} consisting of a 
-categorical variable or a \code{matrix} whose columns are categorical variables.
-The elements of 'group_data' can be integer, double, or character.}
+\item{group_data}{A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
+The elements being group levels defining grouped random effects.
+The elements of 'group_data' can be integer, double, or character.
+The number of columns corresponds to the number of grouped (intercept) random effects}
 
 \item{group_rand_coef_data}{A \code{vector} or \code{matrix} with numeric covariate data 
 for grouped random coefficients}
 
 \item{ind_effect_group_rand_coef}{A \code{vector} with integer indices that 
-indicate the corresponding random effects (=columns) in 'group_data' for 
+indicate the corresponding categorical grouping variable (=columns) in 'group_data' for 
 every covariate in 'group_rand_coef_data'. Counting starts at 1.
 The length of this index vector must equal the number of covariates in 'group_rand_coef_data'.
 For instance, c(1,1,2) means that the first two covariates (=first two columns) in 'group_rand_coef_data'
-have random coefficients corresponding to the first random effect (=first column) in 'group_data',
+have random coefficients corresponding to the first categorical grouping variable (=first column) in 'group_data',
 and the third covariate (=third column) in 'group_rand_coef_data' has a random coefficient
-corresponding to the second random  effect (=second column) in 'group_data'.}
+corresponding to the second grouping variable (=second column) in 'group_data'}
 
-\item{gp_coords}{A \code{matrix} with numeric coordinates (=features) for defining Gaussian processes}
+\item{drop_intercept_group_rand_effect}{A \code{vector} of type \code{logical} (boolean). 
+Indicates whether intercept random effects are dropped (only for random coefficients). 
+If drop_intercept_group_rand_effect[k] is TRUE, the intercept random effect number k is dropped / not included. 
+Only random effects with random slopes can be dropped.}
+
+\item{gp_coords}{A \code{matrix} with numeric coordinates (= inputs / features) for defining Gaussian processes}
 
 \item{gp_rand_coef_data}{A \code{vector} or \code{matrix} with numeric covariate data for
 Gaussian process random coefficients}
@@ -41,9 +46,10 @@ a compactly supported Wendland covariance function (= tapering)}
 \item{cov_fct_shape}{A \code{numeric} specifying the shape parameter of the covariance function 
 (=smoothness parameter for Matern and Wendland covariance). For the Wendland covariance function, 
 we follow the notation of Bevilacqua et al. (2019)). 
-This parameter is irrelevant for some covariance functions such as the exponential or Gaussian.}
+This parameter is irrelevant for some covariance functions such as the exponential or Gaussian}
 
-\item{cov_fct_taper_range}{A \code{numeric} specifying the range parameter of the Wendland covariance function / taper. We follow the notation of Bevilacqua et al. (2019)}
+\item{cov_fct_taper_range}{A \code{numeric} specifying the range parameter of the Wendland covariance function / taper. 
+We follow the notation of Bevilacqua et al. (2019)}
 
 \item{vecchia_approx}{A \code{boolean}. If TRUE, the Vecchia approximation is used}
 
@@ -78,19 +84,19 @@ fixed effects linear regression term (if there is one)}
 \item{params}{A \code{list} with parameters for the model fitting / optimization
  \itemize{
     \item{optimizer_cov}{ Optimizer used for estimating covariance parameters. 
-    Options: "gradient_descent", "fisher_scoring", "nelder_mead", and "bfgs".
+    Options: "gradient_descent", "fisher_scoring", "nelder_mead", "bfgs", "adam".
     Default= gradient_descent"}
     \item{optimizer_coef}{ Optimizer used for estimating linear regression coefficients, if there are any 
     (for the GPBoost algorithm there are usually none). 
-    Options: "gradient_descent", "wls", "nelder_mead", and "bfgs". Gradient descent steps are done simultaneously 
+    Options: "gradient_descent", "wls", "nelder_mead", "bfgs", "adam". Gradient descent steps are done simultaneously 
     with gradient descent steps for the covariance parameters. 
     "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
     Default="wls" for Gaussian data and "gradient_descent" for other likelihoods.
-    If 'optimizer_cov' is set to "nelder_mead" or "bfgs", 'optimizer_coef' is automatically also set to the same value.}
+    If 'optimizer_cov' is set to "nelder_mead", "bfgs", or "adam", 'optimizer_coef' is automatically also set to the same value.}
     \item{maxit}{ Maximal number of iterations for optimization algorithm. Default=1000}
     \item{delta_rel_conv}{ Convergence tolerance. The algorithm stops if the relative change 
     in eiher the (approximate) log-likelihood or the parameters is below this value. 
-    For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
+    For "bfgs" and "adam", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
     Default=1E-6}
     \item{convergence_criterion}{ The convergence criterion used for terminating the optimization algorithm.
     Options: "relative_change_in_log_likelihood" (default) or "relative_change_in_parameters"}

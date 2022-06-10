@@ -671,7 +671,8 @@ Booster <- R6::R6Class(
                        ...) {
       
       if (!is.null(rawscore)) {
-        warning("The argument 'raw_score' is deprecated and ignored. Use the renamed equivalent argument 'pred_latent' instead")
+        stop("predict: The argument 'raw_score' is deprecated and ignored. 
+             Use the renamed equivalent argument 'pred_latent' instead")
       }
       
       # Check if number of iteration is non existent
@@ -1132,8 +1133,9 @@ Booster <- R6::R6Class(
 #'                      If <= 0, all iterations from start_iteration are used (no limits).
 #' @param pred_latent  If TRUE latent variables, both fixed effects (tree-ensemble) 
 #' and random effects (\code{gp_model}) are predicted. Otherwise, the response variable 
-#' (label) is predicted. If there is no \code{gp_model}, this argument corresponds 
-#' to 'raw_score' in LightGBM.
+#' (label) is predicted. Depending on how the argument 'pred_latent' is set,
+#' different values are returned from this function; see the 'Value' section for more details. 
+#' If there is no \code{gp_model}, this argument corresponds to 'raw_score' in LightGBM.
 #' @param predleaf whether predict leaf index instead.
 #' @param predcontrib return per-feature contributions for each record.
 #' @param header only used for prediction for text file. True if text file has header

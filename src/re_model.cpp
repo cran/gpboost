@@ -23,6 +23,7 @@ namespace GPBoost {
 		const double* re_group_rand_coef_data,
 		const data_size_t* ind_effect_group_rand_coef,
 		data_size_t num_re_group_rand_coef,
+		const int* drop_intercept_group_rand_effect,
 		data_size_t num_gp,
 		const double* gp_coords_data,
 		int dim_gp_coords,
@@ -52,6 +53,7 @@ namespace GPBoost {
 				re_group_rand_coef_data,
 				ind_effect_group_rand_coef,
 				num_re_group_rand_coef,
+				drop_intercept_group_rand_effect,
 				num_gp,
 				gp_coords_data,
 				dim_gp_coords,
@@ -78,6 +80,7 @@ namespace GPBoost {
 				re_group_rand_coef_data,
 				ind_effect_group_rand_coef,
 				num_re_group_rand_coef,
+				drop_intercept_group_rand_effect,
 				num_gp,
 				gp_coords_data,
 				dim_gp_coords,
@@ -418,8 +421,12 @@ namespace GPBoost {
 		}
 	}
 
-	void REModel::EvalNegLogLikelihood(const double* y_data, double* cov_pars, double& negll,
-		const double* fixed_effects, bool InitializeModeCovMat, bool CalcModePostRandEff_already_done) {
+	void REModel::EvalNegLogLikelihood(const double* y_data,
+		double* cov_pars,
+		double& negll,
+		const double* fixed_effects,
+		bool InitializeModeCovMat,
+		bool CalcModePostRandEff_already_done) {
 		vec_t cov_pars_trafo;
 		if (cov_pars == nullptr) {
 			if (y_data != nullptr) {
@@ -459,6 +466,15 @@ namespace GPBoost {
 		covariance_matrix_has_been_factorized_ = false;
 		//set to false as otherwise the covariance is not factorized for prediction for Gaussian data and this can lead to problems 
 		//(e.g. fitting model with covariates, then calling likelihood without covariates, then making prediction with covariates)
+	}
+
+	void REModel::GetCurrentNegLogLikelihood(double& negll) {
+		if (sparse_) {
+			negll = re_model_sp_->neg_log_likelihood_;
+		}
+		else {
+			negll = re_model_den_->neg_log_likelihood_;
+		}
 	}
 
 	void REModel::CalcGradient(double* y, const double* fixed_effects, bool calc_cov_factor) {

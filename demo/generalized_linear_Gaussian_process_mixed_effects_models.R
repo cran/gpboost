@@ -80,18 +80,19 @@ rand_eff <- rand_eff - mean(rand_eff)
 y_nested <- simulate_response_variable(lp=lp, rand_eff=rand_eff, likelihood=likelihood)
 
 # --------------------Training----------------
-gp_model <- GPModel(group_data = group, likelihood = likelihood) # Create random effects model
-fit(gp_model, y = y, X = X) # Fit model
-# Alternatively, define and fit model directly using fitGPModel
-gp_model <- fitGPModel(group_data = group, y = y, X = X)
+gp_model <- fitGPModel(group_data = group, y = y, X = X, likelihood = likelihood)
 summary(gp_model)
 # Get coefficients and variance/covariance parameters separately
 gp_model$get_coef()
 gp_model$get_cov_pars()
+# Obtaining standard deviations and p-values for fixed effects coefficients ('std_dev = TRUE')
+gp_model <- fitGPModel(group_data = group, y = y, X = X, likelihood = likelihood,
+                       params = list(std_dev = TRUE))
+summary(gp_model)
 
 # Optional arguments for the 'params' argument of the 'fit' function:
-# - monitoring convergence: trace=TRUE
-# - obtain standard deviations: std_dev = TRUE
+# - monitoring convergence: 'trace = TRUE'
+# - calculate standard deviations: 'std_dev = TRUE'
 # - change optimization algorithm options (see below)
 # For available optimization options, see
 #   https://github.com/fabsig/GPBoost/blob/master/docs/Main_parameters.rst#optimization-parameters
@@ -100,15 +101,6 @@ gp_model$get_cov_pars()
 #                                      std_dev = TRUE,
 #                                      optimizer_cov= "gradient_descent",
 #                                      lr_cov = 0.1, use_nesterov_acc = TRUE, maxit = 100))
-
-# --------------------Approximate p-values for fixed effects coefficients----------------
-gp_model <- fitGPModel(group_data = group, likelihood = likelihood, y = y, X = X,
-                       params = list(std_dev = TRUE))
-coefs <- gp_model$get_coef()
-z_values <- coefs[1,] / coefs[2,]
-p_values <- 2 * exp(pnorm(-abs(z_values), log.p = TRUE))
-coefs_summary <- rbind(coefs,z_val=z_values,p_val=p_values)
-print(signif(coefs_summary, digits=4))
 
 # --------------------Prediction----------------
 group_test <- c(1,2,-1)
@@ -162,8 +154,12 @@ sum(abs(pred_resp$var - pred_resp_loaded$var))
 gp_model <- fitGPModel(group_data = cbind(group,group_crossed), group_rand_coef_data = x,
                        ind_effect_group_rand_coef = 1, likelihood = likelihood,
                        y = y_crossed_random_slope, X = X)
-# 'ind_effect_group_rand_coef' indicates that the random slope is for the first random effect
+# 'ind_effect_group_rand_coef = 1' indicates that the random slope is for the first random effect
 summary(gp_model)
+# Prediction
+pred <- predict(gp_model, group_data_pred=cbind(group,group_crossed), 
+                group_rand_coef_data_pred=x, X_pred=X)
+
 # Obtain predicted (="estimated") random effects for the training data
 all_training_data_random_effects <- predict_training_data_random_effects(gp_model)
 # The function 'predict_training_data_random_effects' returns predicted random effects for all data points.
@@ -179,6 +175,14 @@ plot(b, pred_random_effects, xlab="truth", ylab="predicted",
 points(b_random_slope, pred_random_slopes, col=2, pch=2, lwd=1.5)
 points(b_crossed, pred_random_effects_crossed, col=4, pch=4, lwd=1.5)
 
+# Random slope model in which an intercept random effect is dropped / not included
+gp_model <- fitGPModel(group_data = cbind(group,group_crossed), group_rand_coef_data = x,
+                       ind_effect_group_rand_coef = 1, drop_intercept_group_rand_effect = c(TRUE,FALSE),
+                       likelihood = likelihood, y = y_crossed_random_slope, X = X)
+# 'drop_intercept_group_rand_effect = c(TRUE,FALSE)' indicates that the first categorical variable 
+#   in group_data has no intercept random effect
+summary(gp_model)
+
 # --------------------Two nested random effects----------------
 group_data <- cbind(group, group_nested)
 gp_model <- fitGPModel(group_data = group_data, y = y_nested, likelihood = likelihood)
@@ -192,6 +196,34 @@ gp_model <- fitGPModel(group_data = group, y = y, cluster_ids = cluster_ids,
 summary(gp_model)
 #Note: gives sames result in this example as when not using cluster_ids
 #   since the random effects of different groups are independent anyway
+
+#--------------------Evaluate negative log-likelihood and do optimization using optim----------------
+gp_model <- GPModel(group_data = group, likelihood = likelihood)
+if (likelihood == "gaussian") {
+  init_cov_pars <- c(1,1)
+} else {
+  init_cov_pars <- 1
+}
+eval_nll <- function(pars, gp_model, y, X, likelihood) {
+  if (likelihood == "gaussian") {
+    coef <- pars[-c(1,2)]
+    cov_pars <- exp(pars[c(1,2)])
+  } else {
+    coef <- pars[-1]
+    cov_pars <- exp(pars[1])
+  }
+  fixed_effects <- as.numeric(X%*%coef)
+  if (likelihood == "gaussian") {
+    y <- y - fixed_effects
+    fixed_effects <- NULL
+  }
+  gp_model$neg_log_likelihood(cov_pars=cov_pars, y=y, fixed_effects=fixed_effects)
+}
+pars <- c(init_cov_pars, rep(0,dim(X)[2]))
+eval_nll(pars = pars, gp_model = gp_model, X = X, y=y, likelihood = likelihood)
+# Do optimization using optim and e.g. Nelder-Mead
+opt <- optim(par = pars, fn = eval_nll, gp_model = gp_mod, y = y, X = X, 
+             likelihood = likelihood, method = "Nelder-Mead")
 
 
 #################################
@@ -274,14 +306,6 @@ summary(gp_model)
 #                                      optimizer_cov= "gradient_descent",
 #                                      lr_cov = 0.1, use_nesterov_acc = TRUE, maxit = 100))
 
-# Evaluate negative log-likelihood
-model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
-                 likelihood = likelihood)
-model$neg_log_likelihood(cov_pars=c(0.1,sigma2_1,rho),y=y_train)
-
-# Do optimization using optim and e.g. Nelder-Mead
-optim(par=c(1,1,0.2), fn=model$neg_log_likelihood, y=y_train, method="Nelder-Mead")
-
 #--------------------Prediction----------------
 # Prediction of latent variable
 pred <- predict(gp_model, gp_coords_pred = coords_test,
@@ -302,12 +326,14 @@ library(ggplot2)
 library(viridis)
 library(gridExtra)
 plot1 <- ggplot(data = data.frame(s_1=coords_test[,1],s_2=coords_test[,2],b=b_1_test),aes(x=s_1,y=s_2,color=b)) +
-  geom_point(size=4, shape=15) + scale_color_viridis(option = "B") + ggtitle("True latent GP and training locations") + 
+  geom_point(size=4, shape=15) + scale_color_viridis(option = "B") + 
+  ggtitle("True latent GP and training locations") + 
   geom_point(data = data.frame(s_1=coords_train[,1],s_2=coords_train[,2],y=y_train),aes(x=s_1,y=s_2),size=3, col="white", alpha=1, shape=43)
 plot2 <- ggplot(data = data.frame(s_1=coords_test[,1],s_2=coords_test[,2],b=pred$mu),aes(x=s_1,y=s_2,color=b)) +
   geom_point(size=4, shape=15) + scale_color_viridis(option = "B") + ggtitle("Predicted latent GP mean")
 plot3 <- ggplot(data = data.frame(s_1=coords_test[,1],s_2=coords_test[,2],b=sqrt(pred$var)),aes(x=s_1,y=s_2,color=b)) +
-  geom_point(size=4, shape=15) + scale_color_viridis(option = "B") + labs(title="Predicted latent GP standard deviation", subtitle=" = prediction uncertainty")
+  geom_point(size=4, shape=15) + scale_color_viridis(option = "B") + 
+  labs(title="Predicted latent GP standard deviation", subtitle=" = prediction uncertainty")
 grid.arrange(plot1, plot2, plot3, ncol=2)
 
 # Predict latent GP at training data locations (=smoothing)
@@ -355,8 +381,22 @@ points(b_3, GP_smooth[,3], col=4, pch=4, lwd=1.5)
 cluster_ids = rep(0,ntrain)
 cluster_ids[(ntrain/2+1):ntrain] = 1
 gp_model <- fitGPModel(gp_coords = coords_train, cov_function = "exponential",
-                       cluster_ids = cluster_ids, likelihood = likelihood, y = y_train)
+                       cluster_ids = cluster_ids, likelihood = likelihood,
+                       y = y_train)
 summary(gp_model)
+
+# --------------------Evaluate negative log-likelihood and do optimization using optim----------------
+gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
+                    likelihood = likelihood)
+if (likelihood == "gaussian") {
+  init_cov_pars <- c(1,1,0.2)
+} else {
+  init_cov_pars <- c(1,0.2)
+}
+gp_model$neg_log_likelihood(cov_pars = init_cov_pars, y = y_train)
+# Do optimization using optim and e.g. Nelder-Mead
+optim(par = init_cov_pars, fn = gp_model$neg_log_likelihood, y = y_train,
+      method = "Nelder-Mead")
 
 
 #################################

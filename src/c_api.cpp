@@ -157,8 +157,10 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 		~Booster() {
 		}
 
-		// Some checks for GPBoost algorithm as the GPBoost algortihm currently does not support all options of LightGBM
-		// In particular, make sure that objective for boosting and likelihood for re_model match, otherwise change them accordingly
+		// Some checks for GPBoost algorithm:
+		//   - Make sure that objective for boosting and likelihood for re_model match, otherwise change them accordingly
+		//   - Consistency of objective of boosting / likelihood and metrics
+		//   - Check other options as the GPBoost algortihm currently does not support all options of LightGBM
 		void CheckParamConflictREModel(REModel* re_model = nullptr) {
 			if (re_model != nullptr) {
 				if (config_.boosting != std::string("gbdt")) {
@@ -168,18 +170,19 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 					Log::Fatal("Bagging cannot be applied for the GPBoost algorithm. Set 'bagging_freq = 0'");
 				}
 				if (train_data_->metadata().weights() != nullptr) {
-					Log::Fatal("Weighted data is currently not supported for the GPBoost algorithm. If this is desired, contact the developer or open a GitHub issue.");
+					Log::Fatal("Weighted data is currently not supported for the GPBoost algorithm.");
 				}
 				if (config_.sigmoid != 1.0) {
-					Log::Fatal("The GPBoost algorithm currently does not support a sigmoid != 1.0. If this is desired, contact the developer or open a GitHub issue.");
+					Log::Fatal("The GPBoost algorithm currently does not support a sigmoid != 1.0.");
 				}
-				//make sure that objective for boosting and likelihood for re_model match, otherwise change them accordingly
+				// Make sure that objective for boosting and likelihood for re_model match, otherwise change them accordingly
 				if (config_.objective == std::string("binary")) {
 					config_.objective = "regression";
 					if (re_model->GetLikelihood() != std::string("bernoulli_probit") && re_model->GetLikelihood() != std::string("bernoulli_logit")) {
 						Log::Warning("Objective for boosting and likelihood for the random effects model do not match. "
 							"It is assumed that the objective is correctly specified and that the data is binary. "
-							"The likelihood of the random effects model is set to 'bernoulli_probit'. This can be problematic if the random effects model has been pre-trained.");
+							"The likelihood of the random effects model is set to 'bernoulli_probit'. "
+							"This can be problematic if the random effects model has been pre-trained.");
 						re_model->SetLikelihood("bernoulli_probit");
 					}
 				}
@@ -200,10 +203,25 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 					}
 				}
 				else {
-					Log::Fatal("The GPBoost algorithm can currently not be used for objective = %s. If this is desired, contact the developer or open a GitHub issue.", config_.objective.c_str());
+					Log::Fatal("The GPBoost algorithm can currently not be used for objective = %s.", config_.objective.c_str());
+				}
+				// Check consistency of likelihood and metrics
+				for (auto metric_type : config_.metric) {
+					if (metric_type == std::string("neg_log_likelihood") && re_model->GetLikelihood() != std::string("gaussian")) {
+						Log::Fatal("The metric '%s' can only be used for Gaussian data", metric_type.c_str());
+					}
+					if (metric_type == std::string("approx_neg_marginal_log_likelihood") && re_model->GetLikelihood() == std::string("gaussian")) {
+						Log::Fatal("The metric '%s' can only be used for non-Gaussian data", metric_type.c_str());
+					}
 				}
 			}//end if re_model != nullptr
 			else {//no re_model
+				for (auto metric_type : config_.metric) {
+					if (metric_type == std::string("neg_log_likelihood") ||
+						metric_type == std::string("approx_neg_marginal_log_likelihood")) {
+						Log::Fatal("The metric '%s' can only be used for the GPBoost algorithm", metric_type.c_str());
+					}
+				}
 				if (config_.leaves_newton_update) {
 					Log::Fatal("leaves_newton_update can only be 'true' if Gaussian process boosting is done");
 				}
@@ -230,9 +248,6 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 			// create training metric
 			train_metric_.clear();
 			for (auto metric_type : config_.metric) {
-				if (metric_type == std::string("approx_neg_marginal_log_likelihood") && re_model == nullptr) {
-					Log::Fatal("The approx_neg_marginal_log_likelihood metric can only be used for the GPBoost algorithm");
-				}
 				auto metric = std::unique_ptr<Metric>(
 					Metric::CreateMetric(metric_type, config_));
 				if (metric == nullptr) { continue; }
@@ -2671,6 +2686,7 @@ int GPB_CreateREModel(int32_t num_data,
 	const double* re_group_rand_coef_data,
 	const int32_t* ind_effect_group_rand_coef,
 	int32_t num_re_group_rand_coef,
+	const int* drop_intercept_group_rand_effect,
 	int32_t num_gp,
 	const double* gp_coords_data,
 	const int dim_gp_coords,
@@ -2695,6 +2711,7 @@ int GPB_CreateREModel(int32_t num_data,
 		re_group_rand_coef_data,
 		ind_effect_group_rand_coef,
 		num_re_group_rand_coef,
+		drop_intercept_group_rand_effect,
 		num_gp,
 		gp_coords_data,
 		dim_gp_coords,
@@ -2774,10 +2791,19 @@ int GPB_OptimLinRegrCoefCovPar(REModelHandle handle,
 int GPB_EvalNegLogLikelihood(REModelHandle handle,
 	const double* y_data,
 	double* cov_pars,
+	const double* fixed_effects,
 	double* negll) {
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
-	ref_remodel->EvalNegLogLikelihood(y_data, cov_pars, negll[0], nullptr, true, false);
+	ref_remodel->EvalNegLogLikelihood(y_data, cov_pars, negll[0], fixed_effects, true, false);
+	API_END();
+}
+
+int GPB_GetCurrentNegLogLikelihood(REModelHandle handle,
+	double* negll) {
+	API_BEGIN();
+	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
+	ref_remodel->GetCurrentNegLogLikelihood(negll[0]);
 	API_END();
 }
 

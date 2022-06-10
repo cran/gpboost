@@ -39,6 +39,7 @@ namespace GPBoost {
 		* \param re_group_rand_coef_data Covariate data for grouped random coefficients
 		* \param ind_effect_group_rand_coef Indices that relate every random coefficients to a "base" intercept grouped random effect. Counting start at 1.
 		* \param num_re_group_rand_coef Number of grouped random coefficient
+		* \param drop_intercept_group_rand_effect Indicates whether intercept random effects are dropped (only for random coefficients). If drop_intercept_group_rand_effect[k] > 0, the intercept random effect number k is dropped. Only random effects with random slopes can be dropped.
 		* \param num_gp Number of (intercept) Gaussian processes
 		* \param gp_coords_data Coordinates (features) for Gaussian process
 		* \param dim_gp_coords Dimension of the coordinates (=number of features) for Gaussian process
@@ -60,6 +61,7 @@ namespace GPBoost {
 			const double* re_group_rand_coef_data,
 			const data_size_t* ind_effect_group_rand_coef,
 			data_size_t num_re_group_rand_coef,
+			const int* drop_intercept_group_rand_effect,
 			data_size_t num_gp,
 			const double* gp_coords_data,
 			int dim_gp_coords,
@@ -176,8 +178,18 @@ namespace GPBoost {
 		* \param InitializeModeCovMat (only used for non-Gaussian data) If true, posterior mode is initialized to 0 and the covariance matrix is calculated. Otherwise, existing values are used
 		* \param CalcModePostRandEff_already_done (only used for non-Gaussian data) If true, it is assumed that the posterior mode of the random effects has already been calculated
 		*/
-		void EvalNegLogLikelihood(const double* y_data, double* cov_pars, double& negll,
-			const double* fixed_effects, bool InitializeModeCovMat, bool CalcModePostRandEff_already_done);
+		void EvalNegLogLikelihood(const double* y_data,
+			double* cov_pars,
+			double& negll,
+			const double* fixed_effects,
+			bool InitializeModeCovMat,
+			bool CalcModePostRandEff_already_done);
+
+		/*!
+		* \brief Get the current value of the negative log-likelihood
+		* \param[out] negll Negative log-likelihood
+		*/
+		void GetCurrentNegLogLikelihood(double& negll);
 
 		/*!
 		* \brief Calculate gradient and write on input (for Gaussian data, the gradient is Psi^-1*y (=y_aux))
