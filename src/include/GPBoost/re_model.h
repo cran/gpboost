@@ -300,7 +300,7 @@ namespace GPBoost {
 		* \param[out] out_predict Predictive mean at prediction points followed by the predictive covariance matrix in column-major format (if predict_cov_mat==true) or the predictive variances (if predict_var==true)
 		* \param predict_cov_mat If true, the predictive/conditional covariance matrix is calculated (default=false) (predict_var and predict_cov_mat cannot be both true
 		* \param predict_var If true, the predictive/conditional variances are calculated (default=false) (predict_var and predict_cov_mat cannot be both true)
-		* \param predict_response If true, the response variable (label) is predicted, otherwise the latent random effects (this is only relevant for non-Gaussian data) (default=false)
+		* \param predict_response If true, the response variable (label) is predicted, otherwise the latent random effects
 		* \param cluster_ids_data_pred IDs / labels indicating independent realizations of Gaussian processes (same values = same process realization) for which predictions are to be made
 		* \param re_group_data_pred Labels of group levels for the grouped random effects in column-major format (i.e. first the levels for the first effect, then for the second, etc.). Every group label needs to end with the null character '\0'
 		* \param re_group_rand_coef_data_pred Covariate data for grouped random coefficients
@@ -335,7 +335,7 @@ namespace GPBoost {
 			double cg_delta_conv_pred,
 			const double* fixed_effects,
 			const double* fixed_effects_pred,
-			bool suppress_calc_cov_factor) const;
+			bool suppress_calc_cov_factor);
 
 		/*!
 		* \brief Predict ("estimate") training data random effects
@@ -376,9 +376,10 @@ namespace GPBoost {
 		std::unique_ptr < REModelTemplate<den_mat_t, chol_den_mat_t> > re_model_den_;
 		vec_t cov_pars_; //Covariance paramters
 		vec_t init_cov_pars_; //Initial values for covariance parameters
-		bool cov_pars_initialized_ = false; //This is true of InitializeCovParsIfNotDefined() has been called
+		bool cov_pars_initialized_ = false; //This is true if InitializeCovParsIfNotDefined() has been called
 		bool covariance_matrix_has_been_factorized_ = false; //If true, the covariance matrix Psi has been factorized for the cov_pars_ (either through OptimCovPar/OptimLinRegrCoefCovPar or EvalNegLogLikelihood) and will not be factorized anew when making predictions in Predict
 		bool init_cov_pars_provided_ = false;
+		bool cov_pars_have_been_provided_for_prediction_ = false; //This is true if Predict() has been called once with cov_pars_pred != nullptr (saved in order to determine whether covariance matrix needs to be factorized again or not)
 		vec_t std_dev_cov_pars_;
 		int num_cov_pars_;
 		int num_it_ = 0; //Number of iterations done for covariance and linear regression parameter estimation

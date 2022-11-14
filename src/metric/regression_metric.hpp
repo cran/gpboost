@@ -88,7 +88,7 @@ namespace LightGBM {
 								"validation metric on the training data. If you want a metric on the training data, either (i) set 'use_gp_model_for_validation = false' "
 								"or (ii) choose the metric 'neg_log_likelihood' and use only the training data as validation data.");
 						}
-						const REModel* re_model = objective->GetGPModel();
+						REModel* re_model = objective->GetGPModel();
 						if (re_model->GaussLikelihood()) {//Gaussian data
 							std::vector<double> minus_gp_pred(num_data_);
 							re_model->Predict(nullptr, num_data_, minus_gp_pred.data(), false, false,  false, 
@@ -419,10 +419,10 @@ namespace LightGBM {
 								"validation metric on the training data. If you want a metric on the training data, either (i) set 'use_gp_model_for_validation = false' "
 								"or (ii) choose the metric 'neg_log_likelihood' and use only the training data as validation data.");
 						}
-						const REModel* re_model = objective->GetGPModel();
+						REModel* re_model = objective->GetGPModel();
 						if (re_model->GaussLikelihood()) {//Gaussian data
 							std::vector<double> re_pred(num_data_ * 2); // the first num_data_ are the negative predictive means followed by num_data_ predictive variances
-							re_model->Predict(nullptr, num_data_, re_pred.data(), false, true, false,
+							re_model->Predict(nullptr, num_data_, re_pred.data(), false, true, true,
 								nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
 								true, nullptr, -1, -1., nullptr, nullptr, true);//suppress_calc_cov_factor=true as this has been done already at the end of the last boosting update iteration
 							// Note that the re_model already has the updated response data score - label = F_t - y 
