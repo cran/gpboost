@@ -1,11 +1,11 @@
-context("GPModel_grouped_random_effects")
-
-TOLERANCE <- 1E-3
-TOLERANCE2 <- 1E-2
-TOLERANCE1 <- 1E-1
-TOL_STRICT <- 1E-6
-
 if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
+  
+  context("GPModel_grouped_random_effects")
+  
+  TOLERANCE <- 1E-3
+  TOL_LOOSE <- 1E-2
+  TOL_VERY_LOOSE <- 1E-1
+  TOL_STRICT <- 1E-6
   
   # Function that simulates uniform random variables
   sim_rand_unif <- function(n, init_c=0.1){
@@ -87,7 +87,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_equal(gp_model$get_num_optim_iter(), 5)
     # Nelder-Mead
     gp_model <- fitGPModel(group_data = group, y = y,
-                           params = list(optimizer_cov = "nelder_mead", std_dev = TRUE))
+                           params = list(optimizer_cov = "nelder_mead", std_dev = TRUE, delta_rel_conv=1e-6))
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE)
     expect_equal(gp_model$get_num_optim_iter(), 12)
     # Adam
@@ -163,10 +163,14 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_error(gp_model <- fitGPModel(group_data = group, y = y_Inf))
   })
   
-  
   test_that("linear mixed effects model with grouped random effects ", {
     
     y <- Z1 %*% b1 + X%*%beta + xi
+    # Fitting with trace = TRUE works
+    expect_error( capture.output( 
+      gp_model <- fitGPModel(group_data = group, y = y, X = X,
+                                        params = list(std_dev = TRUE, maxit = 1, trace = TRUE))
+                      , file='NUL'), NA)
     # Fit model
     gp_model <- fitGPModel(group_data = group,
                            y = y, X = X,
@@ -206,7 +210,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                            params = list(optimizer_cov = "gradient_descent", maxit=1000, std_dev = TRUE,
                                          optimizer_coef = "gradient_descent", lr_coef=1, use_nesterov_acc=TRUE))
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE)
-    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),TOLERANCE2)
+    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),TOL_LOOSE)
     expect_equal(gp_model$get_num_optim_iter(), 8)
     
     # Fit model using Nelder-Mead
@@ -214,24 +218,26 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                            y = y, X = X,
                            params = list(optimizer_cov = "nelder_mead",
                                          optimizer_coef = "nelder_mead", std_dev = FALSE, delta_rel_conv=1e-6))
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars[c(1,3)])),TOLERANCE2)
-    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef[c(1,3)])),TOLERANCE2)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars[c(1,3)])),TOL_LOOSE)
+    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef[c(1,3)])),TOL_LOOSE)
     expect_equal(gp_model$get_num_optim_iter(), 125)
     # Fit model using Adam
     gp_model <- fitGPModel(group_data = group,
                            y = y, X = X,
                            params = list(optimizer_cov = "adam", std_dev = FALSE, delta_rel_conv=1e-6))
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars[c(1,3)])),TOLERANCE2)
-    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef[c(1,3)])),TOLERANCE2)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars[c(1,3)])),TOL_LOOSE)
+    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef[c(1,3)])),TOL_LOOSE)
     expect_equal(gp_model$get_num_optim_iter(), 354)
     
     # Fit model using BFGS
     gp_model <- fitGPModel(group_data = group,
                            y = y, X = X,
                            params = list(optimizer_cov = "bfgs", std_dev = TRUE))
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOL_STRICT)
-    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),TOL_STRICT)
-    expect_equal(gp_model$get_num_optim_iter(), 11)
+    cov_pars_bfgs <- c(0.67740489, 0.03193317, 0.53484357, 0.08527806)
+    coef_bfgs <- c(2.13658952, 0.07763635, 1.98653502, 0.03952376)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_bfgs)),TOL_STRICT)
+    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef_bfgs)),TOL_STRICT)
+    expect_equal(gp_model$get_num_optim_iter(), 2)
     
     # Large data
     n_L <- 1e6 # number of samples
@@ -257,7 +263,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     
     gp_model <- fitGPModel(group_data = group_L,
                            y = y_L, X = X_L,
-                           params = list(optimizer_cov = "nelder_mead", maxit=1000))
+                           params = list(optimizer_cov = "nelder_mead", maxit=1000, delta_rel_conv=1e-6))
     cov_pars <- c(0.5004681, 0.9988288)
     coef <- c(2.000747, 1.999343)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOL_STRICT)
@@ -265,7 +271,6 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_equal(gp_model$get_num_optim_iter(), 152)
     
   })
-  
 
   test_that("Multiple grouped random effects ", {
     
@@ -382,22 +387,22 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                            group_rand_coef_data = x,
                            ind_effect_group_rand_coef = 1,
                            y = y,
-                           params = list(optimizer_cov = "nelder_mead", std_dev = FALSE))
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE1)
+                           params = list(optimizer_cov = "nelder_mead", std_dev = FALSE, delta_rel_conv=1e-6))
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOL_VERY_LOOSE)
     # BFGS
     gp_model <- fitGPModel(group_data = cbind(group,group2),
                            group_rand_coef_data = x,
                            ind_effect_group_rand_coef = 1,
                            y = y,
                            params = list(optimizer_cov = "bfgs", std_dev = FALSE))
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE2)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOL_LOOSE)
     # Adam
     gp_model <- fitGPModel(group_data = cbind(group,group2),
                            group_rand_coef_data = x,
                            ind_effect_group_rand_coef = 1,
                            y = y,
                            params = list(optimizer_cov = "adam", std_dev = FALSE))
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE2)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOL_LOOSE)
     
     # Evaluate negative log-likelihood
     nll <- gp_model$neg_log_likelihood(cov_pars=c(0.1,1,2,1.5),y=y)
@@ -461,20 +466,22 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
   test_that("not constant cluster_id's for grouped random effects ", {
     
     y <- Z1 %*% b1 + xi
-    gp_model <- fitGPModel(group_data = group, cluster_ids = cluster_ids,
+    capture.output( gp_model <- fitGPModel(group_data = group, cluster_ids = cluster_ids,
                            y = y,
                            params = list(optimizer_cov = "fisher_scoring", maxit=100, std_dev = TRUE,
                                          convergence_criterion = "relative_change_in_parameters"))
+                    , file='NUL')
     expected_values <- c(0.49348532, 0.02326312, 1.22299521, 0.17995161)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-expected_values)),TOL_STRICT)
     expect_equal(gp_model$get_num_optim_iter(), 6)
     
     # gradient descent
-    gp_model <- fitGPModel(group_data = group, cluster_ids = cluster_ids,
+    capture.output( gp_model <- fitGPModel(group_data = group, cluster_ids = cluster_ids,
                            y = y,
                            params = list(optimizer_cov = "gradient_descent", std_dev = TRUE,
                                          lr_cov = 0.1, use_nesterov_acc = FALSE, maxit = 1000,
                                          convergence_criterion = "relative_change_in_parameters"))
+                    , file='NUL')
     cov_pars_expected <- c(0.49348532, 0.02326312, 1.22299520, 0.17995161)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_expected)),TOL_STRICT)
     expect_equal(gp_model$get_num_optim_iter(), 9)
@@ -505,10 +512,11 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     
     # cluster_ids can be string 
     cluster_ids_string <- paste0(as.character(cluster_ids),"_s")
-    gp_model <- fitGPModel(group_data = group, cluster_ids = cluster_ids_string,
+    capture.output( gp_model <- fitGPModel(group_data = group, cluster_ids = cluster_ids_string,
                            y = y,
                            params = list(optimizer_cov = "fisher_scoring", maxit=100, std_dev = TRUE,
                                          convergence_criterion = "relative_change_in_parameters"))
+                    , file='NUL')
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_expected)),TOL_STRICT)
     expect_equal(gp_model$get_num_optim_iter(), 6)
     # Prediction
@@ -543,7 +551,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
 
     # cluster_ids and random coefficients
     y <- Z1%*%b1 + Z3%*%b3 + xi
-    gp_model <- fitGPModel(group_data = group,
+    capture.output( gp_model <- fitGPModel(group_data = group,
                            cluster_ids = cluster_ids,
                            group_rand_coef_data = x,
                            ind_effect_group_rand_coef = 1,
@@ -551,6 +559,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                            params = list(optimizer_cov = "gradient_descent", std_dev = FALSE,
                                          lr_cov = 0.1, use_nesterov_acc = TRUE, maxit = 1000,
                                          convergence_criterion = "relative_change_in_parameters"))
+                    , file='NUL')
     expected_values <- c(0.4927786, 1.2565095, 1.1333656)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-expected_values)),TOL_STRICT)
     expect_equal(gp_model$get_num_optim_iter(), 14)
