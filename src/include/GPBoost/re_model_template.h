@@ -207,7 +207,7 @@ namespace GPBoost {
 		* \param dim_gp_coords Dimension of the coordinates (=number of features) for Gaussian process
 		* \param gp_rand_coef_data Covariate data for Gaussian process random coefficients
 		* \param num_gp_rand_coef Number of Gaussian process random coefficients
-		* \param cov_fct Type of covariance function for Gaussian process (GP). We follow the notation and parametrization of Diggle and Ribeiro (2007) except for the Matern covariance where we follow Rassmusen and Williams (2006)
+		* \param cov_fct Type of covariance function for Gaussian process (GP)
 		* \param cov_fct_shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
 		* \param gp_approx Type of GP-approximation for handling large data
 		* \param cov_fct_taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -366,7 +366,7 @@ namespace GPBoost {
 					else {
 						SetVecchiaPredType(vecchia_pred_type);
 					}
-				}
+				}//end if gp_approx_ == "vecchia"
 				if (num_gp_rand_coef > 0) {//Random slopes
 					CHECK(gp_rand_coef_data != nullptr);
 					num_gp_rand_coef_ = num_gp_rand_coef;
@@ -565,11 +565,10 @@ namespace GPBoost {
 			const char* cg_preconditioner_type,
 			int seed_rand_vec_trace,
 			int piv_chol_rank) {
-			lr_cov_ = lr;
 			lr_cov_init_ = lr;
 			acc_rate_cov_ = acc_rate_cov;
 			max_iter_ = max_iter;
-			delta_rel_conv_ = delta_rel_conv;
+			delta_rel_conv_init_ = delta_rel_conv;
 			use_nesterov_acc_ = use_nesterov_acc;
 			nesterov_schedule_version_ = nesterov_schedule_version;
 			if (optimizer != nullptr) {
@@ -583,7 +582,6 @@ namespace GPBoost {
 					Log::REFatal("Convergence criterion '%s' is not supported.", convergence_criterion_.c_str());
 				}
 			}
-			lr_coef_ = lr_coef;
 			lr_coef_init_ = lr_coef;
 			acc_rate_coef_ = acc_rate_coef;
 			if (optimizer_coef != nullptr) {
@@ -591,7 +589,7 @@ namespace GPBoost {
 				coef_optimizer_has_been_set_ = true;
 			}
 			// Conjugate gradient algorithm related parameters
-			if (matrix_inversion_method_ == "cg") {
+			if (matrix_inversion_method_ == "iterative") {
 				cg_max_num_it_ = cg_max_num_it;
 				cg_max_num_it_tridiag_ = cg_max_num_it_tridiag;
 				cg_delta_conv_ = cg_delta_conv;
@@ -606,8 +604,47 @@ namespace GPBoost {
 					}
 				}
 			}
-			set_optim_config_has_been_called_ = true;
 		}//end SetOptimConfig
+
+		/*!
+		* \brief Set initial values for some of the optimizer parameters. 
+		* Internal default values are used if the corresponding parameters have not been set
+		*/
+		void OptimConfigSetInitialValues() {
+			lr_coef_ = lr_coef_init_;
+			SetInitialValueLRCov();
+			SetInitialValueDeltaRelConv();
+		}//end SetInternalDefaultValues
+
+		/*! * \brief Set initial values for lr_cov_ */
+		void SetInitialValueLRCov() {
+			if (lr_cov_init_ < 0.) {//A value below 0 indicates that default values should be used
+				if (optimizer_cov_pars_ == "fisher_scoring") {
+					lr_cov_ = 1.;
+				}
+				else if (optimizer_cov_pars_ == "gradient_descent") {
+					lr_cov_ = 0.1;
+				}
+			}
+			else {
+				lr_cov_ = lr_cov_init_;
+			}
+		}//end SetInitialValueLRCov
+
+		/*! * \brief Set initial values for delta_rel_conv_ */
+		void SetInitialValueDeltaRelConv() {
+			if (delta_rel_conv_init_ < 0) {
+				if (optimizer_cov_pars_ == "nelder_mead") {
+					delta_rel_conv_ = 1e-8;
+				}
+				else {
+					delta_rel_conv_ = 1e-6;
+				}
+			}
+			else {
+				delta_rel_conv_ = delta_rel_conv_init_;
+			}
+		}//end SetInitialValueDeltaRelConv
 
 		/*!
 		* \brief Find covariance parameters and linear regression coefficients (if there are any) that minimize the (approximate) negative log-ligelihood
@@ -674,25 +711,7 @@ namespace GPBoost {
 				}
 			}
 			// Initialization of variables
-			lr_cov_ = lr_cov_init_;
-			lr_coef_ = lr_coef_init_;
-			if (lr_cov_ < 0.) {//a value below 0 indicates that the default values should be used
-				if (optimizer_cov_pars_ == "fisher_scoring") {
-					lr_cov_ = 1.;
-				}
-				else if (optimizer_cov_pars_ == "gradient_descent") {
-					lr_cov_ = 0.1;
-				}
-			}
-			lr_cov_init_after_default_ = lr_cov_;
-			if (!set_optim_config_has_been_called_) {
-				if (optimizer_cov_pars_ == "nelder_mead") {
-					delta_rel_conv_ = 1e-8;
-				}
-				else {
-					delta_rel_conv_ = 1e-6;
-				}
-			}
+			OptimConfigSetInitialValues();
 			if (covariate_data == nullptr) {
 				has_covariates_ = false;
 			}
@@ -941,7 +960,7 @@ namespace GPBoost {
 						// Reset lr_cov_ to its initial value in case beta changes substantially after lr_cov_ is very small
 						if (lr_cov_is_small && learn_covariance_parameters) {
 							if ((beta - beta_before_lr_cov_small).norm() > MIN_REL_CHANGE_IN_OTHER_PARS_FOR_RESETTING_LR_ * beta_before_lr_cov_small.norm()) {
-								lr_cov_ = lr_cov_init_after_default_;
+								SetInitialValueLRCov();
 								lr_cov_is_small = false;
 								if (!gauss_likelihood_) {
 									//Reset the initial modes to 0. Otherwise, they can get stuck
@@ -1080,6 +1099,7 @@ namespace GPBoost {
 						likelihood_[cluster_i]->InitializeModeAvec();
 					}
 				}
+				SetInitialValueDeltaRelConv();
 				OptimExternal(cov_pars,
 					beta,
 					fixed_effects,
@@ -1542,7 +1562,8 @@ namespace GPBoost {
 							false,
 							cov_grad_cluster_i.data(),
 							empty_unused_vec,
-							false);
+							false,
+							num_comps_total_);
 					}//end gp_approx_ == "vecchia"
 					else {//not gp_approx_ == "vecchia"
 						if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
@@ -1706,7 +1727,7 @@ namespace GPBoost {
 					num_neighbors_pred_ = num_neighbors_pred;
 				}
 			}
-			if (matrix_inversion_method_ == "cg") {
+			if (matrix_inversion_method_ == "iterative") {
 				if (cg_delta_conv_pred > 0) {
 					cg_delta_conv_pred_ = cg_delta_conv_pred;
 				}
@@ -1875,7 +1896,7 @@ namespace GPBoost {
 					num_neighbors_pred_ = num_neighbors_pred;
 				}
 			}
-			if (matrix_inversion_method_ == "cg") {
+			if (matrix_inversion_method_ == "iterative") {
 				if (cg_delta_conv_pred > 0) {
 					cg_delta_conv_pred_ = cg_delta_conv_pred;
 				}
@@ -2747,14 +2768,19 @@ namespace GPBoost {
 		const std::set<string_t> SUPPORTED_CONV_CRIT_{ "relative_change_in_parameters", "relative_change_in_log_likelihood" };
 		/*! \brief Maximal number of iterations for covariance parameter and linear regression parameter estimation */
 		int max_iter_ = 1000;
-		/*! \brief Convergence tolerance for covariance and linear regression coefficient estimation. The algorithm stops if the relative change in eiher the (approximate) log-likelihood or the parameters is below this value. For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood */
-		double delta_rel_conv_;//The default value is set in 'OptimLinRegrCoefCovPar' if 'SetOptimConfig' has not been called
-		/*! \brief Learning rate for covariance parameters. If lr <= 0, internal default values are used (0.1 for "gradient_descent" and 1. for "fisher_scoring") */
-		double lr_cov_ = -1.;
-		/*! \brief Initial learning rate for covariance parameters (lr_cov_ can be decreased) */
+		/*! 
+		\brief Convergence tolerance for covariance and linear regression coefficient estimation. 
+		The algorithm stops if the relative change in either the (approximate) log-likelihood or the parameters is below this value. 
+		For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood.
+		If delta_rel_conv_init_ < 0, internal default values are set in 'OptimConfigSetInitialValues'
+		*/
+		double delta_rel_conv_;
+		/*! \brief Initial convergence tolerance (to remember as default values for delta_rel_conv_ are different for 'nelder_mead' vs. other optimizers and the optimization might get restarted) */
+		double delta_rel_conv_init_ = -1;
+		/*! \brief Learning rate for covariance parameters. If lr_cov_init_ < 0, internal default values are set in 'OptimConfigSetInitialValues' */
+		double lr_cov_;
+		/*! \brief Initial learning rate for covariance parameters (to remember as lr_cov_ can be decreased) */
 		double lr_cov_init_ = -1;
-		/*! \brief Initial learning rate for covariance parameters (lr_cov_ can be decreased) after checking for default values */
-		double lr_cov_init_after_default_;
 		/*! \brief Indicates whether Nesterov acceleration is used in the gradient descent for finding the covariance parameters (only used for "gradient_descent") */
 		bool use_nesterov_acc_ = true;
 		/*! \brief Acceleration rate for covariance parameters for Nesterov acceleration (only relevant if use_nesterov_acc and nesterov_schedule_version == 0) */
@@ -2774,8 +2800,8 @@ namespace GPBoost {
 		/*! \brief List of supported optimizers for regression coefficients for non-Gaussian likelihoods */
 		const std::set<string_t> SUPPORTED_OPTIM_COEF_NONGAUSS_{ "gradient_descent", "nelder_mead", "bfgs", "adam" };
 		/*! \brief Learning rate for fixed-effect linear coefficients */
-		double lr_coef_ = 0.1;
-		/*! \brief Initial learning rate for fixed-effect linear coefficients (lr_coef_ can be decreased) */
+		double lr_coef_;
+		/*! \brief Initial learning rate for fixed-effect linear coefficients (to remember as lr_coef_ can be decreased) */
 		double lr_coef_init_ = 0.1;
 		/*! \brief Acceleration rate for coefficients for Nesterov acceleration (only relevant if use_nesterov_acc and nesterov_schedule_version == 0) */
 		double acc_rate_coef_ = 0.5;
@@ -2798,7 +2824,7 @@ namespace GPBoost {
 		/*! \brief Matrix inversion method */
 		string_t matrix_inversion_method_ = "cholesky";
 		/*! \brief Supported matrix inversion methods */
-		const std::set<string_t> SUPPORTED_MATRIX_INVERSION_METHODS_{ "cholesky", "cg" };
+		const std::set<string_t> SUPPORTED_MATRIX_INVERSION_METHODS_{ "cholesky", "iterative" };
 		/*! \brief Maximal number of iterations for conjugate gradient algorithm */
 		int cg_max_num_it_ = 1000;
 		/*! \brief Maximal number of iterations for conjugate gradient algorithm when being run as Lanczos algorithm for tridiagonalization */
@@ -2819,8 +2845,6 @@ namespace GPBoost {
 		const std::set<string_t> SUPPORTED_CG_PRECONDITIONER_TYPE_{ "none" };
 		/*! \brief Rank of the pivoted cholseky decomposition used for the preconditioner of the conjugate gradient algorithm */
 		int piv_chol_rank_ = 100;
-		/*! \brief true if 'SetOptimConfig' has been called */
-		bool set_optim_config_has_been_called_ = false;
 
 		// WOODBURY IDENTITY FOR GROUPED RANDOM EFFECTS ONLY
 		/*! \brief Collects matrices Z^T (only saved when only_grouped_REs_use_woodbury_identity_=true i.e. when there are only grouped random effects, otherwise these matrices are saved only in the indepedent RE components) */
@@ -2851,6 +2875,8 @@ namespace GPBoost {
 		string_t vecchia_ordering_ = "random";
 		/*! \brief List of supported options for orderings of the Vecchia approximation */
 		const std::set<string_t> SUPPORTED_VECCHIA_ORDERING_{ "none", "random" };
+		/*! \brief The way how neighbors are selected */
+		string_t vecchia_neighbor_selection_ = "nearest";
 		/*! \brief The number of neighbors used in the Vecchia approximation for making predictions */
 		int num_neighbors_pred_;
 		/*!
@@ -3179,7 +3205,8 @@ namespace GPBoost {
 						true,
 						nullptr,
 						grad_F_cluster_i,
-						false);
+						false,
+						num_comps_total_);
 				}
 				else {//not gp_approx_ == "vecchia"
 					if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
@@ -3262,7 +3289,7 @@ namespace GPBoost {
 		* \param cluster_i Cluster index for which the Cholesky factor is calculated
 		*/
 		template <class T_aux = T_mat, typename std::enable_if <std::is_same<sp_mat_t, T_aux>::value || std::is_same<sp_mat_rm_t, T_aux>::value>::type* = nullptr >
-		void CalcChol(T_mat& psi, data_size_t cluster_i) {
+		void CalcChol(const T_mat& psi, data_size_t cluster_i) {
 			if (!chol_fact_pattern_analyzed_) {
 				chol_facts_solve_[cluster_i].analyzePattern(psi);
 				if (cluster_i == unique_clusters_.back()) {
@@ -3284,7 +3311,7 @@ namespace GPBoost {
 			chol_facts_solve_[cluster_i].factorize(psi);
 		}
 		template <class T_aux = T_mat, typename std::enable_if <std::is_same<den_mat_t, T_aux>::value>::type* = nullptr >
-		void CalcChol(den_mat_t& psi, data_size_t cluster_i) {
+		void CalcChol(const den_mat_t& psi, data_size_t cluster_i) {
 			chol_facts_solve_[cluster_i].compute(psi);
 		}
 
@@ -3871,7 +3898,8 @@ namespace GPBoost {
 				false)));
 			bool has_duplicates = check_has_duplicates;
 			find_nearest_neighbors_Vecchia_fast(gp_coords_mat, num_data_per_cluster[cluster_i], num_neighbors,
-				nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, -1, has_duplicates);
+				nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, -1, has_duplicates,
+				vecchia_neighbor_selection_, rng_);
 			if (check_has_duplicates) {
 				has_duplicates_coords_ = has_duplicates_coords_ || has_duplicates;
 				if (!gauss_likelihood_ && has_duplicates_coords_) {
@@ -4466,15 +4494,18 @@ namespace GPBoost {
 			if (!gauss_likelihood_) {
 				D_inv_cluster_i.diagonal().array() = 0.;
 			}
+			bool exclude_marg_var_grad = !gauss_likelihood_ && num_comps_total_ == 1;//gradient is not needed if there is only one GP for non-Gaussian data
 			if (calc_gradient) {
 				B_grad_cluster_i = std::vector<sp_mat_t>(num_par_gp);//derivative of B = derviateive of (-A)
 				D_grad_cluster_i = std::vector<sp_mat_t>(num_par_gp);//derivative of D
 				for (int ipar = 0; ipar < num_par_gp; ++ipar) {
-					B_grad_cluster_i[ipar] = sp_mat_t(num_data_cluster_i, num_data_cluster_i);
-					B_grad_cluster_i[ipar].setFromTriplets(entries_init_B_grad_cluster_i.begin(), entries_init_B_grad_cluster_i.end());
-					D_grad_cluster_i[ipar] = sp_mat_t(num_data_cluster_i, num_data_cluster_i);
-					D_grad_cluster_i[ipar].setIdentity();//Put 0 on the diagonal
-					D_grad_cluster_i[ipar].diagonal().array() = 0.;
+					if (!(exclude_marg_var_grad && ipar == 0)) {
+						B_grad_cluster_i[ipar] = sp_mat_t(num_data_cluster_i, num_data_cluster_i);
+						B_grad_cluster_i[ipar].setFromTriplets(entries_init_B_grad_cluster_i.begin(), entries_init_B_grad_cluster_i.end());
+						D_grad_cluster_i[ipar] = sp_mat_t(num_data_cluster_i, num_data_cluster_i);
+						D_grad_cluster_i[ipar].setIdentity();//Put 0 on the diagonal
+						D_grad_cluster_i[ipar].diagonal().array() = 0.;
+					}
 				}
 			}//end initialization
 #pragma omp parallel for schedule(static)
@@ -4531,15 +4562,17 @@ namespace GPBoost {
 					}
 					D_inv_cluster_i.coeffRef(i, i) += d_comp_j;
 					if (calc_gradient) {
-						if (transf_scale) {
-							D_grad_cluster_i[j * num_par_comp].coeffRef(i, i) = d_comp_j;//derivative of the covariance function wrt the variance. derivative of the covariance function wrt to range is zero on the diagonal
-						}
-						else {
-							if (j == 0) {
-								D_grad_cluster_i[j * num_par_comp].coeffRef(i, i) = 1.;//1's on the diagonal on the orignal scale
+						if (!(exclude_marg_var_grad && j == 0)) {
+							if (transf_scale) {
+								D_grad_cluster_i[j * num_par_comp].coeffRef(i, i) = d_comp_j;//derivative of the covariance function wrt the variance. derivative of the covariance function wrt to range is zero on the diagonal
 							}
 							else {
-								D_grad_cluster_i[j * num_par_comp].coeffRef(i, i) = z_outer_z_obs_neighbors_cluster_i[i][j - 1](0, 0);
+								if (j == 0) {
+									D_grad_cluster_i[j * num_par_comp].coeffRef(i, i) = 1.;//1's on the diagonal on the orignal scale
+								}
+								else {
+									D_grad_cluster_i[j * num_par_comp].coeffRef(i, i) = z_outer_z_obs_neighbors_cluster_i[i][j - 1](0, 0);
+								}
 							}
 						}
 					}
@@ -4557,9 +4590,9 @@ namespace GPBoost {
 							cov_mat_between_neighbors.diagonal().array() += nugget_var;
 						}
 					}
-					//else {//Seems unnecessary
-					//	cov_mat_between_neighbors.diagonal().array() += 1e-10;//Avoid numerical problems when there is no nugget effect
-					//}
+					else {
+						cov_mat_between_neighbors.diagonal().array() += EPSILON_ADD_COVARIANCE_STABLE;//Avoid numerical problems when there is no nugget effect
+					}
 					den_mat_t A_i(1, num_nn);
 					den_mat_t cov_mat_between_neighbors_inv;
 					den_mat_t A_i_grad_sigma2;
@@ -4586,19 +4619,21 @@ namespace GPBoost {
 						for (int j = 0; j < num_gp_total_; ++j) {
 							int ind_first_par = j * num_par_comp;
 							for (int ipar = 0; ipar < num_par_comp; ++ipar) {
-								A_i_grad = (cov_grad_mats_obs_neighbors[ind_first_par + ipar] * cov_mat_between_neighbors_inv) -
-									(cov_mat_obs_neighbors * cov_mat_between_neighbors_inv *
-										cov_grad_mats_between_neighbors[ind_first_par + ipar] * cov_mat_between_neighbors_inv);
-								for (int inn = 0; inn < num_nn; ++inn) {
-									B_grad_cluster_i[ind_first_par + ipar].coeffRef(i, nearest_neighbors_cluster_i[i][inn]) = -A_i_grad(0, inn);
-								}
-								if (ipar == 0) {
-									D_grad_cluster_i[ind_first_par + ipar].coeffRef(i, i) -= ((A_i_grad * cov_mat_obs_neighbors.transpose())(0, 0) +
-										(A_i * cov_grad_mats_obs_neighbors[ind_first_par + ipar].transpose())(0, 0));//add to derivative of diagonal elements for marginal variance 
-								}
-								else {
-									D_grad_cluster_i[ind_first_par + ipar].coeffRef(i, i) = -((A_i_grad * cov_mat_obs_neighbors.transpose())(0, 0) +
-										(A_i * cov_grad_mats_obs_neighbors[ind_first_par + ipar].transpose())(0, 0));//don't add to existing values since derivative of diagonal is zero for range
+								if (!(exclude_marg_var_grad && ipar == 0)) {
+									A_i_grad = (cov_grad_mats_obs_neighbors[ind_first_par + ipar] * cov_mat_between_neighbors_inv) -
+										(cov_mat_obs_neighbors * cov_mat_between_neighbors_inv *
+											cov_grad_mats_between_neighbors[ind_first_par + ipar] * cov_mat_between_neighbors_inv);
+									for (int inn = 0; inn < num_nn; ++inn) {
+										B_grad_cluster_i[ind_first_par + ipar].coeffRef(i, nearest_neighbors_cluster_i[i][inn]) = -A_i_grad(0, inn);
+									}
+									if (ipar == 0) {
+										D_grad_cluster_i[ind_first_par + ipar].coeffRef(i, i) -= ((A_i_grad * cov_mat_obs_neighbors.transpose())(0, 0) +
+											(A_i * cov_grad_mats_obs_neighbors[ind_first_par + ipar].transpose())(0, 0));//add to derivative of diagonal elements for marginal variance 
+									}
+									else {
+										D_grad_cluster_i[ind_first_par + ipar].coeffRef(i, i) = -((A_i_grad * cov_mat_obs_neighbors.transpose())(0, 0) +
+											(A_i * cov_grad_mats_obs_neighbors[ind_first_par + ipar].transpose())(0, 0));//don't add to existing values since derivative of diagonal is zero for range
+									}
 								}
 							}
 						}
@@ -5703,11 +5738,13 @@ namespace GPBoost {
 			bool check_has_duplicates = false;
 			if (CondObsOnly) {
 				find_nearest_neighbors_Vecchia_fast(coords_all, num_data_cli + num_data_pred_cli, num_neighbors_pred_,
-					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, num_data_cli, num_data_cli - 1, check_has_duplicates);
+					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, num_data_cli, num_data_cli - 1, check_has_duplicates,
+					vecchia_neighbor_selection_, rng_);
 			}
 			else {//find neighbors among both the observed and prediction locations
 				find_nearest_neighbors_Vecchia_fast(coords_all, num_data_cli + num_data_pred_cli, num_neighbors_pred_,
-					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, num_data_cli, -1, check_has_duplicates);
+					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, num_data_cli, -1, check_has_duplicates,
+					vecchia_neighbor_selection_, rng_);
 			}
 			//Random coefficients
 			std::vector<std::vector<den_mat_t>> z_outer_z_obs_neighbors_cluster_i(num_data_pred_cli);
@@ -5892,7 +5929,8 @@ namespace GPBoost {
 			std::vector<den_mat_t> dist_between_neighbors_cluster_i(num_data_tot);
 			bool check_has_duplicates = false;
 			find_nearest_neighbors_Vecchia_fast(coords_all, num_data_tot, num_neighbors_pred_,
-				nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, -1, check_has_duplicates);
+				nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, -1, check_has_duplicates,
+				vecchia_neighbor_selection_, rng_);
 			//Prepare data for random coefficients
 			std::vector<std::vector<den_mat_t>> z_outer_z_obs_neighbors_cluster_i(num_data_tot);
 			if (num_gp_rand_coef_ > 0) {
@@ -6119,11 +6157,13 @@ namespace GPBoost {
 			bool check_has_duplicates = false;
 			if (CondObsOnly) {//find neighbors among both the observed locations only
 				find_nearest_neighbors_Vecchia_fast(coords_all_unique, num_coord_unique, num_neighbors_pred_,
-					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, num_coord_unique_obs - 1, check_has_duplicates);
+					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, num_coord_unique_obs - 1, check_has_duplicates,
+					vecchia_neighbor_selection_, rng_);
 			}
 			else {//find neighbors among both the observed and prediction locations
 				find_nearest_neighbors_Vecchia_fast(coords_all_unique, num_coord_unique, num_neighbors_pred_,
-					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, -1, check_has_duplicates);
+					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, -1, check_has_duplicates,
+					vecchia_neighbor_selection_, rng_);
 			}
 			// Determine Triplet for initializing Bpo and Bp
 			std::vector<Triplet_t> entries_init_B;
