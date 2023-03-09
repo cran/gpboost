@@ -39,7 +39,7 @@ simulate_response_variable <- function (lp, rand_eff, likelihood) {
 # Choose likelihood: either "gaussian" (=regression), 
 #                     "bernoulli_probit", "bernoulli_logit", (=classification)
 #                     "poisson", or "gamma"
-likelihood <- "gaussian"
+likelihood <- "gamma"
 
 #################################
 # Grouped random effects
@@ -99,10 +99,9 @@ summary(gp_model)
 # - change optimization algorithm options (see below)
 # For available optimization options, see
 #   https://github.com/fabsig/GPBoost/blob/master/docs/Main_parameters.rst#optimization-parameters
-# gp_model <- fitGPModel(group_data = group, y = y, X = X,
-#                        params = list(trace=TRUE,
-#                                      std_dev = TRUE,
-#                                      optimizer_cov= "gradient_descent",
+# gp_model <- fitGPModel(group_data = group, y = y, X = X, likelihood = likelihood,
+#                        params = list(trace = TRUE, std_dev = TRUE,
+#                                      optimizer_cov = "gradient_descent",
 #                                      lr_cov = 0.1, use_nesterov_acc = TRUE, maxit = 100))
 
 # --------------------Prediction----------------
@@ -121,21 +120,24 @@ pred_resp$var # Predicted variance of response variable
 
 # --------------------Predict ("estimate") training data random effects----------------
 # The following shows how to obtain predicted (="estimated") random effects for the training data
-all_training_data_random_effects <- predict_training_data_random_effects(gp_model)
+all_training_data_random_effects <- predict_training_data_random_effects(gp_model, predict_var = TRUE)
 # The function 'predict_training_data_random_effects' returns predicted random effects for all data points.
 # Unique random effects for every group can be obtained as follows
 first_occurences <- match(unique(group), group)
-training_data_random_effects <- all_training_data_random_effects[first_occurences] 
+training_data_random_effects <- all_training_data_random_effects[first_occurences,]
+head(training_data_random_effects) # Training data random effects: predictive means and variances
 # Compare true and predicted random effects
-plot(b, training_data_random_effects, xlab="truth", ylab="predicted",
+plot(b, training_data_random_effects[,1], xlab="truth", ylab="predicted",
      main="Comparison of true and predicted random effects")
 # Adding the overall intercept gives the group-wise intercepts
 group_wise_intercepts <- gp_model$get_coef()[1] + training_data_random_effects
-# Alternatively, this can also be done as follows
+# The above is equivalent to the following:
 # group_unique <- unique(group)
 # X_zero <- cbind(rep(0,length(group_unique)),rep(0,length(group_unique)))
-# pred_random_effects <- predict(gp_model, group_data_pred = group_unique, X_pred = X_zero)
-# sum(abs(training_data_random_effects - pred_random_effects$mu))
+# pred_random_effects <- predict(gp_model, group_data_pred = group_unique, X_pred = X_zero,
+#                                predict_response = FALSE, predict_var = TRUE)
+# sum(abs(training_data_random_effects[,1] - pred_random_effects$mu))
+# sum(abs(training_data_random_effects[,2] - pred_random_effects$var))
 
 #--------------------Saving a GPModel and loading it from a file----------------
 # Save model to file
@@ -174,9 +176,11 @@ pred_random_slopes <- all_training_data_random_effects[first_occurences_1,3]
 pred_random_effects_crossed <- all_training_data_random_effects[first_occurences_2,2]
 # Compare true and predicted random effects
 plot(b, pred_random_effects, xlab="truth", ylab="predicted",
-     main="Comparison of true and predicted random effects")
-points(b_random_slope, pred_random_slopes, col=2, pch=2, lwd=1.5)
-points(b_crossed, pred_random_effects_crossed, col=4, pch=4, lwd=1.5)
+     main="Comparison of true and predicted random effects", lwd=2)
+points(b_random_slope, pred_random_slopes, col=2, pch=2, lwd=2)
+points(b_crossed, pred_random_effects_crossed, col=4, pch=4, lwd=2)
+legend(x =  "topleft", legend = c("1. random effects", "Random slopes", "2. crossed random effects"),
+       col = c(1,2,4), pch = c(1,2,4), bty = "n")
 
 # Random slope model in which an intercept random effect is dropped / not included
 gp_model <- fitGPModel(group_data = cbind(group,group_crossed), group_rand_coef_data = x,
@@ -345,13 +349,16 @@ plot3 <- ggplot(data = data.frame(s_1=coords_test[,1] ,s_2=coords_test[,2], b=sq
 grid.arrange(plot1, plot2, plot3, ncol=2)
 
 # Predict latent GP at training data locations (=smoothing)
-GP_smooth <- predict_training_data_random_effects(gp_model)
+GP_smooth <- predict_training_data_random_effects(gp_model, predict_var = TRUE)
+head(GP_smooth) # Training data random effects: predictive means and variances
 # Compare true and predicted random effects
-plot(b_1_train, GP_smooth, xlab="truth", ylab="predicted",
+plot(b_1_train, GP_smooth[,1], xlab="truth", ylab="predicted",
      main="Comparison of true and predicted random effects")
-# The above is equivalent to the following
-# GP_smooth2 = predict(gp_model, gp_coords_pred=coords_train)
-# sum(abs(GP_smooth - GP_smooth2$mu))
+# The above is equivalent to the following:
+# GP_smooth2 = predict(gp_model, gp_coords_pred = coords_train,
+#                      predict_response = FALSE, predict_var = TRUE)
+# sum(abs(GP_smooth[,1] - GP_smooth2$mu))
+# sum(abs(GP_smooth[,2] - GP_smooth2$var))
 
 #--------------------Gaussian process model with linear mean function----------------
 # Include a liner regression term instead of assuming a zero-mean a.k.a. "universal Kriging"
@@ -395,9 +402,11 @@ summary(gp_model)
 GP_smooth <- predict_training_data_random_effects(gp_model)
 # Compare true and predicted random effects
 plot(b_1_train, GP_smooth[,1], xlab="truth", ylab="predicted",
-     main="Comparison of true and predicted random effects")
+     main="Comparison of true and predicted random effects", lwd=1.5)
 points(b_2, GP_smooth[,2], col=2, pch=2, lwd=1.5)
 points(b_3, GP_smooth[,3], col=4, pch=4, lwd=1.5)
+legend(x =  "topleft", legend = c("Intercept GP", "1. random coef. GP", "2. random coef. GP"),
+       col = c(1,2,4), pch = c(1,2,4), bty = "n")
 
 # --------------------Using cluster_ids for independent realizations of GPs----------------
 cluster_ids = rep(0,ntrain)

@@ -30,18 +30,6 @@
 #include <chrono>  // only for debugging
 #include <thread> // only for debugging
 
-//std::this_thread::sleep_for(std::chrono::milliseconds(200));//only for debugging
-// 
-//Log::REInfo("start");//only for debugging
-//std::chrono::steady_clock::time_point begin, end;//only for debugging
-//double el_time;//only for debugging
-//begin = std::chrono::steady_clock::now();//only for debugging
-//
-//end = std::chrono::steady_clock::now();//only for debugging
-//el_time = (double)(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()) / 1000000.;//only for debugging
-//Log::REInfo(" time until = %g ", el_time);
-//begin = std::chrono::steady_clock::now();//only for debugging
-
 #ifndef M_PI
 #define M_PI      3.1415926535897932384626433832795029
 #endif
@@ -65,7 +53,7 @@ namespace GPBoost {
 		OptDataOptimLib(REModelTemplate<T_mat, T_chol>* re_model_templ,
 			const double* fixed_effects,
 			bool learn_covariance_parameters,
-			vec_t& cov_pars,
+			const vec_t& cov_pars,
 			bool profile_out_marginal_variance) {
 			re_model_templ_ = re_model_templ;
 			fixed_effects_ = fixed_effects;
@@ -76,7 +64,7 @@ namespace GPBoost {
 		REModelTemplate<T_mat, T_chol>* re_model_templ_;
 		const double* fixed_effects_;//Externally provided fixed effects component of location parameter (only used for non-Gaussian data)
 		bool learn_covariance_parameters_;//Indicates whether covariance parameters are optimized or not
-		vec_t cov_pars_;//vector of covariance paramters (only used in case the covariance paramters are not estimated)
+		vec_t cov_pars_;//vector of covariance parameters (only used in case the covariance parameters are not estimated)
 		bool profile_out_marginal_variance_;// If true, the error variance sigma is profiled out(= use closed - form expression for error / nugget variance)
 
 	};//end EvalLLforOptim class definition
@@ -88,17 +76,18 @@ namespace GPBoost {
 	* \param opt_data additional data passed to the function that is optimized
 	*/
 	template<typename T_mat, typename T_chol>
-	double EvalLLforOptimLib(const vec_t& pars, vec_t* gradient, void* opt_data)
-	{
+	double EvalLLforOptimLib(const vec_t& pars,
+		vec_t* gradient,
+		void* opt_data) {
 		OptDataOptimLib<T_mat, T_chol>* objfn_data = reinterpret_cast<OptDataOptimLib<T_mat, T_chol>*>(opt_data);
 		REModelTemplate<T_mat, T_chol>* re_model_templ_ = objfn_data->re_model_templ_;
 		double neg_log_likelihood;
-		vec_t cov_pars, beta, fixed_effects_vec;
+		vec_t cov_pars, beta, fixed_effects_vec, aux_pars;
 		const double* fixed_effects_ptr;
 		bool gradient_contains_error_var = re_model_templ_->GetLikelihood() == "gaussian" && !(objfn_data->profile_out_marginal_variance_);//If true, the error variance parameter (=nugget effect) is also included in the gradient, otherwise not
 		bool has_covariates = re_model_templ_->HasCovariates();
-		// Determine number of covariance and linear regression coefficient paramters
-		int num_cov_pars_optim, num_covariates;
+		// Determine number of covariance and linear regression coefficient parameters
+		int num_cov_pars_optim, num_covariates, num_aux_pars;
 		if (objfn_data->learn_covariance_parameters_) {
 			num_cov_pars_optim = re_model_templ_->GetNumCovPar();
 			if (objfn_data->profile_out_marginal_variance_) {
@@ -109,20 +98,19 @@ namespace GPBoost {
 			num_cov_pars_optim = 0;
 		}
 		if (has_covariates) {
-			num_covariates = (int)pars.size() - num_cov_pars_optim;
+			num_covariates = re_model_templ_->GetNumCoef();
 		}
 		else {
 			num_covariates = 0;
 		}
-		// Extract covariance paramters and regression coefficients from pars vector
-		if (has_covariates) {
-			beta = pars.segment(num_cov_pars_optim, num_covariates);
-			re_model_templ_->UpdateFixedEffects(beta, objfn_data->fixed_effects_, fixed_effects_vec);
-			fixed_effects_ptr = fixed_effects_vec.data();
-		}//end has_covariates
-		else {//no covariates
-			fixed_effects_ptr = objfn_data->fixed_effects_;
+		if (re_model_templ_->EstimateAuxPars()) {
+			num_aux_pars = re_model_templ_->NumAuxPars();
 		}
+		else {
+			num_aux_pars = 0;
+		}
+		CHECK((int)pars.size() == num_cov_pars_optim + num_covariates + num_aux_pars);
+		// Extract covariance parameters, regression coefficients, and additional likelihood parameters from pars vector
 		if (objfn_data->learn_covariance_parameters_) {
 			if (objfn_data->profile_out_marginal_variance_) {
 				cov_pars = vec_t(num_cov_pars_optim + 1);
@@ -136,6 +124,18 @@ namespace GPBoost {
 		else {
 			cov_pars = objfn_data->cov_pars_;
 		}
+		if (has_covariates) {
+			beta = pars.segment(num_cov_pars_optim, num_covariates);
+			re_model_templ_->UpdateFixedEffects(beta, objfn_data->fixed_effects_, fixed_effects_vec);
+			fixed_effects_ptr = fixed_effects_vec.data();
+		}//end has_covariates
+		else {//no covariates
+			fixed_effects_ptr = objfn_data->fixed_effects_;
+		}
+		if (re_model_templ_->EstimateAuxPars()) {
+			aux_pars = pars.segment(num_cov_pars_optim + num_covariates, num_aux_pars).array().exp().matrix();
+			re_model_templ_->SetAuxPars(aux_pars.data());
+		}
 		// Calculate objective function
 		if (objfn_data->profile_out_marginal_variance_) {
 			if (objfn_data->learn_covariance_parameters_) {
@@ -144,7 +144,7 @@ namespace GPBoost {
 				re_model_templ_->EvalNegLogLikelihoodOnlyUpdateNuggetVariance(cov_pars[0], neg_log_likelihood);
 			}
 			else {
-				re_model_templ_->EvalNegLogLikelihoodOnlyUpdateFixedEffects(cov_pars.data(), neg_log_likelihood);
+				re_model_templ_->EvalNegLogLikelihoodOnlyUpdateFixedEffects(cov_pars[0], neg_log_likelihood);
 			}
 		}
 		else {
@@ -153,15 +153,20 @@ namespace GPBoost {
 		}
 		// Calculate gradient
 		if (gradient) {
+			vec_t grad_cov;
+			if (objfn_data->learn_covariance_parameters_ || re_model_templ_->EstimateAuxPars()) {
+				re_model_templ_->CalcGradCovParAuxPars(cov_pars, grad_cov, gradient_contains_error_var, false, fixed_effects_ptr);
+			}
 			if (objfn_data->learn_covariance_parameters_) {
-				vec_t grad_cov;
-				re_model_templ_->CalcCovParGrad(cov_pars, grad_cov, gradient_contains_error_var, false, fixed_effects_ptr);
-				(*gradient).segment(0, num_cov_pars_optim) = grad_cov;
+				(*gradient).segment(0, num_cov_pars_optim) = grad_cov.segment(0, num_cov_pars_optim);
 			}
 			if (has_covariates) {
 				vec_t grad_beta;
-				re_model_templ_->CalcLinCoefGrad(cov_pars[0], beta, grad_beta, fixed_effects_ptr);
+				re_model_templ_->CalcGradLinCoef(cov_pars[0], beta, grad_beta, fixed_effects_ptr);
 				(*gradient).segment(num_cov_pars_optim, num_covariates) = grad_beta;
+			}
+			if (re_model_templ_->EstimateAuxPars()) {
+				(*gradient).segment(num_cov_pars_optim + num_covariates, num_aux_pars) = grad_cov.segment(num_cov_pars_optim, num_aux_pars);
 			}
 		}
 		// Check for NA or Inf
@@ -355,15 +360,7 @@ namespace GPBoost {
 							Log::REFatal("Ordering of type '%s' is not supported for the Veccia approximation.", vecchia_ordering_.c_str());
 						}
 					}
-					if (vecchia_pred_type == nullptr) {
-						if (gauss_likelihood_) {
-							vecchia_pred_type_ = "order_obs_first_cond_obs_only";
-						}
-						else {
-							vecchia_pred_type_ = "latent_order_obs_first_cond_obs_only";
-						}
-					}
-					else {
+					if (vecchia_pred_type != nullptr) {
 						SetVecchiaPredType(vecchia_pred_type);
 					}
 				}//end if gp_approx_ == "vecchia"
@@ -424,12 +421,7 @@ namespace GPBoost {
 			CheckCompatibilitySpecialOptions();
 			InitializeLikelihoods(likelihood_strg);
 			DetermineCovarianceParameterIndicesNumCovPars();
-			if (gauss_likelihood_) {
-				optimizer_coef_ = "wls";
-			}
-			else {
-				optimizer_coef_ = "gradient_descent";
-			}
+			InitializeDefaultSettings();
 		}//end REModelTemplate
 
 		/*! \brief Destructor */
@@ -504,22 +496,7 @@ namespace GPBoost {
 			}
 			InitializeLikelihoods(likelihood);
 			DetermineCovarianceParameterIndicesNumCovPars();
-			if (!coef_optimizer_has_been_set_) {
-				if (gauss_likelihood_) {
-					optimizer_coef_ = "wls";
-				}
-				else {
-					optimizer_coef_ = "gradient_descent";
-				}
-			}
-			if (!vecchia_pred_type_has_been_set_) {
-				if (gauss_likelihood_) {
-					vecchia_pred_type_ = "order_obs_first_cond_obs_only";
-				}
-				else {
-					vecchia_pred_type_ = "latent_order_obs_first_cond_obs_only";
-				}
-			}
+			InitializeDefaultSettings();
 		}
 
 		/*!
@@ -544,6 +521,7 @@ namespace GPBoost {
 		* \param cg_preconditioner_type Type of preconditioner used for the conjugate gradient algorithm
 		* \param seed_rand_vec_trace Seed number to generate random vectors (e.g. Rademacher) for stochastic approximation of the trace of a matrix
 		* \param piv_chol_rank Rank of the pivoted cholseky decomposition used as preconditioner of the conjugate gradient algorithm
+		* \param estimate_aux_pars If true, any additional parameters for non-Gaussian likelihoods are also estimated (e.g., shape parameter of gamma likelihood)
 		*/
 		void SetOptimConfig(double lr,
 			double acc_rate_cov,
@@ -564,7 +542,8 @@ namespace GPBoost {
 			bool reuse_rand_vec_trace,
 			const char* cg_preconditioner_type,
 			int seed_rand_vec_trace,
-			int piv_chol_rank) {
+			int piv_chol_rank,
+			bool estimate_aux_pars) {
 			lr_cov_init_ = lr;
 			acc_rate_cov_ = acc_rate_cov;
 			max_iter_ = max_iter;
@@ -604,47 +583,9 @@ namespace GPBoost {
 					}
 				}
 			}
+			estimate_aux_pars_ = estimate_aux_pars;
+			set_optim_config_has_been_called_ = true;
 		}//end SetOptimConfig
-
-		/*!
-		* \brief Set initial values for some of the optimizer parameters. 
-		* Internal default values are used if the corresponding parameters have not been set
-		*/
-		void OptimConfigSetInitialValues() {
-			lr_coef_ = lr_coef_init_;
-			SetInitialValueLRCov();
-			SetInitialValueDeltaRelConv();
-		}//end SetInternalDefaultValues
-
-		/*! * \brief Set initial values for lr_cov_ */
-		void SetInitialValueLRCov() {
-			if (lr_cov_init_ < 0.) {//A value below 0 indicates that default values should be used
-				if (optimizer_cov_pars_ == "fisher_scoring") {
-					lr_cov_ = 1.;
-				}
-				else if (optimizer_cov_pars_ == "gradient_descent") {
-					lr_cov_ = 0.1;
-				}
-			}
-			else {
-				lr_cov_ = lr_cov_init_;
-			}
-		}//end SetInitialValueLRCov
-
-		/*! * \brief Set initial values for delta_rel_conv_ */
-		void SetInitialValueDeltaRelConv() {
-			if (delta_rel_conv_init_ < 0) {
-				if (optimizer_cov_pars_ == "nelder_mead") {
-					delta_rel_conv_ = 1e-8;
-				}
-				else {
-					delta_rel_conv_ = 1e-6;
-				}
-			}
-			else {
-				delta_rel_conv_ = delta_rel_conv_init_;
-			}
-		}//end SetInitialValueDeltaRelConv
 
 		/*!
 		* \brief Find covariance parameters and linear regression coefficients (if there are any) that minimize the (approximate) negative log-ligelihood
@@ -679,7 +620,6 @@ namespace GPBoost {
 			const double* fixed_effects,
 			bool learn_covariance_parameters,
 			bool called_in_GPBoost_algorithm) {
-			//std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();// Only for debugging
 			// Some checks
 			if (SUPPORTED_OPTIM_COV_PAR_.find(optimizer_cov_pars_) == SUPPORTED_OPTIM_COV_PAR_.end()) {
 				Log::REFatal("Optimizer option '%s' is not supported for covariance parameters ", optimizer_cov_pars_.c_str());
@@ -709,6 +649,9 @@ namespace GPBoost {
 				if (LightGBM::Common::HasNAOrInf(y_data, num_data_)) {
 					Log::REFatal("NaN or Inf in response variable / label ");
 				}
+			}
+			if (NumAuxPars() == 0) {
+				estimate_aux_pars_ = false;
 			}
 			// Initialization of variables
 			OptimConfigSetInitialValues();
@@ -774,12 +717,38 @@ namespace GPBoost {
 			// Assume that this function is only called for initialization of the GPBoost algorithm
 			//	when (i) there is only an intercept (and not other covariates) and (ii) the covariance parameters are not learned
 			const double* fixed_effects_ptr = fixed_effects;
-			// Initialization of covariance parameters related variables
-			vec_t cov_pars = Eigen::Map<const vec_t>(init_cov_pars, num_cov_par_);
-			vec_t cov_pars_lag1 = vec_t(num_cov_par_);
-			vec_t cov_pars_init = cov_pars;
-			vec_t cov_pars_after_grad_aux_lag1 = cov_pars;//auxiliary variable used only if use_nesterov_acc == true
-			vec_t cov_pars_after_grad_aux, cov_pars_before_lr_coef_small;//auxiliary variables
+			// Initialization of covariance parameters related variables as well as additional parameters for likelihood (aux_pars)
+			int num_cov_par_estimate = num_cov_par_;
+			if (estimate_aux_pars_) {
+				num_cov_par_estimate += NumAuxPars();
+			}
+			vec_t cov_aux_pars = vec_t(num_cov_par_estimate);
+			for (int i = 0; i < num_cov_par_; ++i) {
+				cov_aux_pars[i] = init_cov_pars[i];
+			}
+			if (estimate_aux_pars_) {
+				// Find initial values for additional likelihood parameters (aux_pars) if they have not been given
+				if (!(likelihood_[unique_clusters_[0]]->AuxParsHaveBeenSet())) {
+					const double* aux_pars;
+					if (y_data == nullptr) {
+						vec_t y_aux_temp(num_data_);
+						GetY(y_aux_temp.data());
+						aux_pars = likelihood_[unique_clusters_[0]]->FindInitialAuxPars(y_aux_temp.data(), num_data_);
+						y_aux_temp.resize(0);
+					}
+					else {
+						aux_pars = likelihood_[unique_clusters_[0]]->FindInitialAuxPars(y_data, num_data_);
+					}
+					SetAuxPars(aux_pars);
+				}
+				for (int i = 0; i < NumAuxPars(); ++i) {
+					cov_aux_pars[num_cov_par_ + i] = GetAuxPars()[i];
+				}
+			}
+			vec_t cov_aux_pars_lag1 = vec_t(num_cov_par_estimate);
+			vec_t cov_aux_pars_init = cov_aux_pars;
+			vec_t cov_aux_pars_after_grad_aux_lag1 = cov_aux_pars;//auxiliary variable used only if use_nesterov_acc == true
+			vec_t cov_pars_after_grad_aux, cov_aux_pars_before_lr_coef_small, aux_pars_before_lr_cov_small, cov_pars_before_lr_aux_pars_small;//auxiliary variables
 			// Set response variabla data (if needed). Note: for the GPBoost algorithm this is set a prior by calling SetY. For Gaussian data with covariates, this is set later repeatedly.
 			if ((!has_covariates_ || !gauss_likelihood_) && y_data != nullptr) {
 				SetY(y_data);
@@ -793,7 +762,7 @@ namespace GPBoost {
 				y_vec_ = Eigen::Map<const vec_t>(y_data, num_data_);
 			}
 			// Initialization of linear regression coefficients related variables
-			vec_t beta, beta_lag1, beta_init, beta_after_grad_aux, beta_after_grad_aux_lag1, beta_before_lr_cov_small, fixed_effects_vec, loc_transf, scale_transf;
+			vec_t beta, beta_lag1, beta_init, beta_after_grad_aux, beta_after_grad_aux_lag1, beta_before_lr_cov_small, beta_before_lr_aux_pars_small, fixed_effects_vec, loc_transf, scale_transf;
 			bool scale_covariates = false;
 			if (has_covariates_) {
 				scale_covariates = (optimizer_coef_ == "gradient_descent" || (optimizer_cov_pars_ == "bfgs" && !gauss_likelihood_)) && !only_intercept_for_GPBoost_algo;
@@ -825,7 +794,7 @@ namespace GPBoost {
 				}
 				if (init_coef == nullptr || only_intercept_for_GPBoost_algo) {
 					if (has_intercept) {
-						double tot_var = GetTotalVarComps(cov_pars);
+						double tot_var = GetTotalVarComps(cov_aux_pars.segment(0, num_cov_par_));
 						if (y_data == nullptr) {
 							vec_t y_aux_temp(num_data_);
 							GetY(y_aux_temp.data());
@@ -850,18 +819,20 @@ namespace GPBoost {
 			}//end if has_covariates_
 			else if (!called_in_GPBoost_algorithm && fixed_effects == nullptr) {//!has_covariates_ && !called_in_GPBoost_algorithm && fixed_effects == nullptr
 				CHECK(y_data != nullptr);
-				double tot_var = GetTotalVarComps(cov_pars);
+				double tot_var = GetTotalVarComps(cov_aux_pars.segment(0, num_cov_par_));
 				if (likelihood_[unique_clusters_[0]]->ShouldHaveIntercept(y_data, num_data_, tot_var)) {
-					Log::REWarning("There is no intercept for modeling a potential non-zero mean of the random effects. "
+					Log::REWarning("There is no intercept for modeling a possibly non-zero mean of the random effects. "
 						"Consider including an intercept (= a column of 1's) in the covariates 'X' ");
 				}
 			}
 			Log::REDebug("GPModel: initial parameters: ");
-			PrintTraceParameters(cov_pars, beta, has_intercept, intercept_col, scale_covariates, loc_transf, scale_transf);
+			PrintTraceParameters(cov_aux_pars.segment(0, num_cov_par_), beta, has_intercept, intercept_col,
+				scale_covariates, loc_transf, scale_transf, cov_aux_pars.data() + num_cov_par_);
 			// Initialize optimizer:
 			// - factorize the covariance matrix (Gaussian data) or calculate the posterior mode of the random effects for use in the Laplace approximation (non-Gaussian data)
 			// - calculate initial value of objective function
-			CalcCovFactorOrModeAndNegLL(cov_pars, fixed_effects_ptr);
+			// - Note: initial values of aux_pars (additional parameters of likelihood) are set in likelihoods.h
+			CalcCovFactorOrModeAndNegLL(cov_aux_pars.segment(0, num_cov_par_), fixed_effects_ptr);
 			// TODO: for likelihood evaluation we don't need y_aux = Psi^-1 * y but only Psi^-0.5 * y. So, if has_covariates_==true, we might skip this step here and save some time
 			string_t ll_str;
 			if (gauss_likelihood_) {
@@ -894,21 +865,14 @@ namespace GPBoost {
 			}
 			bool na_or_inf_occurred = false;
 			if (OPTIM_EXTERNAL_.find(optimizer_cov_pars_) != OPTIM_EXTERNAL_.end()) {
-				OptimExternal(cov_pars,
-					beta,
-					fixed_effects,
-					max_iter_,
-					delta_rel_conv_,
-					convergence_criterion_,
-					num_it,
-					learn_covariance_parameters,
-					optimizer_cov_pars_,
-					profile_out_marginal_variance);
+				OptimExternal(cov_aux_pars, beta, fixed_effects, max_iter_,
+					delta_rel_conv_, convergence_criterion_, num_it, learn_covariance_parameters,
+					optimizer_cov_pars_, profile_out_marginal_variance);
 				// Check for NA or Inf
 				if (optimizer_cov_pars_ == "bfgs") {
 					if (learn_covariance_parameters) {
-						for (int i = 0; i < (int)cov_pars.size(); ++i) {
-							if (std::isnan(cov_pars[i]) || std::isinf(cov_pars[i])) {
+						for (int i = 0; i < (int)cov_aux_pars.size(); ++i) {
+							if (std::isnan(cov_aux_pars[i]) || std::isinf(cov_aux_pars[i])) {
 								na_or_inf_occurred = true;
 							}
 						}
@@ -924,26 +888,26 @@ namespace GPBoost {
 			} // end use of external optimizer
 			else {
 				// Start optimization with "gradient_descent" or "fisher_scoring"
-				bool lr_cov_is_small = false, lr_coef_is_small = false;
+				bool lr_cov_is_small = false, lr_aux_pars_is_small = false, lr_coef_is_small = false;
 				for (int it = 0; it < max_iter_; ++it) {
 					neg_log_likelihood_lag1_ = neg_log_likelihood_;
-					cov_pars_lag1 = cov_pars;
+					cov_aux_pars_lag1 = cov_aux_pars;
 					// Update linear regression coefficients using gradient descent or generalized least squares (the latter option only for Gaussian data)
 					if (has_covariates_) {
 						beta_lag1 = beta;
 						if (optimizer_coef_ == "gradient_descent") {// one step of gradient descent
 							vec_t grad_beta;
 							// Calculate gradient for linear regression coefficients
-							CalcLinCoefGrad(cov_pars[0], beta, grad_beta, fixed_effects_ptr);
+							CalcGradLinCoef(cov_aux_pars[0], beta, grad_beta, fixed_effects_ptr);
 							// Update linear regression coefficients, apply step size safeguard, and recalculate mode for Laplace approx. (only for non-Gaussian data)
-							UpdateLinCoef(beta, grad_beta, cov_pars, use_nesterov_acc_coef, it, beta_after_grad_aux, beta_after_grad_aux_lag1,
+							UpdateLinCoef(beta, grad_beta, cov_aux_pars[0], use_nesterov_acc_coef, it, beta_after_grad_aux, beta_after_grad_aux_lag1,
 								acc_rate_coef_, nesterov_schedule_version_, momentum_offset_, fixed_effects, fixed_effects_vec);
 							fixed_effects_ptr = fixed_effects_vec.data();
-							// In case lr_coef_ is very small, we monitor whether cov_pars continues to change. If it does, we will reset lr_coef_ to its initial value
+							// In case lr_coef_ is very small, we monitor whether cov_aux_pars continues to change. If it does, we will reset lr_coef_ to its initial value
 							if (lr_coef_ < LR_IS_SMALL_THRESHOLD_ && learn_covariance_parameters && !lr_coef_is_small) {
 								if ((beta - beta_lag1).norm() < LR_IS_SMALL_REL_CHANGE_IN_PARS_THRESHOLD_ * beta_lag1.norm()) {//also require that relative change in parameters is small
 									lr_coef_is_small = true;
-									cov_pars_before_lr_coef_small = cov_pars;
+									cov_aux_pars_before_lr_coef_small = cov_aux_pars;
 								}
 							}
 						}
@@ -955,19 +919,25 @@ namespace GPBoost {
 							// Set resid for updating covariance parameters
 							vec_t resid = y_vec_ - (X_ * beta);
 							SetY(resid.data());
-							EvalNegLogLikelihoodOnlyUpdateFixedEffects(cov_pars.data(), neg_log_likelihood_after_lin_coef_update_);
+							EvalNegLogLikelihoodOnlyUpdateFixedEffects(cov_aux_pars[0], neg_log_likelihood_after_lin_coef_update_);
 						}
-						// Reset lr_cov_ to its initial value in case beta changes substantially after lr_cov_ is very small
+						// Reset lr_cov_ to its initial values in case beta changes substantially after lr_cov_ is very small
+						bool mode_hast_just_been_recalculated = false;
 						if (lr_cov_is_small && learn_covariance_parameters) {
 							if ((beta - beta_before_lr_cov_small).norm() > MIN_REL_CHANGE_IN_OTHER_PARS_FOR_RESETTING_LR_ * beta_before_lr_cov_small.norm()) {
 								SetInitialValueLRCov();
 								lr_cov_is_small = false;
-								if (!gauss_likelihood_) {
-									//Reset the initial modes to 0. Otherwise, they can get stuck
-									for (const auto& cluster_i : unique_clusters_) {
-										likelihood_[cluster_i]->InitializeModeAvec();
-									}
-									CalcModePostRandEff(fixed_effects_ptr);
+								RecalculateModeLaplaceApprox(fixed_effects_ptr);
+								mode_hast_just_been_recalculated = true;
+							}
+						}
+						// Reset lr_aux_pars_ to its initial values in case beta changes substantially after lr_aux_pars_ is very small
+						if (lr_aux_pars_is_small && estimate_aux_pars_ && learn_covariance_parameters) {
+							if ((beta - beta_before_lr_cov_small).norm() > MIN_REL_CHANGE_IN_OTHER_PARS_FOR_RESETTING_LR_ * beta_before_lr_cov_small.norm()) {
+								lr_aux_pars_ = lr_aux_pars_init_;
+								lr_aux_pars_is_small = false;
+								if (!mode_hast_just_been_recalculated) {
+									RecalculateModeLaplaceApprox(fixed_effects_ptr);
 								}
 							}
 						}
@@ -981,44 +951,82 @@ namespace GPBoost {
 						vec_t nat_grad; // nat_grad = grad for gradient descent and nat_grad = FI^-1 * grad for Fisher scoring (="natural" gradient)
 						if (profile_out_marginal_variance) {
 							// Profile out sigma2 (=use closed-form expression for error / nugget variance) since this is better for gradient descent (the paremeters usually live on different scales and the nugget needs a small learning rate but the others not...)
-							cov_pars[0] = yTPsiInvy_ / num_data_;
+							cov_aux_pars[0] = yTPsiInvy_ / num_data_;
 						}
 						if (optimizer_cov_pars_ == "gradient_descent") {//gradient descent
-							CalcCovParGrad(cov_pars, nat_grad, gradient_contains_error_var, false, fixed_effects_ptr);
+							CalcGradCovParAuxPars(cov_aux_pars.segment(0, num_cov_par_), nat_grad, gradient_contains_error_var, false, fixed_effects_ptr);
+							// Avoid too large learning rates for covariance parameters and aux_pars
+							AvoidTooLargeLearningRatesCovAuxPars(nat_grad, it);
 						}
 						else if (optimizer_cov_pars_ == "fisher_scoring") {//Fisher scoring
 							// We don't profile out sigma2 (=don't use closed-form expression for error / nugget variance) since this is better for Fisher scoring (otherwise much more iterations are needed)	
 							vec_t grad;
 							den_mat_t FI;
-							CalcCovParGrad(cov_pars, grad, gradient_contains_error_var, true, fixed_effects_ptr);
-							CalcFisherInformation(cov_pars, FI, true, gradient_contains_error_var, true);
+							CalcGradCovParAuxPars(cov_aux_pars.segment(0, num_cov_par_), grad, gradient_contains_error_var, true, fixed_effects_ptr);
+							CalcFisherInformation(cov_aux_pars.segment(0, num_cov_par_), FI, true, gradient_contains_error_var, true);
 							nat_grad = FI.llt().solve(grad);
 						}
-						// Update covariance parameters, apply step size safeguard, factorize covariance matrix, and calculate new value of objective function
-						UpdateCovPars(cov_pars, nat_grad, profile_out_marginal_variance, use_nesterov_acc, it,
-							cov_pars_after_grad_aux, cov_pars_after_grad_aux_lag1, acc_rate_cov_, nesterov_schedule_version_, momentum_offset_, fixed_effects_ptr);
-						// In case lr_cov_ is very small, we monitor whether beta continues to change. If it does, we will reset lr_cov_ to its initial value
-						if (lr_cov_ < LR_IS_SMALL_THRESHOLD_ && has_covariates_ && !lr_cov_is_small) {
-							if ((cov_pars - cov_pars_lag1).norm() < LR_IS_SMALL_REL_CHANGE_IN_PARS_THRESHOLD_ * cov_pars_lag1.norm()) {//also require that relative change in parameters is small
+						// Update covariance and additional likelihood parameters, apply step size safeguard, factorize covariance matrix, and calculate new value of objective function
+						UpdateCovAuxPars(cov_aux_pars, nat_grad, profile_out_marginal_variance, use_nesterov_acc, it,
+							cov_pars_after_grad_aux, cov_aux_pars_after_grad_aux_lag1, acc_rate_cov_, nesterov_schedule_version_, momentum_offset_, fixed_effects_ptr);
+						// In case lr_cov_ is very small, we monitor whether the other parameters (beta, aux_pars) continue to change. If yes, we will reset lr_cov_ to its initial value
+						if (lr_cov_ < LR_IS_SMALL_THRESHOLD_ && (has_covariates_ || estimate_aux_pars_) && !lr_cov_is_small) {
+							if ((cov_aux_pars.segment(0, num_cov_par_) - cov_aux_pars_lag1.segment(0, num_cov_par_)).norm() <
+								LR_IS_SMALL_REL_CHANGE_IN_PARS_THRESHOLD_ * cov_aux_pars_lag1.segment(0, num_cov_par_).norm()) {//also require that relative change in parameters is small
 								lr_cov_is_small = true;
-								beta_before_lr_cov_small = beta;
-							}
-						}
-						// Reset lr_coef_ to its initial value in case cov_pars changes substantially after lr_coef_ is very small
-						if (lr_coef_is_small && has_covariates_) {
-							if ((cov_pars - cov_pars_before_lr_coef_small).norm() > MIN_REL_CHANGE_IN_OTHER_PARS_FOR_RESETTING_LR_ * cov_pars_before_lr_coef_small.norm()) {
-								lr_coef_ = lr_coef_init_;
-								lr_coef_is_small = false;
-								if (!gauss_likelihood_) {
-									//Reset the initial modes to 0. Otherwise, they can get stuck
-									for (const auto& cluster_i : unique_clusters_) {
-										likelihood_[cluster_i]->InitializeModeAvec();
-									}
-									CalcModePostRandEff(fixed_effects_ptr);
+								if (has_covariates_) {
+									beta_before_lr_cov_small = beta;
+								}
+								if (estimate_aux_pars_) {
+									aux_pars_before_lr_cov_small = cov_aux_pars.segment(num_cov_par_, NumAuxPars());
 								}
 							}
 						}
-					}
+						// In case lr_aux_pars_ is very small, we monitor whether the other parameters (beta, covariance parameters) continue to change. If yes, we will reset lr_aux_pars_ to its initial value
+						if (estimate_aux_pars_) {
+							if (lr_aux_pars_ < LR_IS_SMALL_THRESHOLD_ && !lr_cov_is_small) {
+								if ((cov_aux_pars.segment(num_cov_par_, NumAuxPars()) - cov_aux_pars_lag1.segment(num_cov_par_, NumAuxPars())).norm() <
+									LR_IS_SMALL_REL_CHANGE_IN_PARS_THRESHOLD_ * cov_aux_pars_lag1.segment(num_cov_par_, NumAuxPars()).norm()) {//also require that relative change in parameters is small
+									lr_aux_pars_is_small = true;
+									if (has_covariates_) {
+										beta_before_lr_aux_pars_small = beta;
+									}
+									cov_pars_before_lr_aux_pars_small = cov_aux_pars.segment(0, num_cov_par_);
+								}
+							}
+						}
+						// Reset lr_coef_ to its initial value in case cov_aux_pars changes substantially after lr_coef_ is very small
+						bool mode_hast_just_been_recalculated = false;
+						if (lr_coef_is_small && has_covariates_) {
+							if ((cov_aux_pars - cov_aux_pars_before_lr_coef_small).norm() > MIN_REL_CHANGE_IN_OTHER_PARS_FOR_RESETTING_LR_ * cov_aux_pars_before_lr_coef_small.norm()) {
+								lr_coef_ = lr_coef_init_;
+								lr_coef_is_small = false;
+								RecalculateModeLaplaceApprox(fixed_effects_ptr);
+								mode_hast_just_been_recalculated = true;
+							}
+						}
+						// Reset lr_aux_pars_ to its initial values in case covariance paremeters change substantially after lr_aux_pars_ is very small
+						if (lr_aux_pars_is_small && estimate_aux_pars_) {
+							if ((cov_aux_pars.segment(0, num_cov_par_) - cov_pars_before_lr_aux_pars_small).norm() > MIN_REL_CHANGE_IN_OTHER_PARS_FOR_RESETTING_LR_ * cov_pars_before_lr_aux_pars_small.norm()) {
+								lr_aux_pars_ = lr_aux_pars_init_;
+								lr_aux_pars_is_small = false;
+								if (!mode_hast_just_been_recalculated) {
+									RecalculateModeLaplaceApprox(fixed_effects_ptr);
+									mode_hast_just_been_recalculated = true;
+								}
+							}
+						}
+						// Reset lr_cov_ to its initial values in case aux_pars changes substantially after lr_cov_ is very small
+						if (lr_cov_is_small && estimate_aux_pars_) {
+							if ((cov_aux_pars.segment(num_cov_par_, NumAuxPars()) - aux_pars_before_lr_cov_small).norm() > MIN_REL_CHANGE_IN_OTHER_PARS_FOR_RESETTING_LR_ * aux_pars_before_lr_cov_small.norm()) {
+								SetInitialValueLRCov();
+								lr_cov_is_small = false;
+								if (!mode_hast_just_been_recalculated) {
+									RecalculateModeLaplaceApprox(fixed_effects_ptr);
+								}
+							}
+						}
+					}//end if (learn_covariance_parameters)
 					else {
 						neg_log_likelihood_ = neg_log_likelihood_after_lin_coef_update_;
 					}// end update covariance parameters
@@ -1029,8 +1037,8 @@ namespace GPBoost {
 					}
 					else {
 						if (learn_covariance_parameters) {
-							for (int i = 0; i < (int)cov_pars.size(); ++i) {
-								if (std::isnan(cov_pars[i]) || std::isinf(cov_pars[i])) {
+							for (int i = 0; i < (int)cov_aux_pars.size(); ++i) {
+								if (std::isnan(cov_aux_pars[i]) || std::isinf(cov_aux_pars[i])) {
 									na_or_inf_occurred = true;
 									terminate_optim = true;
 								}
@@ -1042,12 +1050,12 @@ namespace GPBoost {
 						bool likelihood_is_na = std::isnan(neg_log_likelihood_) || std::isinf(neg_log_likelihood_);//if the likelihood is NA, we monitor the parameters instead of the likelihood
 						if (convergence_criterion_ == "relative_change_in_parameters" || likelihood_is_na) {
 							if (has_covariates_) {
-								if (((beta - beta_lag1).norm() < delta_rel_conv_ * beta_lag1.norm()) && ((cov_pars - cov_pars_lag1).norm() < delta_rel_conv_ * cov_pars_lag1.norm())) {
+								if (((beta - beta_lag1).norm() < delta_rel_conv_ * beta_lag1.norm()) && ((cov_aux_pars - cov_aux_pars_lag1).norm() < delta_rel_conv_ * cov_aux_pars_lag1.norm())) {
 									terminate_optim = true;
 								}
 							}
 							else {
-								if ((cov_pars - cov_pars_lag1).norm() < delta_rel_conv_ * cov_pars_lag1.norm()) {
+								if ((cov_aux_pars - cov_aux_pars_lag1).norm() < delta_rel_conv_ * cov_aux_pars_lag1.norm()) {
 									terminate_optim = true;
 								}
 							}
@@ -1061,7 +1069,8 @@ namespace GPBoost {
 						if ((it < 10 || ((it + 1) % 10 == 0 && (it + 1) < 100) || ((it + 1) % 100 == 0 && (it + 1) < 1000) ||
 							((it + 1) % 1000 == 0 && (it + 1) < 10000) || ((it + 1) % 10000 == 0)) && (it != (max_iter_ - 1)) && !terminate_optim) {
 							Log::REDebug("GPModel: parameters after optimization iteration number %d: ", it + 1);
-							PrintTraceParameters(cov_pars, beta, has_intercept, intercept_col, scale_covariates, loc_transf, scale_transf);
+							PrintTraceParameters(cov_aux_pars.segment(0, num_cov_par_), beta, has_intercept, intercept_col,
+								scale_covariates, loc_transf, scale_transf, cov_aux_pars.data() + num_cov_par_);
 							if (gauss_likelihood_) {
 								Log::REDebug("Negative log-likelihood: %g", neg_log_likelihood_);
 							}
@@ -1090,7 +1099,7 @@ namespace GPBoost {
 					"If you want to avoid this, try directly using a different optimizer. "
 					"If you have used 'gradient_descent', you can also consider using a smaller learning rate. "
 					"The following optimizers are currently implemented:%s", optimizer_cov_pars_.c_str(), optimizer_cov_pars_.c_str());
-				cov_pars = cov_pars_init;
+				cov_aux_pars = cov_aux_pars_init;
 				if (has_covariates_) {
 					beta = beta_init;
 				}
@@ -1100,16 +1109,9 @@ namespace GPBoost {
 					}
 				}
 				SetInitialValueDeltaRelConv();
-				OptimExternal(cov_pars,
-					beta,
-					fixed_effects,
-					max_iter_,
-					delta_rel_conv_,
-					convergence_criterion_,
-					num_it,
-					learn_covariance_parameters,
-					"nelder_mead",
-					profile_out_marginal_variance);
+				OptimExternal(cov_aux_pars, beta, fixed_effects, max_iter_,
+					delta_rel_conv_, convergence_criterion_, num_it,
+					learn_covariance_parameters, "nelder_mead", profile_out_marginal_variance);
 			}
 			if (num_it == max_iter_) {
 				Log::REDebug("GPModel: no convergence after the maximal number of iterations (%d) ", max_iter_);
@@ -1117,7 +1119,8 @@ namespace GPBoost {
 			else {
 				Log::REDebug("GPModel: parameter estimation finished after %d iteration ", num_it);
 			}
-			PrintTraceParameters(cov_pars, beta, has_intercept, intercept_col, scale_covariates, loc_transf, scale_transf);
+			PrintTraceParameters(cov_aux_pars.segment(0, num_cov_par_), beta, has_intercept, intercept_col,
+				scale_covariates, loc_transf, scale_transf, cov_aux_pars.data() + num_cov_par_);
 			if (gauss_likelihood_) {
 				Log::REDebug("Negative log-likelihood: %g", neg_log_likelihood_);
 			}
@@ -1125,7 +1128,10 @@ namespace GPBoost {
 				Log::REDebug("Approximate negative marginal log-likelihood: %g", neg_log_likelihood_);
 			}
 			for (int i = 0; i < num_cov_par_; ++i) {
-				optim_cov_pars[i] = cov_pars[i];
+				optim_cov_pars[i] = cov_aux_pars[i];
+			}
+			if (estimate_aux_pars_) {
+				SetAuxPars(cov_aux_pars.data() + num_cov_par_);
 			}
 			if (has_covariates_) {
 				if (scale_covariates) {
@@ -1149,13 +1155,13 @@ namespace GPBoost {
 			if (calc_std_dev) {
 				vec_t std_dev_cov(num_cov_par_);
 				if (gauss_likelihood_) {
-					CalcStdDevCovPar(cov_pars, std_dev_cov);//TODO: maybe another call to CalcCovFactor can be avoided in CalcStdDevCovPar (need to take care of cov_pars[0])
+					CalcStdDevCovPar(cov_aux_pars.segment(0, num_cov_par_), std_dev_cov);//TODO: maybe another call to CalcCovFactor can be avoided in CalcStdDevCovPar (need to take care of cov_aux_pars[0])
 					for (int i = 0; i < num_cov_par_; ++i) {
 						std_dev_cov_par[i] = std_dev_cov[i];
 					}
 				}
 				else {
-					std_dev_cov.setZero();// Calculation of standard deviations for covariance paramters is not supported for non-Gaussian data
+					std_dev_cov.setZero();// Calculation of standard deviations for covariance parameters is not supported for non-Gaussian data
 					if (!has_covariates_) {
 						Log::REWarning("Calculation of standard deviations of covariance parameters for non-Gaussian data is currently not supported.");
 					}
@@ -1163,11 +1169,11 @@ namespace GPBoost {
 				if (has_covariates_) {
 					vec_t std_dev_beta(num_covariates);
 					if (gauss_likelihood_) {
-						CalcStdDevCoef(cov_pars, X_, std_dev_beta);
+						CalcStdDevCoef(cov_aux_pars.segment(0, num_cov_par_), X_, std_dev_beta);
 					}
 					else {
 						Log::REDebug("Standard deviations of linear regression coefficients for non-Gaussian data can be \"very approximative\". ");
-						CalcStdDevCoefNonGaussian(num_covariates, beta, cov_pars, fixed_effects, std_dev_beta);
+						CalcStdDevCoefNonGaussian(num_covariates, beta, cov_aux_pars.segment(0, num_cov_par_), fixed_effects, std_dev_beta);
 					}
 					for (int i = 0; i < num_covariates; ++i) {
 						std_dev_coef[i] = std_dev_beta[i];
@@ -1183,15 +1189,257 @@ namespace GPBoost {
 					//	but this function is called for initialization of the GPBoost algorithm.
 				}
 			}
-			//std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();// Only for debugging
-			//double el_time = (double)(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()) / 1000000.;// Only for debugging
-			//Log::REInfo("Time for optimization: %g", el_time);// Only for debugging
-
 		}//end OptimLinRegrCoefCovPar
 
+		/*!
+		* \brief Calculate gradient wrt the covariance parameters on the log-scale and any additional parameters for the likelihood for non-Gaussian data
+		*	This assumes that the covariance matrix has been factorized (by 'CalcCovFactor') and that y_aux or y_tilde/y_tilde2 (if only_grouped_REs_use_woodbury_identity_) have been calculated (by 'CalcYAux' or 'CalcYtilde')
+		* \param cov_pars Covariance parameters
+		* \param[out] grad_cov_aux_par Gradient wrt the covariance parameters and any additional parameters for the likelihood for non-Gaussian data
+		* \param include_error_var If true, the gradient with respect to the error variance parameter (=nugget effect) is also calculated, otherwise not (set this to true if the nugget effect is not calculated by using the closed-form solution)
+		* \param save_psi_inv_for_FI If true, the inverse covariance matrix Psi^-1 is saved for reuse later (e.g. when calculating the Fisher information in Fisher scoring). This option is ignored if the Vecchia approximation is used.
+		* \param fixed_effects Fixed effects component of location parameter (used only for non-Gaussian data)
+		*/
+		void CalcGradCovParAuxPars(const vec_t& cov_pars,
+			vec_t& grad_cov_aux_par,
+			bool include_error_var,
+			bool save_psi_inv_for_FI,
+			const double* fixed_effects) {
+			if (gauss_likelihood_) {//Gaussian data
+				if (include_error_var) {
+					grad_cov_aux_par = vec_t::Zero(num_cov_par_);
+				}
+				else {
+					grad_cov_aux_par = vec_t::Zero(num_cov_par_ - 1);
+				}
+				int first_cov_par = include_error_var ? 1 : 0;
+				for (const auto& cluster_i : unique_clusters_) {
+					if (gp_approx_ == "vecchia") {//Vechia approximation
+						vec_t u(num_data_per_cluster_[cluster_i]);
+						vec_t uk(num_data_per_cluster_[cluster_i]);
+						if (include_error_var) {
+							u = B_[cluster_i] * y_[cluster_i];
+							grad_cov_aux_par[0] += -1. * ((double)(u.transpose() * D_inv_[cluster_i] * u)) / cov_pars[0] / 2. + num_data_per_cluster_[cluster_i] / 2.;
+							u = D_inv_[cluster_i] * u;
+						}
+						else {
+							u = D_inv_[cluster_i] * B_[cluster_i] * y_[cluster_i];//TODO: this is already calculated in CalcYAux -> save it there and re-use here?
+						}
+						for (int j = 0; j < num_comps_total_; ++j) {
+							int num_par_comp = re_comps_[cluster_i][j]->num_cov_par_;
+							for (int ipar = 0; ipar < num_par_comp; ++ipar) {
+								uk = B_grad_[cluster_i][num_par_comp * j + ipar] * y_[cluster_i];
+								grad_cov_aux_par[first_cov_par + ind_par_[j] - 1 + ipar] += ((uk.dot(u) - 0.5 * u.dot(D_grad_[cluster_i][num_par_comp * j + ipar] * u)) / cov_pars[0] +
+									0.5 * (D_inv_[cluster_i].diagonal()).dot(D_grad_[cluster_i][num_par_comp * j + ipar].diagonal()));
+							}
+						}
+					}//end gp_approx_ == "vecchia"
+					else {//not gp_approx_ == "vecchia"
+						if (only_grouped_REs_use_woodbury_identity_) {
+							if (include_error_var) {
+								double yTPsiInvy;
+								CalcYTPsiIInvY(yTPsiInvy, false, cluster_i, true, true);
+								grad_cov_aux_par[0] += -1. * yTPsiInvy / cov_pars[0] / 2. + num_data_per_cluster_[cluster_i] / 2.;
+							}
+							std::vector<T_mat> LInvZtZj_cluster_i;
+							if (save_psi_inv_for_FI) {
+								LInvZtZj_[cluster_i].clear();
+								LInvZtZj_cluster_i = std::vector<T_mat>(num_comps_total_);
+							}
+							for (int j = 0; j < num_comps_total_; ++j) {
+								sp_mat_t* Z_j = re_comps_[cluster_i][j]->GetZ();
+								vec_t y_tilde_j = (*Z_j).transpose() * y_[cluster_i];
+								vec_t y_tilde2_j = (*Z_j).transpose() * y_tilde2_[cluster_i];
+								double yTPsiIGradPsiPsiIy = y_tilde_j.transpose() * y_tilde_j - 2. * (double)(y_tilde_j.transpose() * y_tilde2_j) + y_tilde2_j.transpose() * y_tilde2_j;
+								yTPsiIGradPsiPsiIy *= cov_pars[j + 1];
+								T_mat LInvZtZj;
+								if (num_re_group_total_ == 1 && num_comps_total_ == 1) {//only one random effect -> ZtZ_ == ZtZj_ and L_inv are diagonal  
+									LInvZtZj = ZtZ_[cluster_i];
+									LInvZtZj.diagonal().array() /= sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array();
+								}
+								else {
+									if (CholeskyHasPermutation<T_chol>(chol_facts_[cluster_i])) {
+										TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), P_ZtZj_[cluster_i][j], LInvZtZj, false);
+									}
+									else {
+										TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), ZtZj_[cluster_i][j], LInvZtZj, false);
+									}
+								}
+								if (save_psi_inv_for_FI) {//save for latter use when calculating the Fisher information
+									LInvZtZj_cluster_i[j] = LInvZtZj;
+								}
+								double trace_PsiInvGradPsi = Zj_square_sum_[cluster_i][j] - LInvZtZj.squaredNorm();
+								trace_PsiInvGradPsi *= cov_pars[j + 1];
+								grad_cov_aux_par[first_cov_par + j] += -1. * yTPsiIGradPsiPsiIy / cov_pars[0] / 2. + trace_PsiInvGradPsi / 2.;
+							}
+							if (save_psi_inv_for_FI) {
+								LInvZtZj_[cluster_i] = LInvZtZj_cluster_i;
+							}
+						}//end only_grouped_REs_use_woodbury_identity_
+						else {//not only_grouped_REs_use_woodbury_identity_
+							T_mat psi_inv;
+							CalcPsiInv(psi_inv, cluster_i, !save_psi_inv_for_FI);
+							if (save_psi_inv_for_FI) {//save for latter use when calculating the Fisher information
+								psi_inv_[cluster_i] = psi_inv;
+							}
+							if (include_error_var) {
+								grad_cov_aux_par[0] += -1. * ((double)(y_[cluster_i].transpose() * y_aux_[cluster_i])) / cov_pars[0] / 2. + num_data_per_cluster_[cluster_i] / 2.;
+							}
+							for (int j = 0; j < num_comps_total_; ++j) {
+								for (int ipar = 0; ipar < re_comps_[cluster_i][j]->num_cov_par_; ++ipar) {
+									std::shared_ptr<T_mat> gradPsi = re_comps_[cluster_i][j]->GetZSigmaZtGrad(ipar, true, 1.);
+									grad_cov_aux_par[first_cov_par + ind_par_[j] - 1 + ipar] += -1. * ((double)(y_aux_[cluster_i].transpose() * (*gradPsi) * y_aux_[cluster_i])) / cov_pars[0] / 2. +
+										((double)(((*gradPsi).cwiseProduct(psi_inv)).sum())) / 2.;
+								}
+							}
+						}//end not only_grouped_REs_use_woodbury_identity_
+					}//end not gp_approx_ == "vecchia"
+				}// end loop over clusters
+			}//end gauss_likelihood_
+			else {//not gauss_likelihood_
+				if (include_error_var) {
+					Log::REFatal("There is no error variance (nugget effect) for non-Gaussian data");
+				}
+				int length_cov_grad = num_cov_par_;
+				if (estimate_aux_pars_) {
+					length_cov_grad += NumAuxPars();
+				}
+				grad_cov_aux_par = vec_t::Zero(length_cov_grad);
+				vec_t grad_cluster_i(length_cov_grad);
+				vec_t empty_unused_vec(0);//placeholder for fixed effects gradient
+				const double* fixed_effects_cluster_i_ptr = nullptr;
+				vec_t fixed_effects_cluster_i;
+				for (const auto& cluster_i : unique_clusters_) {
+					//map fixed effects to clusters (if needed)
+					vec_t grad_F_cluster_i(num_data_per_cluster_[cluster_i]);
+					if (num_clusters_ == 1 && (gp_approx_ != "vecchia" || vecchia_ordering_ == "none")) {//only one cluster / independent realization and order of data does not matter
+						fixed_effects_cluster_i_ptr = fixed_effects;
+					}
+					else if (fixed_effects != nullptr) {//more than one cluster and order of samples matters
+						fixed_effects_cluster_i = vec_t(num_data_per_cluster_[cluster_i]);
+#pragma omp parallel for schedule(static)
+						for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
+							fixed_effects_cluster_i[j] = fixed_effects[data_indices_per_cluster_[cluster_i][j]];
+						}
+						fixed_effects_cluster_i_ptr = fixed_effects_cluster_i.data();
+					}
+					if (gp_approx_ == "vecchia") {
+						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxVecchia(y_[cluster_i].data(),
+							y_int_[cluster_i].data(),
+							fixed_effects_cluster_i_ptr,
+							num_data_per_cluster_[cluster_i],
+							B_[cluster_i],
+							D_inv_[cluster_i],
+							B_grad_[cluster_i],
+							D_grad_[cluster_i],
+							true,
+							false,
+							estimate_aux_pars_,
+							grad_cluster_i.data(),
+							empty_unused_vec,
+							grad_cluster_i.data() + num_cov_par_,
+							false,
+							num_comps_total_);
+					}
+					else if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
+						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxGroupedRE(y_[cluster_i].data(),
+							y_int_[cluster_i].data(),
+							fixed_effects_cluster_i_ptr,
+							num_data_per_cluster_[cluster_i],
+							SigmaI_[cluster_i],
+							Zt_[cluster_i],
+							cum_num_rand_eff_[cluster_i],
+							true,
+							false,
+							estimate_aux_pars_,
+							grad_cluster_i.data(),
+							empty_unused_vec,
+							grad_cluster_i.data() + num_cov_par_,
+							false);
+					}
+					else if (only_one_grouped_RE_calculations_on_RE_scale_) {
+						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(),
+							y_int_[cluster_i].data(),
+							fixed_effects_cluster_i_ptr,
+							num_data_per_cluster_[cluster_i],
+							re_comps_[cluster_i][0]->cov_pars_[0],
+							re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
+							true,
+							false,
+							estimate_aux_pars_,
+							grad_cluster_i.data(),
+							empty_unused_vec,
+							grad_cluster_i.data() + num_cov_par_,
+							false);
+					}
+					else if (only_one_GP_calculations_on_RE_scale_) {
+						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxOnlyOneGPCalculationsOnREScale(y_[cluster_i].data(),
+							y_int_[cluster_i].data(),
+							fixed_effects_cluster_i_ptr,
+							num_data_per_cluster_[cluster_i],
+							ZSigmaZt_[cluster_i], //Note: ZSigmaZt_ contains only Sigma if only_one_GP_calculations_on_RE_scale_==true
+							re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
+							re_comps_[cluster_i],
+							true,
+							false,
+							estimate_aux_pars_,
+							grad_cluster_i.data(),
+							empty_unused_vec,
+							grad_cluster_i.data() + num_cov_par_,
+							false);
+					}
+					else {
+						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxStable(y_[cluster_i].data(),
+							y_int_[cluster_i].data(),
+							fixed_effects_cluster_i_ptr,
+							num_data_per_cluster_[cluster_i],
+							ZSigmaZt_[cluster_i],
+							re_comps_[cluster_i],
+							true,
+							false,
+							estimate_aux_pars_,
+							grad_cluster_i.data(),
+							empty_unused_vec,
+							grad_cluster_i.data() + num_cov_par_,
+							false);
+					}
+					grad_cov_aux_par += grad_cluster_i;
+				}// end loop over clusters
+			}//end not gauss_likelihood_
+		//// For debugging
+		//for (int i = 0; i < (int)grad_cov_aux_par.size(); ++i) { Log::REDebug("grad_cov_aux_par[%d]: %g", i, grad_cov_aux_par[i]); }
+		}//end CalcGradCovParAuxPars
 
 		/*!
-		* \brief Reset mode to previous value. Used when, e.g., NA or Inf occurred (only used in EvalLLforOptimLib)
+		* \brief Calculate gradient for linear fixed-effect coefficients
+		* \param marg_var Marginal variance parameters sigma^2 (only used for Gaussian data)
+		* \param beta Linear regression coefficients
+		* \param[out] grad_beta Gradient for linear regression coefficients
+		 * \param fixed_effects Fixed effects component of location parameter for observed data (only used for non-Gaussian data)
+		*/
+		void CalcGradLinCoef(double marg_var,
+			const vec_t beta,
+			vec_t& grad_beta,
+			const double* fixed_effects = nullptr) {
+			if (gauss_likelihood_) {
+				const vec_t resid = y_vec_ - (X_ * beta);
+				SetY(resid.data());
+				CalcYAux(1.);
+				vec_t y_aux(num_data_);
+				GetYAux(y_aux);
+				grad_beta = (-1. / marg_var) * (X_.transpose()) * y_aux;
+			}
+			else {
+				vec_t grad_F(num_data_);
+				CalcGradFLaplace(grad_F.data(), fixed_effects);
+				grad_beta = (X_.transpose()) * grad_F;
+			}
+			//// For debugging
+			//for (int i = 0; i < (int)grad_beta.size(); ++i) { Log::REDebug("grad_beta[%d]: %g", i, grad_beta[i]); }
+		}//end CalcGradLinCoef
+
+		/*!
+		* \brief Reset mode to previous value. Used when, e.g., NA or Inf occurred
 		*/
 		void ResetLaplaceApproxModeToPreviousValue() {
 			CHECK(!gauss_likelihood_);
@@ -1201,7 +1449,7 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Profile out sigma2 (=use closed-form expression for error / nugget variance) (only used in EvalLLforOptimLib)
+		* \brief Profile out sigma2 (=use closed-form expression for error / nugget variance)
 		* \return sigma2_
 		*/
 		double ProfileOutSigma2() {
@@ -1210,7 +1458,7 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Return value of neg_log_likelihood_ (only used in EvalLLforOptimLib)
+		* \brief Return value of neg_log_likelihood_
 		* \return neg_log_likelihood_
 		*/
 		double GetNegLogLikelihood() {
@@ -1218,7 +1466,7 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Return num_cov_par_ (only used in EvalLLforOptimLib)
+		* \brief Return num_cov_par_
 		* \return num_cov_par_
 		*/
 		int GetNumCovPar() {
@@ -1226,11 +1474,54 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Return has_covariates_ (only used in EvalLLforOptimLib)
+		* \brief Return num_coef_
+		* \return num_coef_
+		*/
+		int GetNumCoef() {
+			return num_coef_;
+		}
+
+		/*!
+		* \brief Return has_covariates_
 		* \return has_covariates_
 		*/
 		bool HasCovariates() {
 			return has_covariates_;
+		}
+
+		/*!
+		* \brief Return estimate_aux_pars_
+		*/
+		bool EstimateAuxPars() const {
+			return estimate_aux_pars_;
+		}
+
+		/*!
+		* \brief Return estimate_aux_pars_
+		*/
+		int NumAuxPars() {
+			return likelihood_[unique_clusters_[0]]->NumAuxPars();
+		}
+
+		/*!
+		* \brief Returns a pointer to aux_pars_
+		*/
+		const double* GetAuxPars() {
+			return likelihood_[unique_clusters_[0]]->GetAuxPars();
+		}
+
+		/*!
+		* \brief Set aux_pars_
+		* \param aux_pars New values for aux_pars_
+		*/
+		void SetAuxPars(const double* aux_pars) {
+			for (const auto& cluster_i : unique_clusters_) {
+				likelihood_[cluster_i]->SetAuxPars(aux_pars);
+			}
+		}
+
+		void GetNameFirstAuxPar(string_t& name) {
+			likelihood_[unique_clusters_[0]]->GetNameFirstAuxPar(name);
 		}
 
 		/*!
@@ -1327,7 +1618,7 @@ namespace GPBoost {
 							log_det_Psi_ += (2. * sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array().log().sum());
 						}
 						else {
-							log_det_Psi_ += (2. * chol_facts_solve_[cluster_i].CholFactMatrix().diagonal().array().log().sum());
+							log_det_Psi_ += (2. * chol_facts_[cluster_i].CholFactMatrix().diagonal().array().log().sum());
 						}
 						for (int j = 0; j < num_comps_total_; ++j) {
 							int num_rand_eff = cum_num_rand_eff_[cluster_i][j + 1] - cum_num_rand_eff_[cluster_i][j];
@@ -1335,7 +1626,7 @@ namespace GPBoost {
 						}
 					}
 					else {
-						log_det_Psi_ += (2. * chol_facts_solve_[cluster_i].CholFactMatrix().diagonal().array().log().sum());
+						log_det_Psi_ += (2. * chol_facts_[cluster_i].CholFactMatrix().diagonal().array().log().sum());
 					}
 				}
 			}
@@ -1355,10 +1646,10 @@ namespace GPBoost {
 		/*!
 		* \brief Calculate the value of the negative log-likelihood when only the fixed effects part has changed and the covariance matrix has not changed
 		*	Note: It is assuzmed that y_ has been set before by calling 'SetY' with the residuals = y - fixed_effcts
-		* \param cov_pars Values for covariance parameters of RE components
+		* \param sigma2 Nugget / error term variance
 		* \param[out] negll Negative log-likelihood
 		*/
-		void EvalNegLogLikelihoodOnlyUpdateFixedEffects(const double* cov_pars,
+		void EvalNegLogLikelihoodOnlyUpdateFixedEffects(const double sigma2,
 			double& negll) {
 			// Calculate y_aux = Psi^-1 * y (if not only_grouped_REs_use_woodbury_identity_) or y_tilde and y_tilde2 (if only_grouped_REs_use_woodbury_identity_) for covariance parameter update (only for Gaussian data)
 			if (only_grouped_REs_use_woodbury_identity_) {
@@ -1369,7 +1660,7 @@ namespace GPBoost {
 			}
 			//Calculate quadratic form y^T Psi^-1 y
 			CalcYTPsiIInvY(yTPsiInvy_, true, 1, false, false);
-			negll = yTPsiInvy_ / 2. / cov_pars[0] + log_det_Psi_ / 2. + num_data_ / 2. * (std::log(cov_pars[0]) + std::log(2 * M_PI));
+			negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::log(sigma2) + std::log(2 * M_PI));
 		}
 
 		/*!
@@ -1381,7 +1672,7 @@ namespace GPBoost {
 		* \param InitializeModeCovMat If true, posterior mode is initialized to 0 and the covariance matrix is calculated. Otherwise, existing values are used
 		* \param CalcModePostRandEff_already_done If true, it is assumed that the posterior mode of the random effects has already been calculated
 		*/
-		void EvalLAApproxNegLogLikelihood(const double* y_data,
+		void EvalLaplaceApproxNegLogLikelihood(const double* y_data,
 			const double* cov_pars,
 			double& negll,
 			const double* fixed_effects,
@@ -1403,7 +1694,7 @@ namespace GPBoost {
 			}
 			else {//not CalcModePostRandEff_already_done
 				if (InitializeModeCovMat) {
-					//We reset the initial modes to 0. This is done to avoid that different calls to EvalLAApproxNegLogLikelihood lead to (very small) differences.
+					//We reset the initial modes to 0. This is done to avoid that different calls to EvalLaplaceApproxNegLogLikelihood lead to (very small) differences.
 					for (const auto& cluster_i : unique_clusters_) {
 						likelihood_[cluster_i]->InitializeModeAvec();//TODO: maybe ommit this step?
 					}
@@ -1419,242 +1710,7 @@ namespace GPBoost {
 				}//end InitializeModeCovMat
 				negll = -CalcModePostRandEff(fixed_effects);
 			}//end not CalcModePostRandEff_already_done
-		}//end EvalLAApproxNegLogLikelihood
-
-		/*!
-		* \brief Calculate gradient for covariance parameters on the log-scale
-		*	This assumes that the covariance matrix has been factorized (by 'CalcCovFactor') and that y_aux or y_tilde/y_tilde2 (if only_grouped_REs_use_woodbury_identity_) have been calculated (by 'CalcYAux' or 'CalcYtilde')
-		* \param cov_pars Covariance parameters
-		* \param[out] grad Gradient w.r.t. covariance parameters
-		* \param include_error_var If true, the gradient with respect to the error variance parameter (=nugget effect) is also calculated, otherwise not (set this to true if the nugget effect is not calculated by using the closed-form solution)
-		* \param save_psi_inv_for_FI If true, the inverse covariance matrix Psi^-1 is saved for reuse later (e.g. when calculating the Fisher information in Fisher scoring). This option is ignored if the Vecchia approximation is used.
-		* \param fixed_effects Fixed effects component of location parameter (used only for non-Gaussian data)
-		*/
-		void CalcCovParGrad(vec_t& cov_pars,
-			vec_t& cov_grad,
-			bool include_error_var,
-			bool save_psi_inv_for_FI,
-			const double* fixed_effects) {
-			if (gauss_likelihood_) {//Gaussian data
-				if (include_error_var) {
-					cov_grad = vec_t::Zero(num_cov_par_);
-				}
-				else {
-					cov_grad = vec_t::Zero(num_cov_par_ - 1);
-				}
-				int first_cov_par = include_error_var ? 1 : 0;
-				for (const auto& cluster_i : unique_clusters_) {
-					if (gp_approx_ == "vecchia") {//Vechia approximation
-						vec_t u(num_data_per_cluster_[cluster_i]);
-						vec_t uk(num_data_per_cluster_[cluster_i]);
-						if (include_error_var) {
-							u = B_[cluster_i] * y_[cluster_i];
-							cov_grad[0] += -1. * ((double)(u.transpose() * D_inv_[cluster_i] * u)) / cov_pars[0] / 2. + num_data_per_cluster_[cluster_i] / 2.;
-							u = D_inv_[cluster_i] * u;
-						}
-						else {
-							u = D_inv_[cluster_i] * B_[cluster_i] * y_[cluster_i];//TODO: this is already calculated in CalcYAux -> save it there and re-use here?
-						}
-						for (int j = 0; j < num_comps_total_; ++j) {
-							int num_par_comp = re_comps_[cluster_i][j]->num_cov_par_;
-							for (int ipar = 0; ipar < num_par_comp; ++ipar) {
-								uk = B_grad_[cluster_i][num_par_comp * j + ipar] * y_[cluster_i];
-								cov_grad[first_cov_par + ind_par_[j] - 1 + ipar] += ((uk.dot(u) - 0.5 * u.dot(D_grad_[cluster_i][num_par_comp * j + ipar] * u)) / cov_pars[0] +
-									0.5 * (D_inv_[cluster_i].diagonal()).dot(D_grad_[cluster_i][num_par_comp * j + ipar].diagonal()));
-							}
-						}
-					}//end gp_approx_ == "vecchia"
-					else {//not gp_approx_ == "vecchia"
-						if (only_grouped_REs_use_woodbury_identity_) {
-							if (include_error_var) {
-								double yTPsiInvy;
-								CalcYTPsiIInvY(yTPsiInvy, false, cluster_i, true, true);
-								cov_grad[0] += -1. * yTPsiInvy / cov_pars[0] / 2. + num_data_per_cluster_[cluster_i] / 2.;
-							}
-							std::vector<T_mat> LInvZtZj_cluster_i;
-							if (save_psi_inv_for_FI) {
-								LInvZtZj_[cluster_i].clear();
-								LInvZtZj_cluster_i = std::vector<T_mat>(num_comps_total_);
-							}
-							for (int j = 0; j < num_comps_total_; ++j) {
-								sp_mat_t* Z_j = re_comps_[cluster_i][j]->GetZ();
-								vec_t y_tilde_j = (*Z_j).transpose() * y_[cluster_i];
-								vec_t y_tilde2_j = (*Z_j).transpose() * y_tilde2_[cluster_i];
-								double yTPsiIGradPsiPsiIy = y_tilde_j.transpose() * y_tilde_j - 2. * (double)(y_tilde_j.transpose() * y_tilde2_j) + y_tilde2_j.transpose() * y_tilde2_j;
-								yTPsiIGradPsiPsiIy *= cov_pars[j + 1];
-								T_mat LInvZtZj;
-								if (num_re_group_total_ == 1 && num_comps_total_ == 1) {//only one random effect -> ZtZ_ == ZtZj_ and L_inv are diagonal  
-									LInvZtZj = ZtZ_[cluster_i];
-									LInvZtZj.diagonal().array() /= sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array();
-								}
-								else {
-									if (CholeskyHasPermutation<T_chol>(chol_facts_solve_[cluster_i])) {
-										TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), P_ZtZj_[cluster_i][j], LInvZtZj, false);
-									}
-									else {
-										TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), ZtZj_[cluster_i][j], LInvZtZj, false);
-									}
-								}
-								if (save_psi_inv_for_FI) {//save for latter use when calculating the Fisher information
-									LInvZtZj_cluster_i[j] = LInvZtZj;
-								}
-								double trace_PsiInvGradPsi = Zj_square_sum_[cluster_i][j] - LInvZtZj.squaredNorm();
-								trace_PsiInvGradPsi *= cov_pars[j + 1];
-								cov_grad[first_cov_par + j] += -1. * yTPsiIGradPsiPsiIy / cov_pars[0] / 2. + trace_PsiInvGradPsi / 2.;
-							}
-							if (save_psi_inv_for_FI) {
-								LInvZtZj_[cluster_i] = LInvZtZj_cluster_i;
-							}
-						}//end only_grouped_REs_use_woodbury_identity_
-						else {//not only_grouped_REs_use_woodbury_identity_
-							T_mat psi_inv;
-							CalcPsiInv(psi_inv, cluster_i, !save_psi_inv_for_FI);
-							if (save_psi_inv_for_FI) {//save for latter use when calculating the Fisher information
-								psi_inv_[cluster_i] = psi_inv;
-							}
-							if (include_error_var) {
-								cov_grad[0] += -1. * ((double)(y_[cluster_i].transpose() * y_aux_[cluster_i])) / cov_pars[0] / 2. + num_data_per_cluster_[cluster_i] / 2.;
-							}
-							for (int j = 0; j < num_comps_total_; ++j) {
-								for (int ipar = 0; ipar < re_comps_[cluster_i][j]->num_cov_par_; ++ipar) {
-									std::shared_ptr<T_mat> gradPsi = re_comps_[cluster_i][j]->GetZSigmaZtGrad(ipar, true, 1.);
-									cov_grad[first_cov_par + ind_par_[j] - 1 + ipar] += -1. * ((double)(y_aux_[cluster_i].transpose() * (*gradPsi) * y_aux_[cluster_i])) / cov_pars[0] / 2. +
-										((double)(((*gradPsi).cwiseProduct(psi_inv)).sum())) / 2.;
-								}
-							}
-						}//end not only_grouped_REs_use_woodbury_identity_
-					}//end not gp_approx_ == "vecchia"
-				}// end loop over clusters
-			}//end gauss_likelihood_
-			else {//not gauss_likelihood_
-				if (include_error_var) {
-					Log::REFatal("There is no error variance (nugget effect) for non-Gaussian data");
-				}
-				cov_grad = vec_t::Zero(num_cov_par_);
-				vec_t cov_grad_cluster_i(num_cov_par_);
-				vec_t empty_unused_vec(0);//placeholder for fixed effects gradient
-				const double* fixed_effects_cluster_i_ptr = nullptr;
-				vec_t fixed_effects_cluster_i;
-				for (const auto& cluster_i : unique_clusters_) {
-					//map fixed effects to clusters (if needed)
-					vec_t grad_F_cluster_i(num_data_per_cluster_[cluster_i]);
-					if (num_clusters_ == 1 && (gp_approx_ != "vecchia" || vecchia_ordering_ == "none")) {//only one cluster / independent realization and order of data does not matter
-						fixed_effects_cluster_i_ptr = fixed_effects;
-					}
-					else if (fixed_effects != nullptr) {//more than one cluster and order of samples matters
-						fixed_effects_cluster_i = vec_t(num_data_per_cluster_[cluster_i]);
-#pragma omp parallel for schedule(static)
-						for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
-							fixed_effects_cluster_i[j] = fixed_effects[data_indices_per_cluster_[cluster_i][j]];
-						}
-						fixed_effects_cluster_i_ptr = fixed_effects_cluster_i.data();
-					}
-					if (gp_approx_ == "vecchia") {//Vechia approximation
-						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxVecchia(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							B_[cluster_i],
-							D_inv_[cluster_i],
-							B_grad_[cluster_i],
-							D_grad_[cluster_i],
-							true,
-							false,
-							cov_grad_cluster_i.data(),
-							empty_unused_vec,
-							false,
-							num_comps_total_);
-					}//end gp_approx_ == "vecchia"
-					else {//not gp_approx_ == "vecchia"
-						if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
-							likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxGroupedRE(y_[cluster_i].data(),
-								y_int_[cluster_i].data(),
-								fixed_effects_cluster_i_ptr,
-								num_data_per_cluster_[cluster_i],
-								SigmaI_[cluster_i],
-								Zt_[cluster_i],
-								cum_num_rand_eff_[cluster_i],
-								true,
-								false,
-								cov_grad_cluster_i.data(),
-								empty_unused_vec,
-								false);
-						}//end only_grouped_REs_use_woodbury_identity_
-						else if (only_one_grouped_RE_calculations_on_RE_scale_) {
-							likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(),
-								y_int_[cluster_i].data(),
-								fixed_effects_cluster_i_ptr,
-								num_data_per_cluster_[cluster_i],
-								re_comps_[cluster_i][0]->cov_pars_[0],
-								re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
-								true,
-								false,
-								cov_grad_cluster_i.data(),
-								empty_unused_vec,
-								false);
-						}
-						else if (only_one_GP_calculations_on_RE_scale_) {
-							likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxOnlyOneGPCalculationsOnREScale(y_[cluster_i].data(),
-								y_int_[cluster_i].data(),
-								fixed_effects_cluster_i_ptr,
-								num_data_per_cluster_[cluster_i],
-								ZSigmaZt_[cluster_i], //Note: ZSigmaZt_ contains only Sigma if only_one_GP_calculations_on_RE_scale_==true
-								re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
-								re_comps_[cluster_i],
-								true,
-								false,
-								cov_grad_cluster_i.data(),
-								empty_unused_vec,
-								false);
-						}
-						else {//not only_grouped_REs_use_woodbury_identity_ and not only_one_GP_calculations_on_RE_scale_
-							likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxStable(y_[cluster_i].data(),
-								y_int_[cluster_i].data(),
-								fixed_effects_cluster_i_ptr,
-								num_data_per_cluster_[cluster_i],
-								ZSigmaZt_[cluster_i],
-								re_comps_[cluster_i],
-								true,
-								false,
-								cov_grad_cluster_i.data(),
-								empty_unused_vec,
-								false);
-						}//end not only_grouped_REs_use_woodbury_identity_
-					}//end not gp_approx_ == "vecchia"
-					cov_grad += cov_grad_cluster_i;
-				}// end loop over clusters
-			}//end not gauss_likelihood_
-		//// For debugging
-		//for (int i = 0; i < (int)cov_grad.size(); ++i) { Log::REDebug("cov_grad[%d]: %g", i, cov_grad[i]); }
-		}//end CalcCovParGrad
-
-		/*!
-		* \brief Calculate gradient for linear fixed-effect coefficients
-		* \param marg_var Marginal variance parameters sigma^2 (only used for Gaussian data)
-		* \param beta Linear regression coefficients
-		* \param[out] grad_beta Gradient for linear regression coefficients
-		 * \param fixed_effects Fixed effects component of location parameter for observed data (only used for non-Gaussian data)
-		*/
-		void CalcLinCoefGrad(double marg_var,
-			const vec_t beta,
-			vec_t& grad_beta,
-			const double* fixed_effects = nullptr) {
-			if (gauss_likelihood_) {
-				const vec_t resid = y_vec_ - (X_ * beta);
-				SetY(resid.data());
-				CalcYAux(1.);
-				vec_t y_aux(num_data_);
-				GetYAux(y_aux);
-				grad_beta = (-1. / marg_var) * (X_.transpose()) * y_aux;
-			}
-			else {
-				vec_t grad_F(num_data_);
-				CalcGradFLaplace(grad_F.data(), fixed_effects);
-				grad_beta = (X_.transpose()) * grad_F;
-			}
-			//// For debugging
-			//for (int i = 0; i < (int)grad_beta.size(); ++i) { Log::REDebug("grad_beta[%d]: %g", i, grad_beta[i]); }
-		}//end CalcLinCoefGrad
+		}//end EvalLaplaceApproxNegLogLikelihood
 
 		/*!
 		* \brief Set the data used for making predictions (useful if the same data is used repeatedly, e.g., in validation of GPBoost)
@@ -1973,7 +2029,7 @@ namespace GPBoost {
 							D_sqrt.setIdentity();
 							D_sqrt.diagonal().array() = D_inv_cluster_i.diagonal().array().pow(-0.5);
 							sp_mat_t B_inv_D_sqrt;
-							eigen_sp_Lower_sp_RHS_cs_solve(B_cluster_i, D_sqrt, B_inv_D_sqrt, true);
+							TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(B_cluster_i, D_sqrt, B_inv_D_sqrt, false);
 							psi = B_inv_D_sqrt * B_inv_D_sqrt.transpose();
 						}//end gp_approx_ == "vecchia"
 						else {//not gp_approx_ == "vecchia"
@@ -2180,7 +2236,8 @@ namespace GPBoost {
 							}
 							else if (vecchia_pred_type_ == "latent_order_obs_first_cond_obs_only") {
 								CalcPredVecchiaLatentObservedFirstOrder(true, cluster_i, num_data_per_cluster_pred,
-									re_comp->coords_, gp_coords_mat_pred, predict_cov_mat, predict_var, mean_pred_id, cov_mat_pred_id, var_pred_id);
+									re_comp->coords_, gp_coords_mat_pred, predict_cov_mat, predict_var, predict_response,
+									mean_pred_id, cov_mat_pred_id, var_pred_id);
 								// Note: we use the function 'CalcPredVecchiaLatentObservedFirstOrder' instead of the function 'CalcPredVecchiaObservedFirstOrder' since 
 								//	the current implementation cannot handle duplicate values in gp_coords (coordinates / input features) for Vecchia approximations
 								//	for latent processes (as matrices that need to be inverted will be singular due to the duplicate values).
@@ -2189,13 +2246,14 @@ namespace GPBoost {
 							}
 							else if (vecchia_pred_type_ == "latent_order_obs_first_cond_all") {
 								CalcPredVecchiaLatentObservedFirstOrder(false, cluster_i, num_data_per_cluster_pred,
-									re_comp->coords_, gp_coords_mat_pred, predict_cov_mat, predict_var, mean_pred_id, cov_mat_pred_id, var_pred_id);
+									re_comp->coords_, gp_coords_mat_pred, predict_cov_mat, predict_var, predict_response,
+									mean_pred_id, cov_mat_pred_id, var_pred_id);
 							}
 							else {
 								Log::REFatal("Prediction type '%s' is not supported for the Veccia approximation.", vecchia_pred_type_.c_str());
 							}
 							if (predict_var || predict_cov_mat) {
-								// subtract / add nugget variance in case latent / observable process is predicted
+								// subtract nugget variance in case latent process is predicted
 								if (!predict_response && (vecchia_pred_type_ == "order_obs_first_cond_obs_only" ||
 									vecchia_pred_type_ == "order_obs_first_cond_all" ||
 									vecchia_pred_type_ == "order_pred_first")) {
@@ -2212,21 +2270,6 @@ namespace GPBoost {
 										}
 									}
 								}
-								else if (predict_response && (vecchia_pred_type_ == "latent_order_obs_first_cond_obs_only" ||
-									vecchia_pred_type_ == "latent_order_obs_first_cond_all")) {
-									if (predict_cov_mat) {
-#pragma omp parallel for schedule(static)
-										for (int i = 0; i < num_data_per_cluster_pred[cluster_i]; ++i) {
-											cov_mat_pred_id.coeffRef(i, i) += 1.;
-										}
-									}
-									if (predict_var) {
-#pragma omp parallel for schedule(static)
-										for (int i = 0; i < num_data_per_cluster_pred[cluster_i]; ++i) {
-											var_pred_id[i] += 1.;
-										}
-									}
-								}
 							}
 						}//end gauss_likelihood_
 						else {//not gauss_likelihood_
@@ -2238,7 +2281,7 @@ namespace GPBoost {
 								CalcPredVecchiaObservedFirstOrder(true, cluster_i, num_data_pred, num_data_per_cluster_pred, data_indices_per_cluster_pred,
 									re_comp->coords_, gp_coords_mat_pred, gp_rand_coef_data_pred,
 									false, false, mean_pred_id, cov_mat_pred_id, var_pred_id, Bpo, Bp, Dp);
-								likelihood_[cluster_i]->PredictLAApproxVecchia(y_[cluster_i].data(), y_int_[cluster_i].data(), fixed_effects_cluster_i_ptr, num_data_per_cluster_[cluster_i],
+								likelihood_[cluster_i]->PredictLaplaceApproxVecchia(y_[cluster_i].data(), y_int_[cluster_i].data(), fixed_effects_cluster_i_ptr, num_data_per_cluster_[cluster_i],
 									B_[cluster_i], D_inv_[cluster_i], Bpo, Bp, Dp,
 									mean_pred_id, cov_mat_pred_id, var_pred_id,
 									predict_cov_mat, predict_var_or_response, false, true);
@@ -2247,7 +2290,7 @@ namespace GPBoost {
 								CalcPredVecchiaObservedFirstOrder(false, cluster_i, num_data_pred, num_data_per_cluster_pred, data_indices_per_cluster_pred,
 									re_comp->coords_, gp_coords_mat_pred, gp_rand_coef_data_pred,
 									false, false, mean_pred_id, cov_mat_pred_id, var_pred_id, Bpo, Bp, Dp);
-								likelihood_[cluster_i]->PredictLAApproxVecchia(y_[cluster_i].data(), y_int_[cluster_i].data(), fixed_effects_cluster_i_ptr, num_data_per_cluster_[cluster_i],
+								likelihood_[cluster_i]->PredictLaplaceApproxVecchia(y_[cluster_i].data(), y_int_[cluster_i].data(), fixed_effects_cluster_i_ptr, num_data_per_cluster_[cluster_i],
 									B_[cluster_i], D_inv_[cluster_i], Bpo, Bp, Dp,
 									mean_pred_id, cov_mat_pred_id, var_pred_id,
 									predict_cov_mat, predict_var_or_response, false, false);
@@ -2360,20 +2403,19 @@ namespace GPBoost {
 		* \param cov_pars_pred Covariance parameters of components
 		* \param coef_pred Coefficients for linear covariates
 		* \param y_obs Response variable for observed data
-		* \param[out] out_predict Predicted training data random effects
+		* \param[out] out_predict Predicted training data random effects and variances if calc_var
 		* \param calc_cov_factor If true, the covariance matrix of the observed data is factorized otherwise a previously done factorization is used
 		* \param fixed_effects Fixed effects component of location parameter for observed data (only used for non-Gaussian data)
+		* \param calc_var If true, variances are also calculated
 		*/
 		void PredictTrainingDataRandomEffects(const double* cov_pars_pred,
 			const double* coef_pred,
 			const double* y_obs,
 			double* out_predict,
 			bool calc_cov_factor,
-			const double* fixed_effects) {
+			const double* fixed_effects,
+			bool calc_var) {
 			//Some checks
-			if (gp_approx_ == "vecchia") {
-				Log::REFatal("PredictTrainingDataRandomEffects() is not yet implemented for the Vecchia approximation");
-			}
 			CHECK(cov_pars_pred != nullptr);
 			if (has_covariates_) {
 				CHECK(coef_pred != nullptr);
@@ -2388,110 +2430,314 @@ namespace GPBoost {
 			if (has_covariates_) {
 				coef = Eigen::Map<const vec_t>(coef_pred, num_coef_);
 			}
+			if (gauss_likelihood_ && gp_approx_ == "vecchia") {
+				calc_cov_factor = true;//recalculate Vecchia approximation since it might have been done (saved in B_) with a different nugget effect if calc_std_dev == true in CalcStdDevCovPar
+			}
 			SetYCalcCovCalcYAux(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects, true);
 			// Loop over different clusters to calculate predictions
 			for (const auto& cluster_i : unique_clusters_) {
-				int cn = 0;//component number counter
-				const vec_t* y_aux;
 				if (gauss_likelihood_) {
-					y_aux = &(y_aux_[cluster_i]);
-				}
-				else {
-					y_aux = likelihood_[cluster_i]->GetFirstDerivLL();
-				}
-				//Grouped random effects
-				for (int j = 0; j < num_re_group_; ++j) {
-					double sigma = re_comps_[cluster_i][cn]->cov_pars_[0];
-					vec_t mean_pred_id;
-					if (only_one_grouped_RE_calculations_on_RE_scale_) {
-						int num_re = re_comps_[cluster_i][cn]->GetNumUniqueREs();
-						vec_t ZtYAux;
-						CalcZtVGivenIndices(num_data_per_cluster_[cluster_i], num_re,
-							re_comps_[cluster_i][cn]->random_effects_indices_of_data_.data(), *y_aux, ZtYAux, true);
-						mean_pred_id = vec_t(num_data_per_cluster_[cluster_i]);
+					if (gp_approx_ == "vecchia") {
+						if (num_comps_total_ > 1) {
+							Log::REFatal("PredictTrainingDataRandomEffects() is not implemented for the Vecchia approximation "
+								"when having multiple GPs / random coefficient GPs ");
+						}
+#pragma omp parallel for schedule(static)// Write on output
+						for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+							out_predict[data_indices_per_cluster_[cluster_i][i]] = y_[cluster_i][i] - y_aux_[cluster_i][i];
+						}
+						if (calc_var) {
+							sp_mat_t B_inv(num_data_per_cluster_[cluster_i], num_data_per_cluster_[cluster_i]);
+							sp_mat_t M_aux = B_[cluster_i].cwiseProduct(D_inv_[cluster_i] * B_[cluster_i]);
+#pragma omp parallel for schedule(static)// Write on output
+							for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+								out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * num_comps_total_] = cov_pars[0] * (1. - M_aux.col(i).sum());
+							}
+						}
+					}
+					else {// not gp_approx_ == "vecchia"
+						int cn = 0;//component number counter
+						const vec_t* y_aux = &(y_aux_[cluster_i]);
+						vec_t mean_pred_id, var_pred_id;
+						if (calc_var) {
+							var_pred_id = vec_t(num_data_per_cluster_[cluster_i]);
+						}
+						//Grouped random effects
+						for (int j = 0; j < num_re_group_total_; ++j) {
+							double sigma = re_comps_[cluster_i][cn]->cov_pars_[0];
+							if (only_grouped_REs_use_woodbury_identity_ && num_re_group_total_ == 1) {
+								if (re_comps_[cluster_i][cn]->IsRandCoef()) {
+									Log::REFatal("PredictTrainingDataRandomEffects() is not implemented when having only one grouped random coefficient effect ");
+								}
+								vec_t ZtYAux;
+								mean_pred_id = vec_t(num_data_per_cluster_[cluster_i]);
+								int num_re = re_comps_[cluster_i][cn]->GetNumUniqueREs();
+								CalcZtVGivenIndices(num_data_per_cluster_[cluster_i], num_re,
+									re_comps_[cluster_i][cn]->random_effects_indices_of_data_.data(), *y_aux, ZtYAux, true);
 #pragma omp parallel for schedule(static)
-						for (data_size_t i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
-							mean_pred_id[i] = sigma * ZtYAux[(re_comps_[cluster_i][0]->random_effects_indices_of_data_)[i]];
-						}
-					}//end only_one_grouped_RE_calculations_on_RE_scale_
-					else {
-						sp_mat_t* Z_j = re_comps_[cluster_i][cn]->GetZ();
-						mean_pred_id = sigma * (*Z_j) * (*Z_j).transpose() * (*y_aux);
-					}
-#pragma omp parallel for schedule(static)// Write on output
-					for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
-						out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn] = mean_pred_id[i];
-					}
-					cn += 1;
-				}//end gouped random effects
-				//Random coefficient grouped random effects
-				for (int j = 0; j < num_re_group_rand_coef_; ++j) {
-					double sigma = re_comps_[cluster_i][cn]->cov_pars_[0];
-					sp_mat_t* Z_j = re_comps_[cluster_i][cn]->GetZ();
-					sp_mat_t Z_base_j = *Z_j;
-					for (int k = 0; k < Z_base_j.outerSize(); ++k) {
-						for (sp_mat_t::InnerIterator it(Z_base_j, k); it; ++it) {
-							it.valueRef() = 1.;
-						}
-					}
-					vec_t mean_pred_id = sigma * Z_base_j * (*Z_j).transpose() * (*y_aux);
-#pragma omp parallel for schedule(static)// Write on output
-					for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
-						out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn] = mean_pred_id[i];
-					}
-					cn += 1;
-				}
-				//Gaussian process
-				if (num_gp_ > 0) {
-					std::shared_ptr<RECompGP<T_mat>> re_comp_base = std::dynamic_pointer_cast<RECompGP<T_mat>>(re_comps_[cluster_i][cn]);
-					vec_t mean_pred_id;
-					if (only_one_GP_calculations_on_RE_scale_) {
-						int num_re = re_comps_[cluster_i][cn]->GetNumUniqueREs();
-						vec_t ZtYAux, SigmaZtYAux;
-						CalcZtVGivenIndices(num_data_per_cluster_[cluster_i], num_re,
-							re_comps_[cluster_i][cn]->random_effects_indices_of_data_.data(), *y_aux, ZtYAux, true);
-						SigmaZtYAux = (re_comp_base->sigma_) * ZtYAux;
-						mean_pred_id = vec_t(num_data_per_cluster_[cluster_i]);
+								for (data_size_t i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+									mean_pred_id[i] = sigma * ZtYAux[(re_comps_[cluster_i][0]->random_effects_indices_of_data_)[i]];
+								}
+								if (calc_var) {
+									vec_t M_aux = (ZtZ_[cluster_i].diagonal().array() / sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array()).matrix();
+									vec_t M_aux2 = (ZtZ_[cluster_i].diagonal().array() - M_aux.array().square()).matrix();
+									vec_t M_aux3 = (sigma - (sigma * sigma * M_aux2.array())).matrix();
+									vec_t M_aux4 = M_aux3.array().sqrt().matrix();
+									sp_mat_t M_aux5 = M_aux4.asDiagonal() * Zt_[cluster_i];
 #pragma omp parallel for schedule(static)
-						for (data_size_t i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
-							mean_pred_id[i] = SigmaZtYAux[(re_comps_[cluster_i][0]->random_effects_indices_of_data_)[i]];
-						}
-					}//end only_one_GP_calculations_on_RE_scale_
-					else {
-						if (re_comp_base->HasZ()) {
-							sp_mat_t* Z_j = re_comp_base->GetZ();
-							mean_pred_id = (*Z_j) * (re_comp_base->sigma_) * (*Z_j).transpose() * (*y_aux);
-						}
-						else {
-							mean_pred_id = (re_comp_base->sigma_) * (*y_aux);
-						}
-					}
+									for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+										var_pred_id[i] = cov_pars[0] * M_aux5.col(i).squaredNorm();
+									}
+								}
+							}//end only_grouped_REs_use_woodbury_identity_ && num_re_group_total_ == 1
+							else {
+								sp_mat_t* Z_j = re_comps_[cluster_i][cn]->GetZ();
+								sp_mat_t Z_base_j;
+								if (re_comps_[cluster_i][cn]->IsRandCoef()) {
+									Z_base_j = *Z_j;
+#pragma omp parallel for schedule(static)
+									for (int k = 0; k < Z_base_j.outerSize(); ++k) {
+										for (sp_mat_t::InnerIterator it(Z_base_j, k); it; ++it) {
+											it.valueRef() = 1.;
+										}
+									}
+									mean_pred_id = sigma * Z_base_j * ((*Z_j).transpose() * (*y_aux));
+								}
+								else {
+									mean_pred_id = sigma * (*Z_j) * ((*Z_j).transpose() * (*y_aux));
+								}
+								if (calc_var) {
+									sp_mat_t ZjtZj = (*Z_j).transpose() * (*Z_j);
+									if (only_grouped_REs_use_woodbury_identity_) {
+										T_mat M_aux;
+										if (CholeskyHasPermutation<T_chol>(chol_facts_[cluster_i])) {
+											TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), P_ZtZj_[cluster_i][cn], M_aux, false);
+										}
+										else {
+											TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), ZtZj_[cluster_i][cn], M_aux, false);
+										}
+										T_mat M_aux3 = sigma * sigma * (M_aux.transpose() * M_aux - ZjtZj);
+										M_aux3.diagonal().array() += sigma;
+										if (re_comps_[cluster_i][cn]->IsRandCoef()) {
+											Z_j = &Z_base_j;
+										}
+										T_mat M_aux4 = (*Z_j) * M_aux3;
+#pragma omp parallel for schedule(static)
+										for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+											var_pred_id[i] = cov_pars[0] * (*Z_j).row(i).cwiseProduct(M_aux4.row(i)).sum();
+										}
+									}//end only_grouped_REs_use_woodbury_identity_
+									else {//!only_grouped_REs_use_woodbury_identity_
+										T_mat M_aux;
+										TriangularSolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i], *Z_j, M_aux, false);
+										T_mat M_aux2 = (*Z_j) * M_aux.transpose();
+										if (re_comps_[cluster_i][cn]->IsRandCoef()) {
+											Z_j = &Z_base_j;
+										}
+#pragma omp parallel for schedule(static)
+										for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+											var_pred_id[i] = cov_pars[0] * (sigma - sigma * sigma * M_aux2.row(i).squaredNorm());
+										}
+									}//end !only_grouped_REs_use_woodbury_identity_
+								}//end calc_var
+							}//end !(only_grouped_REs_use_woodbury_identity_ && num_re_group_total_ == 1)
 #pragma omp parallel for schedule(static)// Write on output
-					for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
-						out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn] = mean_pred_id[i];
-					}
-					cn += 1;
-					//Random coefficient Gaussian processes
-					if (num_gp_rand_coef_ > 0) {
-						for (int j = 0; j < num_gp_rand_coef_; ++j) {
-							std::shared_ptr<RECompGP<T_mat>> re_comp = std::dynamic_pointer_cast<RECompGP<T_mat>>(re_comps_[cluster_i][cn]);
-							if (re_comp_base->HasZ()) {
-								sp_mat_t* Z_j = re_comp->GetZ();
-								sp_mat_t* Z_base_j = re_comp_base->GetZ();
-								mean_pred_id = (*Z_base_j) * (re_comp->sigma_) * (*Z_j).transpose() * (*y_aux);
+							for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+								out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn] = mean_pred_id[i];
+							}
+							if (calc_var) {
+#pragma omp parallel for schedule(static)// Write on output
+								for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+									out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn + num_data_ * num_comps_total_] = var_pred_id[i];
+								}
+							}
+							cn += 1;
+						}//end gouped random effects
+						//Gaussian process
+						if (num_gp_ > 0) {
+							std::shared_ptr<RECompGP<T_mat>> re_comp_base = std::dynamic_pointer_cast<RECompGP<T_mat>>(re_comps_[cluster_i][cn]);
+							sp_mat_t* Z_j = nullptr, * Z_base_j = nullptr;
+							for (int j = 0; j < num_gp_total_; ++j) {
+								double sigma = re_comps_[cluster_i][cn]->cov_pars_[0];
+								std::shared_ptr<RECompGP<T_mat>> re_comp = std::dynamic_pointer_cast<RECompGP<T_mat>>(re_comps_[cluster_i][cn]);
+								if (re_comp->IsRandCoef() || re_comp_base->HasZ()) {
+									Z_j = re_comp->GetZ();
+									if (re_comp_base->HasZ()) {
+										Z_base_j = re_comp_base->GetZ();
+									}
+								}
+								if (re_comp_base->HasZ()) {
+									mean_pred_id = (*Z_base_j) * ((re_comp->sigma_) * ((*Z_j).transpose() * (*y_aux)));
+								}
+								else if (re_comp->IsRandCoef()) {
+									mean_pred_id = (re_comp->sigma_) * ((*Z_j).transpose() * (*y_aux));
+								}
+								else {
+									mean_pred_id = (re_comp->sigma_) * (*y_aux);
+								}
+								if (calc_var) {
+									T_mat M_aux, M_aux2, M_aux3;
+									if (re_comp_base->HasZ()){
+										M_aux = (*Z_j) * (re_comp->sigma_) * (*Z_base_j).transpose();
+									}
+									else if (re_comp->IsRandCoef()) {
+										M_aux = (*Z_j) * (re_comp->sigma_);
+									}
+									else {
+										M_aux = re_comp->sigma_;
+									}
+									TriangularSolveGivenCholesky<T_chol, T_mat, T_mat, T_mat>(chol_facts_[cluster_i], M_aux, M_aux2, false);
+#pragma omp parallel for schedule(static)
+									for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+										var_pred_id[i] = cov_pars[0] * (sigma - M_aux2.col(i).squaredNorm());
+									}
+								}
+#pragma omp parallel for schedule(static)// Write on output
+								for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+									out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn] = mean_pred_id[i];
+								}
+								if (calc_var) {
+#pragma omp parallel for schedule(static)// Write on output
+									for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+										out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn + num_data_ * num_comps_total_] = var_pred_id[i];
+									}
+								}
+								cn += 1;
+							}//end loop over GP components
+						}// end Gaussian process
+					}// end not gp_approx_ == "vecchia"
+				}//end gauss_likelihood_
+				else {//not gauss_likelihood_
+					const vec_t* mode = likelihood_[cluster_i]->GetMode();
+					if (gp_approx_ == "vecchia") {
+#pragma omp parallel for schedule(static)// Write on output
+						for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+							out_predict[data_indices_per_cluster_[cluster_i][i]] = (*mode)[i];
+						}
+						if (calc_var) {
+							vec_t var_pred_id;
+							likelihood_[cluster_i]->CalcVarLaplaceApproxVecchia(var_pred_id);
+#pragma omp parallel for schedule(static)// Write on output
+							for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+								out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_] = var_pred_id[i];
+							}
+						}
+					}//end gp_approx_ == "vecchia"
+					else if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
+						vec_t var_pred_all;
+						for (int cn = 0; cn < num_re_group_total_; ++cn) {
+							vec_t mean_pred_id;
+							sp_mat_t* Z_j = re_comps_[cluster_i][cn]->GetZ();
+							sp_mat_t Z_base_j;
+							if (re_comps_[cluster_i][cn]->IsRandCoef()) {
+								Z_base_j = *Z_j;
+#pragma omp parallel for schedule(static)
+								for (int k = 0; k < Z_base_j.outerSize(); ++k) {
+									for (sp_mat_t::InnerIterator it(Z_base_j, k); it; ++it) {
+										it.valueRef() = 1.;
+									}
+								}
+								Z_j = &Z_base_j;
+							}
+							int num_re_comp = cum_num_rand_eff_[cluster_i][cn + 1] - cum_num_rand_eff_[cluster_i][cn];
+							int start_re_comp = cum_num_rand_eff_[cluster_i][cn];
+							mean_pred_id = (*Z_j) * (*mode).segment(start_re_comp, num_re_comp);
+#pragma omp parallel for schedule(static)// Write on output
+							for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+								out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn] = mean_pred_id[i];
+							}
+							if (calc_var) {
+								if (cn == 0) {
+									likelihood_[cluster_i]->CalcVarLaplaceApproxGroupedRE(var_pred_all);
+								}
+								vec_t var_pred_id = (*Z_j) * var_pred_all.segment(start_re_comp, num_re_comp);
+#pragma omp parallel for schedule(static)// Write on output
+								for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+									out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn + num_data_ * num_comps_total_] = var_pred_id[i];
+								}
+							}
+						}
+					}//end only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_
+					else if (only_one_grouped_RE_calculations_on_RE_scale_ || only_one_GP_calculations_on_RE_scale_) {
+#pragma omp parallel for schedule(static)// Write on output
+						for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+							out_predict[data_indices_per_cluster_[cluster_i][i]] = (*mode)[(re_comps_[cluster_i][0]->random_effects_indices_of_data_)[i]];
+						}
+						if (calc_var) {
+							vec_t var_pred_id;
+							if (only_one_GP_calculations_on_RE_scale_) {
+								likelihood_[cluster_i]->CalcVarLaplaceApproxOnlyOneGPCalculationsOnREScale(ZSigmaZt_[cluster_i], 
+									re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
+									var_pred_id);
+							}
+							else if (only_one_grouped_RE_calculations_on_RE_scale_){
+								likelihood_[cluster_i]->CalcVarLaplaceApproxOnlyOneGroupedRECalculationsOnREScale(var_pred_id);
+							}
+#pragma omp parallel for schedule(static)// Write on output
+							for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+								out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_] = var_pred_id[(re_comps_[cluster_i][0]->random_effects_indices_of_data_)[i]];
+							}
+						}
+					}//end only_one_grouped_RE_calculations_on_RE_scale_ || only_one_GP_calculations_on_RE_scale_
+					else {//at least one GP and additional components
+						//Note: use the "general" prediction formula since the mode is calculated on the aggragate scale and not for every component separaretly (mode_.size() == num_data and not num_data * num_comps_total_)
+						if (calc_var) {
+							Log::REFatal("PredictTrainingDataRandomEffects(): calculating of variances is not implemented when having at least on GP and additional random effects ");
+						}
+						const vec_t* first_deriv = likelihood_[cluster_i]->GetFirstDerivLL();
+						int cn = 0;//component number counter
+						vec_t mean_pred_id;
+						for (int j = 0; j < num_re_group_total_; ++j) {
+							double sigma = re_comps_[cluster_i][cn]->cov_pars_[0];
+							if (re_comps_[cluster_i][cn]->IsRandCoef()) {
+								sp_mat_t* Z_j = re_comps_[cluster_i][cn]->GetZ();
+								sp_mat_t Z_base_j = *Z_j;
+#pragma omp parallel for schedule(static)
+								for (int k = 0; k < Z_base_j.outerSize(); ++k) {
+									for (sp_mat_t::InnerIterator it(Z_base_j, k); it; ++it) {
+										it.valueRef() = 1.;
+									}
+								}
+								mean_pred_id = sigma * Z_base_j * (*Z_j).transpose() * (*first_deriv);
 							}
 							else {
-								sp_mat_t* Z_j = re_comp->GetZ();
-								mean_pred_id = (re_comp->sigma_) * (*Z_j).transpose() * (*y_aux);
+								sp_mat_t* Z_j = re_comps_[cluster_i][cn]->GetZ();
+								mean_pred_id = sigma * (*Z_j) * (*Z_j).transpose() * (*first_deriv);
 							}
 #pragma omp parallel for schedule(static)// Write on output
 							for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
 								out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn] = mean_pred_id[i];
 							}
 							cn += 1;
-						}
-					}
-				}// end Gaussian process
+						}//end loop over grouped RE
+						//GPs 
+						std::shared_ptr<RECompGP<T_mat>> re_comp_base = std::dynamic_pointer_cast<RECompGP<T_mat>>(re_comps_[cluster_i][cn]);
+						sp_mat_t* Z_j = nullptr, * Z_base_j = nullptr;
+						for (int j = 0; j < num_gp_total_; ++j) {
+							std::shared_ptr<RECompGP<T_mat>> re_comp = std::dynamic_pointer_cast<RECompGP<T_mat>>(re_comps_[cluster_i][cn]);
+							if (re_comp->IsRandCoef() || re_comp_base->HasZ()) {
+								Z_j = re_comp->GetZ();
+								if (re_comp_base->HasZ()) {
+									Z_base_j = re_comp_base->GetZ();
+								}
+							}
+							if (re_comp_base->HasZ()) {
+								mean_pred_id = (*Z_base_j) * (re_comp->sigma_) * (*Z_j).transpose() * (*first_deriv);
+							}
+							else if (re_comp->IsRandCoef()) {
+								mean_pred_id = (re_comp->sigma_) * (*Z_j).transpose() * (*first_deriv);
+							}
+							else {
+								mean_pred_id = (re_comp_base->sigma_) * (*first_deriv);
+							}
+#pragma omp parallel for schedule(static)// Write on output
+							for (int i = 0; i < num_data_per_cluster_[cluster_i]; ++i) {
+								out_predict[data_indices_per_cluster_[cluster_i][i] + num_data_ * cn] = mean_pred_id[i];
+							}
+							cn += 1;
+						}//end loop over GPs
+					}//end at least one GP and additional components
+				}//end not gauss_likelihood_
 			}//end loop over cluster
 		}//end PredictTrainingDataRandomEffects
 
@@ -2506,6 +2752,7 @@ namespace GPBoost {
 			double mean = 0;
 			double var = 0;
 			int ind_par;
+			double init_marg_var = 1.;
 			if (gauss_likelihood_) {
 				//determine initial value for nugget effect
 #pragma omp parallel for schedule(static) reduction(+:mean)
@@ -2523,12 +2770,16 @@ namespace GPBoost {
 			}//end Gaussian data
 			else {//non-Gaussian data
 				ind_par = 0;
+				if (optimizer_cov_pars_ == "nelder_mead") {
+					init_marg_var = 0.1;
+				}
+				//TODO: find better initial values depending on the likelihood (e.g., poisson, gamma, etc.)
 			}
 			if (gp_approx_ == "vecchia") {//Neither distances nor coordinates are saved for random coefficient GPs in the Vecchia approximation -> cannot find initial parameters -> just copy the ones from the intercept GP
 				// find initial values for intercept process
 				int num_par_j = ind_par_[1] - ind_par_[0];
 				vec_t pars = vec_t(num_par_j);
-				re_comps_[unique_clusters_[0]][0]->FindInitCovPar(rng_, pars);
+				re_comps_[unique_clusters_[0]][0]->FindInitCovPar(rng_, pars, init_marg_var);
 				for (int jj = 0; jj < num_par_j; ++jj) {
 					init_cov_pars[ind_par] = pars[jj];
 					ind_par++;
@@ -2546,7 +2797,8 @@ namespace GPBoost {
 				for (int j = 0; j < num_comps_total_; ++j) {
 					int num_par_j = ind_par_[j + 1] - ind_par_[j];
 					vec_t pars = vec_t(num_par_j);
-					re_comps_[unique_clusters_[0]][j]->FindInitCovPar(rng_, pars);
+					re_comps_[unique_clusters_[0]][j]->FindInitCovPar(rng_, pars, init_marg_var);
+					//TODO (low priority): find better initial estimates for grouped random effects for Gaussian likelihoods (as e.g. the variance of the group means)
 					for (int jj = 0; jj < num_par_j; ++jj) {
 						init_cov_pars[ind_par] = pars[jj];
 						ind_par++;
@@ -2606,19 +2858,19 @@ namespace GPBoost {
 						}
 						else {
 							sp_mat_t ZtH_cluster_i;
-							if (CholeskyHasPermutation<T_chol>(chol_facts_solve_[cluster_i])) {
+							if (CholeskyHasPermutation<T_chol>(chol_facts_[cluster_i])) {
 								ZtH_cluster_i = P_Zt_[cluster_i] * H_cluster_i;
 							}
 							else {
 								ZtH_cluster_i = Zt_[cluster_i] * H_cluster_i;
 							}
-							TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), ZtH_cluster_i, MInvSqrtZtH, false);
+							TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), ZtH_cluster_i, MInvSqrtZtH, false);
 						}
 						HTPsiInvH_cluster_i = H_cluster_i.transpose() * H_cluster_i - MInvSqrtZtH.transpose() * MInvSqrtZtH;
 					}
 					else {
 						T_mat PsiInvSqrtH;
-						TriangularSolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i], H_cluster_i, PsiInvSqrtH, false);
+						TriangularSolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i], H_cluster_i, PsiInvSqrtH, false);
 						HTPsiInvH_cluster_i = PsiInvSqrtH.transpose() * PsiInvSqrtH;
 					}
 				}
@@ -2729,7 +2981,7 @@ namespace GPBoost {
 
 		// COVARIANCE MATRIX AND CHOLESKY FACTORS OF IT
 		/*! \brief Key: labels of independent realizations of REs/GPs, values: Cholesky decomposition of covariance matrices */
-		std::map<data_size_t, T_chol> chol_facts_solve_;
+		std::map<data_size_t, T_chol> chol_facts_;
 		/*! \brief  Key: labels of independent realizations of REs/GPs, values: Square root of diagonal of matrix Sigma^-1 + Zt * Z  (used only if there is only one grouped random effect and ZtZ is diagonal) */
 		std::map<data_size_t, vec_t> sqrt_diag_SigmaI_plus_ZtZ_;
 		/*! \brief Indicates whether the covariance matrix has been factorized or not */
@@ -2768,9 +3020,9 @@ namespace GPBoost {
 		const std::set<string_t> SUPPORTED_CONV_CRIT_{ "relative_change_in_parameters", "relative_change_in_log_likelihood" };
 		/*! \brief Maximal number of iterations for covariance parameter and linear regression parameter estimation */
 		int max_iter_ = 1000;
-		/*! 
-		\brief Convergence tolerance for covariance and linear regression coefficient estimation. 
-		The algorithm stops if the relative change in either the (approximate) log-likelihood or the parameters is below this value. 
+		/*!
+		\brief Convergence tolerance for covariance and linear regression coefficient estimation.
+		The algorithm stops if the relative change in either the (approximate) log-likelihood or the parameters is below this value.
 		For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood.
 		If delta_rel_conv_init_ < 0, internal default values are set in 'OptimConfigSetInitialValues'
 		*/
@@ -2781,6 +3033,10 @@ namespace GPBoost {
 		double lr_cov_;
 		/*! \brief Initial learning rate for covariance parameters (to remember as lr_cov_ can be decreased) */
 		double lr_cov_init_ = -1;
+		/*! \brief Learning rate for additional parameters for non-Gaussian likelihoods (e.g., shape of a gamma likelihood) */
+		double lr_aux_pars_;
+		/*! \brief Initial learning rate for additional parameters for non-Gaussian likelihoods (e.g., shape of a gamma likelihood) */
+		double lr_aux_pars_init_ = 0.1;
 		/*! \brief Indicates whether Nesterov acceleration is used in the gradient descent for finding the covariance parameters (only used for "gradient_descent") */
 		bool use_nesterov_acc_ = true;
 		/*! \brief Acceleration rate for covariance parameters for Nesterov acceleration (only relevant if use_nesterov_acc and nesterov_schedule_version == 0) */
@@ -2789,8 +3045,6 @@ namespace GPBoost {
 		int momentum_offset_ = 2;
 		/*! \brief Select Nesterov acceleration schedule 0 or 1 */
 		int nesterov_schedule_version_ = 0;
-		/*! \brief If true, updates for covariance parameters on the log-scale in one gradient descent or Fisher scoring step are capped at a certain level */
-		bool CAP_TOO_LARGE_COV_PAR_GRADIENT_UPDATES_LOG_SCALE_ = true;
 		/*! \brief Maximal value of gradient updates on log-scale for covariance parameters */
 		double MAX_GRADIENT_UPDATE_LOG_SCALE_ = std::log(100.); // allow maximally a change by a factor of 100 in one iteration
 		/*! \brief Optimizer for linear regression coefficients (The default = "wls" is changed to "gradient_descent" for non-Gaussian data upon initialization). See the constructor REModelTemplate() for the default values which depend on whether the likelihood is Gaussian or not */
@@ -2845,6 +3099,10 @@ namespace GPBoost {
 		const std::set<string_t> SUPPORTED_CG_PRECONDITIONER_TYPE_{ "none" };
 		/*! \brief Rank of the pivoted cholseky decomposition used for the preconditioner of the conjugate gradient algorithm */
 		int piv_chol_rank_ = 100;
+		/*! \brief If true, any additional parameters for non-Gaussian likelihoods are also estimated (e.g., shape parameter of gamma likelihood) */
+		bool estimate_aux_pars_ = false;
+		/*! \brief True if the function 'SetOptimConfig' has been called */
+		bool set_optim_config_has_been_called_ = false;
 
 		// WOODBURY IDENTITY FOR GROUPED RANDOM EFFECTS ONLY
 		/*! \brief Collects matrices Z^T (only saved when only_grouped_REs_use_woodbury_identity_=true i.e. when there are only grouped random effects, otherwise these matrices are saved only in the indepedent RE components) */
@@ -2953,7 +3211,13 @@ namespace GPBoost {
 		data_size_t num_data_pred_;
 
 		// ERROR MESSAGES
-		const char* DUPLICATES_COORDS_VECCHIA_NONGAUSS_ = "Duplicates found in the coordinates for the Gaussian process. This is currently not supported for the Vecchia approximation for non-Gaussian likelihoods ";
+		const char* DUPLICATES_COORDS_VECCHIA_NONGAUSS_ = "Duplicates found in the coordinates for the Gaussian process. "
+			"This is currently not supported for the Vecchia approximation for non-Gaussian likelihoods ";
+		const char* DUPLICATES_PRED_VECCHIA_COND_ALL_NONGAUSS_ = "Duplicates found among training and test coordinates. "
+			"This is not supported for predictions with a Vecchia approximation for non-Gaussian likelihoods "
+			"when neighbors are selected among both training and test points ('_cond_all') ";
+		const char* DUPLICATES_PRED_VECCHIA_LATENT_ = "Duplicates found among training and test coordinates. "
+			"This is not supported for predictions with a Vecchia approximation for the latent process ('latent_') ";
 
 		/*! Random number generator */
 		RNG_t rng_;
@@ -3028,7 +3292,6 @@ namespace GPBoost {
 						for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
 							y_int_[cluster_i][j] = static_cast<int>(y_data[data_indices_per_cluster_[cluster_i][j]]);
 						}
-						(*likelihood_[cluster_i]).template CalculateNormalizingConstant<int>(y_int_[cluster_i].data(), num_data_per_cluster_[cluster_i]);
 					}
 				}
 				else if (likelihood_[unique_clusters_[0]]->label_type() == "double") {
@@ -3037,7 +3300,6 @@ namespace GPBoost {
 						for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
 							y_[cluster_i][j] = y_data[data_indices_per_cluster_[cluster_i][j]];
 						}
-						(*likelihood_[cluster_i]).template CalculateNormalizingConstant<double>(y_[cluster_i].data(), num_data_per_cluster_[cluster_i]);
 					}
 				}
 			}//end not gauss_likelihood_
@@ -3060,7 +3322,6 @@ namespace GPBoost {
 						for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
 							y_int_[cluster_i][j] = static_cast<int>(y_data[data_indices_per_cluster_[cluster_i][j]]);
 						}
-						(*likelihood_[cluster_i]).template CalculateNormalizingConstant<int>(y_int_[cluster_i].data(), num_data_per_cluster_[cluster_i]);
 					}
 				}
 				else if (likelihood_[unique_clusters_[0]]->label_type() == "double") {
@@ -3069,7 +3330,6 @@ namespace GPBoost {
 						for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
 							y_[cluster_i][j] = static_cast<double>(y_data[data_indices_per_cluster_[cluster_i][j]]);
 						}
-						(*likelihood_[cluster_i]).template CalculateNormalizingConstant<double>(y_[cluster_i].data(), num_data_per_cluster_[cluster_i]);
 					}
 				}
 			}
@@ -3170,120 +3430,6 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Calculate the gradient of the Laplace-approximated negative log-likelihood with respect to the fixed effects F (only used for non-Gaussian data)
-		* \param[out] grad_F Gradient of the Laplace-approximated negative log-likelihood with respect to the fixed effects F. This vector needs to be pre-allocated of length num_data_
-		* \param fixed_effects Fixed effects component of location parameter
-		*/
-		void CalcGradFLaplace(double* grad_F, const double* fixed_effects = nullptr) {
-			//std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();// Only for debugging
-			const double* fixed_effects_cluster_i_ptr = nullptr;
-			vec_t fixed_effects_cluster_i;
-			for (const auto& cluster_i : unique_clusters_) {
-				vec_t grad_F_cluster_i(num_data_per_cluster_[cluster_i]);
-				//map fixed effects to clusters (if needed)
-				if (num_clusters_ == 1 && (gp_approx_ != "vecchia" || vecchia_ordering_ == "none")) {//only one cluster / independent realization and order of data does not matter
-					fixed_effects_cluster_i_ptr = fixed_effects;
-				}
-				else if (fixed_effects != nullptr) {//more than one cluster and order of samples matters
-					fixed_effects_cluster_i = vec_t(num_data_per_cluster_[cluster_i]);
-#pragma omp parallel for schedule(static)
-					for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
-						fixed_effects_cluster_i[j] = fixed_effects[data_indices_per_cluster_[cluster_i][j]];
-					}
-					fixed_effects_cluster_i_ptr = fixed_effects_cluster_i.data();
-				}
-				if (gp_approx_ == "vecchia") {
-					likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxVecchia(y_[cluster_i].data(),
-						y_int_[cluster_i].data(),
-						fixed_effects_cluster_i_ptr,
-						num_data_per_cluster_[cluster_i],
-						B_[cluster_i],
-						D_inv_[cluster_i],
-						B_grad_[cluster_i],
-						D_grad_[cluster_i],
-						false,
-						true,
-						nullptr,
-						grad_F_cluster_i,
-						false,
-						num_comps_total_);
-				}
-				else {//not gp_approx_ == "vecchia"
-					if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
-						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxGroupedRE(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							SigmaI_[cluster_i],
-							Zt_[cluster_i],
-							cum_num_rand_eff_[cluster_i],
-							false,
-							true,
-							nullptr,
-							grad_F_cluster_i,
-							false);
-					}
-					else if (only_one_grouped_RE_calculations_on_RE_scale_) {
-						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							re_comps_[cluster_i][0]->cov_pars_[0],
-							re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
-							false,
-							true,
-							nullptr,
-							grad_F_cluster_i,
-							false);
-					}
-					else if (only_one_GP_calculations_on_RE_scale_) {
-						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxOnlyOneGPCalculationsOnREScale(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							ZSigmaZt_[cluster_i], //Note: ZSigmaZt_ contains only Sigma if only_one_GP_calculations_on_RE_scale_==true
-							re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
-							re_comps_[cluster_i],
-							false,
-							true,
-							nullptr,
-							grad_F_cluster_i,
-							false);
-					}
-					else {
-						likelihood_[cluster_i]->CalcGradNegMargLikelihoodLAApproxStable(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							ZSigmaZt_[cluster_i],
-							re_comps_[cluster_i],
-							false,
-							true,
-							nullptr,
-							grad_F_cluster_i,
-							false);
-					}
-				}//end not gp_approx_ == "vecchia"
-				//write on output
-				if (num_clusters_ == 1 && (gp_approx_ != "vecchia" || vecchia_ordering_ == "none")) {//only one cluster / independent realization and order of data does not matter
-#pragma omp parallel for schedule(static)//write on output
-					for (int j = 0; j < num_data_; ++j) {
-						grad_F[j] = grad_F_cluster_i[j];
-					}
-				}
-				else {//more than one cluster and order of samples matters
-#pragma omp parallel for schedule(static)
-					for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
-						grad_F[data_indices_per_cluster_[cluster_i][j]] = grad_F_cluster_i[j];
-					}
-				} // end more than one cluster
-			}//end loop over cluster
-			//std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();// Only for debugging
-			//double el_time = (double)(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()) / 1000000.;// Only for debugging
-			//Log::REInfo("Time for CalcGradFLaplace: %g", el_time);// Only for debugging
-		}//end CalcGradFLaplace
-
-		/*!
 		* \brief Calculate Cholesky decomposition
 		* \param psi Covariance matrix for which the Cholesky decomposition is calculated
 		* \param cluster_i Cluster index for which the Cholesky factor is calculated
@@ -3291,28 +3437,28 @@ namespace GPBoost {
 		template <class T_aux = T_mat, typename std::enable_if <std::is_same<sp_mat_t, T_aux>::value || std::is_same<sp_mat_rm_t, T_aux>::value>::type* = nullptr >
 		void CalcChol(const T_mat& psi, data_size_t cluster_i) {
 			if (!chol_fact_pattern_analyzed_) {
-				chol_facts_solve_[cluster_i].analyzePattern(psi);
+				chol_facts_[cluster_i].analyzePattern(psi);
 				if (cluster_i == unique_clusters_.back()) {
 					chol_fact_pattern_analyzed_ = true;
 				}
-				if (CholeskyHasPermutation<T_chol>(chol_facts_solve_[cluster_i])) {
-					P_Id_[cluster_i] = chol_facts_solve_[cluster_i].permutationP() * Id_[cluster_i];
+				if (CholeskyHasPermutation<T_chol>(chol_facts_[cluster_i])) {
+					P_Id_[cluster_i] = chol_facts_[cluster_i].permutationP() * Id_[cluster_i];
 					P_Id_[cluster_i].makeCompressed();
 					if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
-						P_Zt_[cluster_i] = chol_facts_solve_[cluster_i].permutationP() * Zt_[cluster_i];
+						P_Zt_[cluster_i] = chol_facts_[cluster_i].permutationP() * Zt_[cluster_i];
 						std::vector<sp_mat_t> P_ZtZj_cluster_i(num_comps_total_);
 						for (int j = 0; j < num_comps_total_; ++j) {
-							P_ZtZj_cluster_i[j] = chol_facts_solve_[cluster_i].permutationP() * ZtZj_[cluster_i][j];
+							P_ZtZj_cluster_i[j] = chol_facts_[cluster_i].permutationP() * ZtZj_[cluster_i][j];
 						}
 						P_ZtZj_[cluster_i] = P_ZtZj_cluster_i;
 					}
 				}
 			}
-			chol_facts_solve_[cluster_i].factorize(psi);
+			chol_facts_[cluster_i].factorize(psi);
 		}
 		template <class T_aux = T_mat, typename std::enable_if <std::is_same<den_mat_t, T_aux>::value>::type* = nullptr >
 		void CalcChol(const den_mat_t& psi, data_size_t cluster_i) {
-			chol_facts_solve_[cluster_i].compute(psi);
+			chol_facts_[cluster_i].compute(psi);
 		}
 
 		/*!
@@ -3330,17 +3476,17 @@ namespace GPBoost {
 				}
 				else {
 					T_mat L_inv;
-					if (CholeskyHasPermutation<T_chol>(chol_facts_solve_[cluster_i])) {
-						TriangularSolve<T_mat, T_mat, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), P_Id_[cluster_i], L_inv, false);
+					if (CholeskyHasPermutation<T_chol>(chol_facts_[cluster_i])) {
+						TriangularSolve<T_mat, T_mat, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), P_Id_[cluster_i], L_inv, false);
 					}
 					else {
-						TriangularSolve<T_mat, T_mat, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), Id_[cluster_i], L_inv, false);
+						TriangularSolve<T_mat, T_mat, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), Id_[cluster_i], L_inv, false);
 					}
 					MInvSqrtZt = L_inv * Zt_[cluster_i];
 				}
 				if (only_at_non_zeros_of_psi) {
 					CalcZSigmaZt(psi_inv, cluster_i);//find out sparsity pattern where psi_inv is needed for gradient
-					CalcLtLGivenSparsityPattern<T_mat>(MInvSqrtZt, psi_inv);
+					CalcLtLGivenSparsityPattern<T_mat>(MInvSqrtZt, psi_inv, true);
 					psi_inv *= -1.;
 				}
 				else {
@@ -3350,11 +3496,11 @@ namespace GPBoost {
 			}
 			else {
 				T_mat L_inv;
-				if (CholeskyHasPermutation<T_chol>(chol_facts_solve_[cluster_i])) {
-					TriangularSolve<T_mat, T_mat, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), P_Id_[cluster_i], L_inv, false);
+				if (CholeskyHasPermutation<T_chol>(chol_facts_[cluster_i])) {
+					TriangularSolve<T_mat, T_mat, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), P_Id_[cluster_i], L_inv, false);
 				}
 				else {
-					TriangularSolve<T_mat, T_mat, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), Id_[cluster_i], L_inv, false);
+					TriangularSolve<T_mat, T_mat, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), Id_[cluster_i], L_inv, false);
 				}
 				if (only_at_non_zeros_of_psi) {
 					//find out sparsity pattern where psi_inv is needed for gradient
@@ -3365,7 +3511,7 @@ namespace GPBoost {
 					else {
 						CalcZSigmaZt(psi_inv, cluster_i);
 					}
-					CalcLtLGivenSparsityPattern<T_mat>(L_inv, psi_inv);
+					CalcLtLGivenSparsityPattern<T_mat>(L_inv, psi_inv, true);
 				}
 				else {
 					psi_inv = L_inv.transpose() * L_inv;//Note: this is the computational bottleneck for large data when psi=ZSigmaZt and its Cholesky factor is sparse (but its usually not run, only when calculating the Fisher information)
@@ -3380,14 +3526,14 @@ namespace GPBoost {
 					MInvSqrtZt = sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array().inverse().matrix().asDiagonal() * Zt_[cluster_i];
 				}
 				else {
-					TriangularSolve<den_mat_t, sp_mat_t, den_mat_t>(chol_facts_solve_[cluster_i].CholFactMatrix(), Zt_[cluster_i], MInvSqrtZt, false);
+					TriangularSolve<den_mat_t, sp_mat_t, den_mat_t>(chol_facts_[cluster_i].CholFactMatrix(), Zt_[cluster_i], MInvSqrtZt, false);
 				}
 				psi_inv = -MInvSqrtZt.transpose() * MInvSqrtZt;
 				psi_inv.diagonal().array() += 1.0;
 			}
 			else {
 				den_mat_t L_inv;
-				TriangularSolve<den_mat_t, den_mat_t, den_mat_t>(chol_facts_solve_[cluster_i].CholFactMatrix(), Id_[cluster_i], L_inv, false);
+				TriangularSolve<den_mat_t, den_mat_t, den_mat_t>(chol_facts_[cluster_i].CholFactMatrix(), Id_[cluster_i], L_inv, false);
 				psi_inv = L_inv.transpose() * L_inv;
 			}
 		}// end CalcPsiInv for dense matrices
@@ -3411,13 +3557,13 @@ namespace GPBoost {
 							MInvSqrtZtX = sqrt_diag_SigmaI_plus_ZtZ_[unique_clusters_[0]].array().inverse().matrix().asDiagonal() * ZtX;
 						}
 						else {
-							TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_facts_solve_[unique_clusters_[0]], ZtX, MInvSqrtZtX, false);
+							TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_facts_[unique_clusters_[0]], ZtX, MInvSqrtZtX, false);
 						}
 						XT_psi_inv_X = X.transpose() * X - MInvSqrtZtX.transpose() * MInvSqrtZtX;
 					}
 					else {
 						den_mat_t MInvSqrtX;
-						TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_facts_solve_[unique_clusters_[0]], X, MInvSqrtX, false);
+						TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_facts_[unique_clusters_[0]], X, MInvSqrtX, false);
 						XT_psi_inv_X = MInvSqrtX.transpose() * MInvSqrtX;
 					}
 				}
@@ -3439,14 +3585,14 @@ namespace GPBoost {
 								MInvSqrtZtX = sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array().inverse().matrix().asDiagonal() * ZtX;
 							}
 							else {
-								TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_facts_solve_[cluster_i], ZtX, MInvSqrtZtX, false);
+								TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_facts_[cluster_i], ZtX, MInvSqrtZtX, false);
 							}
 							XT_psi_inv_X += ((den_mat_t)X(data_indices_per_cluster_[cluster_i], Eigen::all)).transpose() * (den_mat_t)X(data_indices_per_cluster_[cluster_i], Eigen::all) -
 								MInvSqrtZtX.transpose() * MInvSqrtZtX;
 						}
 						else {
 							den_mat_t MInvSqrtX;
-							TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_facts_solve_[cluster_i], (den_mat_t)X(data_indices_per_cluster_[cluster_i], Eigen::all), MInvSqrtX, false);
+							TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_facts_[cluster_i], (den_mat_t)X(data_indices_per_cluster_[cluster_i], Eigen::all), MInvSqrtX, false);
 							XT_psi_inv_X += MInvSqrtX.transpose() * MInvSqrtX;
 						}
 					}
@@ -3533,31 +3679,29 @@ namespace GPBoost {
 						num_data_per_cluster_[cluster_i],
 						false));
 				}
+				else if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
+					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
+						num_data_per_cluster_[cluster_i],
+						cum_num_rand_eff_[cluster_i][num_re_group_total_],
+						false));
+				}
+				else if (only_one_grouped_RE_calculations_on_RE_scale_) {
+					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
+						num_data_per_cluster_[cluster_i],
+						re_comps_[cluster_i][0]->GetNumUniqueREs(),
+						false));
+				}
+				else if (only_one_GP_calculations_on_RE_scale_) {
+					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
+						num_data_per_cluster_[cluster_i],
+						re_comps_[cluster_i][0]->GetNumUniqueREs(),
+						true));
+				}
 				else {
-					if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
-						likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
-							num_data_per_cluster_[cluster_i],
-							cum_num_rand_eff_[cluster_i][num_re_group_total_],
-							false));
-					}
-					else if (only_one_grouped_RE_calculations_on_RE_scale_) {
-						likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
-							num_data_per_cluster_[cluster_i],
-							re_comps_[cluster_i][0]->GetNumUniqueREs(),
-							false));
-					}
-					else if (only_one_GP_calculations_on_RE_scale_) {
-						likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
-							num_data_per_cluster_[cluster_i],
-							re_comps_[cluster_i][0]->GetNumUniqueREs(),
-							true));
-					}
-					else {
-						likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
-							num_data_per_cluster_[cluster_i],
-							num_data_per_cluster_[cluster_i],
-							true));
-					}
+					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
+						num_data_per_cluster_[cluster_i],
+						num_data_per_cluster_[cluster_i],
+						true));
 				}
 				if (!gauss_likelihood_) {
 					likelihood_[cluster_i]->InitializeModeAvec();
@@ -3608,6 +3752,36 @@ namespace GPBoost {
 			only_one_grouped_RE_calculations_on_RE_scale_ = num_re_group_total_ == 1 && num_comps_total_ == 1 && !gauss_likelihood_;//If there is only one grouped RE, we do (all) calculations on the b-scale instead of the Zb-scale (currently only for non-Gaussian data)
 			only_one_grouped_RE_calculations_on_RE_scale_for_prediction_ = num_re_group_total_ == 1 && num_comps_total_ == 1 && gauss_likelihood_;//If there is only one grouped RE, we do calculations for prediction on the b-scale instead of the Zb-scale (only used for Gaussian data)
 		}
+
+		/*!
+		* \brief Function that set default values for several parameters if they were not initialized
+		*/
+		void InitializeDefaultSettings() {
+			if (!coef_optimizer_has_been_set_) {
+				if (gauss_likelihood_) {
+					optimizer_coef_ = "wls";
+				}
+				else {
+					optimizer_coef_ = "gradient_descent";
+				}
+			}
+			if (!vecchia_pred_type_has_been_set_) {
+				if (gauss_likelihood_) {
+					vecchia_pred_type_ = "order_obs_first_cond_obs_only";
+				}
+				else {
+					vecchia_pred_type_ = "latent_order_obs_first_cond_obs_only";
+				}
+			}
+			if (!set_optim_config_has_been_called_ && NumAuxPars() > 0) {
+				if (!gauss_likelihood_) {
+					estimate_aux_pars_ = true;;
+				}
+				else {
+					estimate_aux_pars_ = false;
+				}
+			}
+		}//end InitializeDefaultSettings
 
 		/*!
 		* \brief Initialize required matrices used when only_grouped_REs_use_woodbury_identity_==true
@@ -3698,7 +3872,7 @@ namespace GPBoost {
 					Log::REFatal("Option 'only_one_GP_calculations_on_RE_scale_' is currently not implemented for Gaussian data");
 				}
 				if (gp_approx_ == "vecchia") {
-					Log::REFatal("Option 'only_one_GP_calculations_on_RE_scale_' is currently not implemented for Vecchia approximation data");
+					Log::REFatal("Option 'only_one_GP_calculations_on_RE_scale_' is currently not implemented for the Vecchia approximation");
 				}
 				CHECK(num_gp_total_ == 1);
 				CHECK(num_comps_total_ == 1);
@@ -4093,7 +4267,7 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Print out current paramters when trace / logging is activated for convergence monitoring
+		* \brief Print out current parameters when trace / logging is activated for convergence monitoring
 		* \param cov_pars Covariance parameters on transformed scale
 		* \param beta Regression coefficients on transformed scale
 		* \param has_intercept If true, the covariates contain an intercept column
@@ -4101,6 +4275,7 @@ namespace GPBoost {
 		* \param scale_covariates If true, the linear regression covariates are scaled
 		* \param loc_transf Location transformation
 		* \param scale_transf Scale transformation
+		* \param aux_pars Additional parameters for the likelihood
 		*/
 		void PrintTraceParameters(const vec_t& cov_pars,
 			const vec_t& beta,
@@ -4108,11 +4283,14 @@ namespace GPBoost {
 			int intercept_col,
 			bool scale_covariates,
 			const vec_t& loc_transf,
-			const vec_t& scale_transf) {
+			const vec_t& scale_transf,
+			const double* aux_pars) {
 			vec_t cov_pars_orig, beta_orig;
 			if (Log::GetLevelRE() == LogLevelRE::Debug) { // do transformation only if log level Debug is active
 				TransformBackCovPars(cov_pars, cov_pars_orig);
-				for (int i = 0; i < (int)cov_pars.size(); ++i) { Log::REDebug("cov_pars[%d]: %g", i, cov_pars_orig[i]); }
+				for (int i = 0; i < (int)cov_pars.size(); ++i) {
+					Log::REDebug("cov_pars[%d]: %g", i, cov_pars_orig[i]);
+				}
 				if (has_covariates_) {
 					if (scale_covariates) {
 						CHECK(loc_transf.size() == beta.size());
@@ -4122,9 +4300,16 @@ namespace GPBoost {
 					else {
 						beta_orig = beta;
 					}
-					for (int i = 0; i < std::min((int)beta.size(), NUM_COEF_PRINT_TRACE_); ++i) { Log::REDebug("beta[%d]: %g", i, beta_orig[i]); }
+					for (int i = 0; i < std::min((int)beta.size(), NUM_COEF_PRINT_TRACE_); ++i) {
+						Log::REDebug("beta[%d]: %g", i, beta_orig[i]);
+					}
 					if (has_covariates_ && beta.size() > NUM_COEF_PRINT_TRACE_) {
 						Log::REDebug("Note: only the first %d linear regression coefficients are shown ", NUM_COEF_PRINT_TRACE_);
+					}
+				}
+				if (estimate_aux_pars_) {
+					for (int i = 0; i < NumAuxPars(); ++i) {
+						Log::REDebug("%s: %g", likelihood_[unique_clusters_[0]]->GetNameAuxPars(i), aux_pars[i]);
 					}
 				}
 			}
@@ -4165,8 +4350,216 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Update covariance parameters, apply step size safeguard, factorize covariance matrix, and calculate new value of objective function
-		* \param[out] cov_pars Covariance parameters
+		* \brief Set initial values for some of the optimizer parameters.
+		* Internal default values are used if the corresponding parameters have not been set
+		*/
+		void OptimConfigSetInitialValues() {
+			lr_coef_ = lr_coef_init_;
+			lr_aux_pars_ = lr_aux_pars_init_;
+			SetInitialValueLRCov();
+			SetInitialValueDeltaRelConv();
+		}//end SetInternalDefaultValues
+
+		/*! * \brief Set initial values for lr_cov_ */
+		void SetInitialValueLRCov() {
+			if (lr_cov_init_ < 0.) {//A value below 0 indicates that default values should be used
+				if (optimizer_cov_pars_ == "fisher_scoring") {
+					lr_cov_ = 1.;
+				}
+				else if (optimizer_cov_pars_ == "gradient_descent") {
+					lr_cov_ = 0.1;
+				}
+			}
+			else {
+				lr_cov_ = lr_cov_init_;
+			}
+		}//end SetInitialValueLRCov
+
+		/*! * \brief Set initial values for delta_rel_conv_ */
+		void SetInitialValueDeltaRelConv() {
+			if (delta_rel_conv_init_ < 0) {
+				if (optimizer_cov_pars_ == "nelder_mead") {
+					delta_rel_conv_ = 1e-8;
+				}
+				else {
+					delta_rel_conv_ = 1e-6;
+				}
+			}
+			else {
+				delta_rel_conv_ = delta_rel_conv_init_;
+			}
+		}//end SetInitialValueDeltaRelConv
+
+		/*!
+		* \brief Avoid too large learning rates for covariance parameters and aux_pars
+		* \param nat_grad Gradient vector for covariance parameters and aux_pars
+		* \param it Iteration number
+		*/
+		void AvoidTooLargeLearningRatesCovAuxPars(const vec_t& nat_grad,
+			int it) {
+			double max_abs_nat_grad_cov = 0.;
+			int num_grad_cov_par = (int)nat_grad.size();
+			if (estimate_aux_pars_) {
+				num_grad_cov_par -= NumAuxPars();
+			}
+			for (int ip = 0; ip < num_grad_cov_par; ++ip) {
+				if (std::abs(nat_grad[ip]) > max_abs_nat_grad_cov) {
+					max_abs_nat_grad_cov = std::abs(nat_grad[ip]);
+				}
+			}
+			if (lr_cov_ * max_abs_nat_grad_cov > MAX_GRADIENT_UPDATE_LOG_SCALE_) {
+				lr_cov_ = MAX_GRADIENT_UPDATE_LOG_SCALE_ / max_abs_nat_grad_cov;
+				Log::REDebug("GPModel covariance parameter estimation: The learning rate has been decreased in iteration number %d since "
+					"the gradient update on the log-scale would have been too large (a change by more than a factor 100). New learning rate = %g", it + 1, lr_cov_);
+			}
+			if (estimate_aux_pars_) {
+				double max_abs_nat_grad_aux_par = 0.;
+				for (int ip = 0; ip < NumAuxPars(); ++ip) {
+					if (std::abs(nat_grad[num_cov_par_ + ip]) > max_abs_nat_grad_aux_par) {
+						max_abs_nat_grad_aux_par = std::abs(nat_grad[num_cov_par_ + ip]);
+					}
+				}
+				if (lr_aux_pars_ * max_abs_nat_grad_aux_par > MAX_GRADIENT_UPDATE_LOG_SCALE_) {
+					lr_aux_pars_ = MAX_GRADIENT_UPDATE_LOG_SCALE_ / max_abs_nat_grad_aux_par;
+				}
+			}
+		}//end AvoidTooLargeLearningRatesCovAuxPars
+
+		/*!
+		* \brief Recaculate mode for Laplace approximation after reseting them to zero
+		* \param fixed_effects Fixed effects component of location parameter
+		*/
+		void RecalculateModeLaplaceApprox(const double* fixed_effects) {
+			if (!gauss_likelihood_) {
+				//Reset the initial modes to 0. Otherwise, they can get stuck
+				for (const auto& cluster_i : unique_clusters_) {
+					likelihood_[cluster_i]->InitializeModeAvec();
+				}
+				CalcModePostRandEff(fixed_effects);
+			}
+		}//end RecalculateModeLaplaceApprox
+
+		/*!
+		* \brief Calculate the gradient of the Laplace-approximated negative log-likelihood with respect to the fixed effects F (only used for non-Gaussian data)
+		* \param[out] grad_F Gradient of the Laplace-approximated negative log-likelihood with respect to the fixed effects F. This vector needs to be pre-allocated of length num_data_
+		* \param fixed_effects Fixed effects component of location parameter
+		*/
+		void CalcGradFLaplace(double* grad_F, const double* fixed_effects = nullptr) {
+			const double* fixed_effects_cluster_i_ptr = nullptr;
+			vec_t fixed_effects_cluster_i;
+			for (const auto& cluster_i : unique_clusters_) {
+				vec_t grad_F_cluster_i(num_data_per_cluster_[cluster_i]);
+				//map fixed effects to clusters (if needed)
+				if (num_clusters_ == 1 && (gp_approx_ != "vecchia" || vecchia_ordering_ == "none")) {//only one cluster / independent realization and order of data does not matter
+					fixed_effects_cluster_i_ptr = fixed_effects;
+				}
+				else if (fixed_effects != nullptr) {//more than one cluster and order of samples matters
+					fixed_effects_cluster_i = vec_t(num_data_per_cluster_[cluster_i]);
+#pragma omp parallel for schedule(static)
+					for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
+						fixed_effects_cluster_i[j] = fixed_effects[data_indices_per_cluster_[cluster_i][j]];
+					}
+					fixed_effects_cluster_i_ptr = fixed_effects_cluster_i.data();
+				}
+				if (gp_approx_ == "vecchia") {
+					likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxVecchia(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						B_[cluster_i],
+						D_inv_[cluster_i],
+						B_grad_[cluster_i],
+						D_grad_[cluster_i],
+						false,
+						true,
+						false,
+						nullptr,
+						grad_F_cluster_i,
+						nullptr,
+						false,
+						num_comps_total_);
+				}
+				else if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
+					likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxGroupedRE(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						SigmaI_[cluster_i],
+						Zt_[cluster_i],
+						cum_num_rand_eff_[cluster_i],
+						false,
+						true,
+						false,
+						nullptr,
+						grad_F_cluster_i,
+						nullptr,
+						false);
+				}
+				else if (only_one_grouped_RE_calculations_on_RE_scale_) {
+					likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						re_comps_[cluster_i][0]->cov_pars_[0],
+						re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
+						false,
+						true,
+						false,
+						nullptr,
+						grad_F_cluster_i,
+						nullptr,
+						false);
+				}
+				else if (only_one_GP_calculations_on_RE_scale_) {
+					likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxOnlyOneGPCalculationsOnREScale(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						ZSigmaZt_[cluster_i], //Note: ZSigmaZt_ contains only Sigma if only_one_GP_calculations_on_RE_scale_==true
+						re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
+						re_comps_[cluster_i],
+						false,
+						true,
+						false,
+						nullptr,
+						grad_F_cluster_i,
+						nullptr,
+						false);
+				}
+				else {
+					likelihood_[cluster_i]->CalcGradNegMargLikelihoodLaplaceApproxStable(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						ZSigmaZt_[cluster_i],
+						re_comps_[cluster_i],
+						false,
+						true,
+						false,
+						nullptr,
+						grad_F_cluster_i,
+						nullptr,
+						false);
+				}
+				//write on output
+				if (num_clusters_ == 1 && (gp_approx_ != "vecchia" || vecchia_ordering_ == "none")) {//only one cluster / independent realization and order of data does not matter
+#pragma omp parallel for schedule(static)//write on output
+					for (int j = 0; j < num_data_; ++j) {
+						grad_F[j] = grad_F_cluster_i[j];
+					}
+				}
+				else {//more than one cluster and order of samples matters
+#pragma omp parallel for schedule(static)
+					for (int j = 0; j < num_data_per_cluster_[cluster_i]; ++j) {
+						grad_F[data_indices_per_cluster_[cluster_i][j]] = grad_F_cluster_i[j];
+					}
+				} // end more than one cluster
+			}//end loop over cluster
+		}//end CalcGradFLaplace
+
+		/*!
+		* \brief Update covariance and potential additional likelihood parameters, apply step size safeguard, factorize covariance matrix, and calculate new value of objective function
+		* \param[out] cov_pars Covariance and additional likelihood parameters
 		* \param nat_grad Gradient for gradient descent or = FI^-1 * gradient for Fisher scoring (="natural" gradient)
 		* \param profile_out_marginal_variance If true, the first parameter (marginal variance, nugget effect) is ignored
 		* \param use_nesterov_acc If true, Nesterov acceleration is used
@@ -4178,20 +4571,38 @@ namespace GPBoost {
 		* \param momentum_offset Number of iterations for which no mometum is applied in the beginning
 		* \param fixed_effects Fixed effects component of location parameter
 		*/
-		void UpdateCovPars(vec_t& cov_pars, const vec_t& nat_grad, bool profile_out_marginal_variance,
-			bool use_nesterov_acc, int it, vec_t& cov_pars_after_grad_aux, vec_t& cov_pars_after_grad_aux_lag1,
-			double acc_rate_cov, int nesterov_schedule_version, int momentum_offset, const double* fixed_effects = nullptr) {
+		void UpdateCovAuxPars(vec_t& cov_pars,
+			const vec_t& nat_grad,
+			bool profile_out_marginal_variance,
+			bool use_nesterov_acc,
+			int it,
+			vec_t& cov_pars_after_grad_aux,
+			vec_t& cov_pars_after_grad_aux_lag1,
+			double acc_rate_cov,
+			int nesterov_schedule_version,
+			int momentum_offset,
+			const double* fixed_effects) {
 			vec_t cov_pars_new(num_cov_par_);
 			if (profile_out_marginal_variance) {
 				cov_pars_new[0] = cov_pars[0];
 			}
-			double lr = lr_cov_;
+			double lr_cov = lr_cov_;
+			double lr_aux_pars = lr_aux_pars_;
 			bool decrease_found = false;
 			bool halving_done = false;
+			int num_grad_cov_par = (int)nat_grad.size();
+			if (estimate_aux_pars_) {
+				num_grad_cov_par -= NumAuxPars();
+			}
 			for (int ih = 0; ih < MAX_NUMBER_LR_SHRINKAGE_STEPS_; ++ih) {
-				vec_t update = lr * nat_grad;
-				// Avoid to large steps on log-scale
-				if (CAP_TOO_LARGE_COV_PAR_GRADIENT_UPDATES_LOG_SCALE_) {
+				vec_t update(nat_grad.size());
+				update.segment(0, num_grad_cov_par) = lr_cov * nat_grad.segment(0, num_grad_cov_par);
+				if (estimate_aux_pars_) {
+					update.segment(num_grad_cov_par, NumAuxPars()) = lr_aux_pars * nat_grad.segment(num_grad_cov_par, NumAuxPars());
+				}
+				// Avoid to large steps on log-scale: updates on the log-scale in one Fisher scoring step are capped at a certain level
+				// This is not done for gradient_descent since the learning rate is already adjusted accordingly in 'AvoidTooLargeLearningRatesCovAuxPars'
+				if (optimizer_cov_pars_ != "gradient_descent") {
 					for (int ip = 0; ip < (int)update.size(); ++ip) {
 						if (update[ip] > MAX_GRADIENT_UPDATE_LOG_SCALE_) {
 							update[ip] = MAX_GRADIENT_UPDATE_LOG_SCALE_;
@@ -4202,7 +4613,7 @@ namespace GPBoost {
 					}
 				}
 				if (profile_out_marginal_variance) {
-					cov_pars_new.segment(1, num_cov_par_ - 1) = (cov_pars.segment(1, num_cov_par_ - 1).array().log() - update.array()).exp().matrix();//make update on log-scale
+					cov_pars_new.segment(1, cov_pars.size() - 1) = (cov_pars.segment(1, cov_pars.size() - 1).array().log() - update.array()).exp().matrix();//make update on log-scale
 				}
 				else {
 					cov_pars_new = (cov_pars.array().log() - update.array()).exp().matrix();//make update on log-scale
@@ -4219,7 +4630,10 @@ namespace GPBoost {
 					//		 log-likelihood (non-accelerated parameters after gradient update) when checking for convergence at the end of an iteration. 
 					//		However, performing the acceleration before or after the gradient update gives equivalent algorithms
 				}
-				CalcCovFactorOrModeAndNegLL(cov_pars_new, fixed_effects);
+				if (estimate_aux_pars_) {
+					SetAuxPars(cov_pars_new.data() + num_cov_par_);
+				}
+				CalcCovFactorOrModeAndNegLL(cov_pars_new.segment(0, num_cov_par_), fixed_effects);
 				// Safeguard agains too large steps by halving the learning rate when the objective increases
 				if (neg_log_likelihood_ <= neg_log_likelihood_after_lin_coef_update_) {
 					decrease_found = true;
@@ -4227,7 +4641,10 @@ namespace GPBoost {
 				}
 				else {
 					halving_done = true;
-					lr *= LR_SHRINKAGE_FACTOR_;
+					lr_cov *= LR_SHRINKAGE_FACTOR_;
+					if (estimate_aux_pars_) {
+						lr_aux_pars *= LR_SHRINKAGE_FACTOR_;
+					}
 					acc_rate_cov *= 0.5;
 					if (!gauss_likelihood_) {
 						// Reset mode to previous value since also parameters are discarded
@@ -4236,14 +4653,17 @@ namespace GPBoost {
 						}
 					}
 				}
-			}
+			}//end loop over learnig rate halving procedure
 			if (halving_done) {
 				if (optimizer_cov_pars_ == "fisher_scoring") {
 					Log::REDebug("GPModel covariance parameter estimation: No decrease in the objective function in iteration number %d. "
 						"The learning rate has been decreased in this iteration.", it + 1);
 				}
 				else if (optimizer_cov_pars_ == "gradient_descent") {
-					lr_cov_ = lr; //permanently decrease learning rate (for Fisher scoring, this is not done. I.e., step halving is done newly in every iterarion of Fisher scoring) 
+					lr_cov_ = lr_cov; //permanently decrease learning rate (for Fisher scoring, this is not done. I.e., step halving is done newly in every iterarion of Fisher scoring)
+					if (estimate_aux_pars_) {
+						lr_aux_pars_ = lr_aux_pars;
+					}
 					Log::REDebug("GPModel covariance parameter estimation: The learning rate has been decreased permanently since with the previous learning rate, "
 						"there was no decrease in the objective function in iteration number %d. New learning rate = %g", it + 1, lr_cov_);
 				}
@@ -4256,12 +4676,13 @@ namespace GPBoost {
 				cov_pars_after_grad_aux_lag1 = cov_pars_after_grad_aux;
 			}
 			cov_pars = cov_pars_new;
-		}//end UpdateCovPars
+		}//end UpdateCovAuxPars
 
 		/*!
 		* \brief Update linear regression coefficients and apply step size safeguard
 		* \param[out] beta Linear regression coefficients
 		* \param grad Gradient
+		* \param sigma2 Nugget / error term variance for Gaussian likelihoods
 		* \param use_nesterov_acc If true, Nesterov acceleration is used
 		* \param it Iteration number
 		* \param[out] beta_after_grad_aux Auxiliary variable used only if use_nesterov_acc == true (see the code below for a description)
@@ -4272,25 +4693,34 @@ namespace GPBoost {
 		* \param fixed_effects External fixed effects
 		* \param[out] fixed_effects_vec Fixed effects component of location parameter as sum of linear predictor and potentiall additional external fixed effects
 		*/
-		void UpdateLinCoef(vec_t& beta, const vec_t& grad, const vec_t& cov_pars,
-			bool use_nesterov_acc, int it, vec_t& beta_after_grad_aux, vec_t& beta_after_grad_aux_lag1,
-			double acc_rate_coef, int nesterov_schedule_version, int momentum_offset, const double* fixed_effects, vec_t& fixed_effects_vec) {
+		void UpdateLinCoef(vec_t& beta,
+			const vec_t& grad,
+			const double sigma2,
+			bool use_nesterov_acc,
+			int it,
+			vec_t& beta_after_grad_aux,
+			vec_t& beta_after_grad_aux_lag1,
+			double acc_rate_coef,
+			int nesterov_schedule_version,
+			int momentum_offset,
+			const double* fixed_effects,
+			vec_t& fixed_effects_vec) {
 			vec_t beta_new;
-			double lr = lr_coef_;
+			double lr_coef = lr_coef_;
 			bool decrease_found = false;
 			bool halving_done = false;
 			for (int ih = 0; ih < MAX_NUMBER_LR_SHRINKAGE_STEPS_; ++ih) {
-				beta_new = beta - lr * grad;
+				beta_new = beta - lr_coef * grad;
 				// Apply Nesterov acceleration
 				if (use_nesterov_acc) {
 					beta_after_grad_aux = beta_new;
 					ApplyMomentumStep(it, beta_after_grad_aux, beta_after_grad_aux_lag1, beta_new, acc_rate_coef,
 						nesterov_schedule_version, false, momentum_offset, false);
-					//Note: use same version of Nesterov acceleration as for covariance parameters (see 'UpdateCovPars')
+					//Note: use same version of Nesterov acceleration as for covariance parameters (see 'UpdateCovAuxPars')
 				}
 				UpdateFixedEffects(beta_new, fixed_effects, fixed_effects_vec);
 				if (gauss_likelihood_) {
-					EvalNegLogLikelihoodOnlyUpdateFixedEffects(cov_pars.data(), neg_log_likelihood_after_lin_coef_update_);
+					EvalNegLogLikelihoodOnlyUpdateFixedEffects(sigma2, neg_log_likelihood_after_lin_coef_update_);
 				}//end if gauss_likelihood_
 				else {//non-Gaussian data
 					neg_log_likelihood_after_lin_coef_update_ = -CalcModePostRandEff(fixed_effects_vec.data());//calculate mode and approximate marginal likelihood
@@ -4303,7 +4733,7 @@ namespace GPBoost {
 				else {
 					// Safeguard agains too large steps by halving the learning rate
 					halving_done = true;
-					lr *= LR_SHRINKAGE_FACTOR_;
+					lr_coef *= LR_SHRINKAGE_FACTOR_;
 					acc_rate_coef *= 0.5;
 					if (!gauss_likelihood_) {
 						// Reset mode to previous value since also parameters are discarded
@@ -4314,7 +4744,7 @@ namespace GPBoost {
 				}
 			}
 			if (halving_done) {
-				lr_coef_ = lr; //permanently decrease learning rate
+				lr_coef_ = lr_coef; //permanently decrease learning rate
 				Log::REDebug("GPModel linear regression coefficient estimation: The learning rate has been decreased permanently since with the previous learning rate, "
 					"there was no decrease in the objective function in iteration number %d. New learning rate = %g", it + 1, lr_coef_);
 			}
@@ -4376,7 +4806,7 @@ namespace GPBoost {
 		* \param fixed_effects Fixed effects component of location parameter
 		* \return Approximate marginal log-likelihood evaluated at the mode
 		*/
-		double CalcModePostRandEff(const double* fixed_effects = nullptr) {
+		double CalcModePostRandEff(const double* fixed_effects) {
 			double mll = 0.;
 			double mll_cluster_i;
 			const double* fixed_effects_cluster_i_ptr = nullptr;
@@ -4403,43 +4833,41 @@ namespace GPBoost {
 						D_inv_[cluster_i],
 						mll_cluster_i);
 				}
+				else if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
+					likelihood_[cluster_i]->FindModePostRandEffCalcMLLGroupedRE(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						SigmaI_[cluster_i],
+						Zt_[cluster_i],
+						mll_cluster_i);
+				}
+				else if (only_one_grouped_RE_calculations_on_RE_scale_) {
+					likelihood_[cluster_i]->FindModePostRandEffCalcMLLOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						re_comps_[cluster_i][0]->cov_pars_[0],
+						re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
+						mll_cluster_i);
+				}
+				else if (only_one_GP_calculations_on_RE_scale_) {
+					likelihood_[cluster_i]->FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						ZSigmaZt_[cluster_i], //Note: ZSigmaZt_ contains only Sigma if only_one_GP_calculations_on_RE_scale_==true
+						re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
+						mll_cluster_i);
+					//Note: ZSigmaZt_[cluster_i] contains Sigma=Cov(b) and not Z*Sigma*Zt since has_Z_==false for this random effects component
+				}
 				else {
-					if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
-						likelihood_[cluster_i]->FindModePostRandEffCalcMLLGroupedRE(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							SigmaI_[cluster_i],
-							Zt_[cluster_i],
-							mll_cluster_i);
-					}
-					else if (only_one_grouped_RE_calculations_on_RE_scale_) {
-						likelihood_[cluster_i]->FindModePostRandEffCalcMLLOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							re_comps_[cluster_i][0]->cov_pars_[0],
-							re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
-							mll_cluster_i);
-					}
-					else if (only_one_GP_calculations_on_RE_scale_) {
-						likelihood_[cluster_i]->FindModePostRandEffCalcMLLOnlyOneGPCalculationsOnREScale(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							ZSigmaZt_[cluster_i], //Note: ZSigmaZt_ contains only Sigma if only_one_GP_calculations_on_RE_scale_==true
-							re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
-							mll_cluster_i);
-						//Note: ZSigmaZt_[cluster_i] contains Sigma=Cov(b) and not Z*Sigma*Zt since has_Z_==false for this random effects component
-					}
-					else {
-						likelihood_[cluster_i]->FindModePostRandEffCalcMLLStable(y_[cluster_i].data(),
-							y_int_[cluster_i].data(),
-							fixed_effects_cluster_i_ptr,
-							num_data_per_cluster_[cluster_i],
-							ZSigmaZt_[cluster_i],
-							mll_cluster_i);
-					}
+					likelihood_[cluster_i]->FindModePostRandEffCalcMLLStable(y_[cluster_i].data(),
+						y_int_[cluster_i].data(),
+						fixed_effects_cluster_i_ptr,
+						num_data_per_cluster_[cluster_i],
+						ZSigmaZt_[cluster_i],
+						mll_cluster_i);
 				}
 				mll += mll_cluster_i;
 			}
@@ -4702,10 +5130,10 @@ namespace GPBoost {
 		void CalcYAux(double marg_variance) {
 			for (const auto& cluster_i : unique_clusters_) {
 				if (y_.find(cluster_i) == y_.end()) {
-					Log::REFatal("Response variable data (y_) for random effects model has not been set. Call 'SetY' first.");
+					Log::REFatal("Response variable data (y_) for random effects model has not been set. Call 'SetY' first ");
 				}
 				if (!covariance_matrix_has_been_factorized_) {
-					Log::REFatal("Factorisation of covariance matrix has not been done. Call 'CalcCovFactor' first.");
+					Log::REFatal("Factorisation of covariance matrix has not been done. Call 'CalcCovFactor' first ");
 				}
 				if (gp_approx_ == "vecchia") {
 					y_aux_[cluster_i] = B_[cluster_i].transpose() * D_inv_[cluster_i] * B_[cluster_i] * y_[cluster_i];
@@ -4717,12 +5145,12 @@ namespace GPBoost {
 							MInvZty = (Zty_[cluster_i].array() / sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array().square()).matrix();
 						}
 						else {
-							MInvZty = chol_facts_solve_[cluster_i].solve(Zty_[cluster_i]);
+							MInvZty = chol_facts_[cluster_i].solve(Zty_[cluster_i]);
 						}
 						y_aux_[cluster_i] = y_[cluster_i] - Zt_[cluster_i].transpose() * MInvZty;
 					}
 					else {
-						y_aux_[cluster_i] = chol_facts_solve_[cluster_i].solve(y_[cluster_i]);
+						y_aux_[cluster_i] = chol_facts_[cluster_i].solve(y_[cluster_i]);
 					}
 				}//end non-Vecchia
 				if (!TwoNumbersAreEqual<double>(marg_variance, 1.)) {
@@ -4739,7 +5167,7 @@ namespace GPBoost {
 		void CalcYtilde(bool also_calculate_ytilde2) {
 			for (const auto& cluster_i : unique_clusters_) {
 				if (y_.find(cluster_i) == y_.end()) {
-					Log::REFatal("Response variable data (y_) for random effects model has not been set. Call 'SetY' first.");
+					Log::REFatal("Response variable data (y_) for random effects model has not been set. Call 'SetY' first ");
 				}
 				if (num_re_group_total_ == 1 && num_comps_total_ == 1) {//only one random effect -> ZtZ_ is diagonal
 					y_tilde_[cluster_i] = (Zty_[cluster_i].array() / sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array()).matrix();
@@ -4748,10 +5176,10 @@ namespace GPBoost {
 					}
 				}
 				else {
-					TriangularSolveGivenCholesky<T_chol, T_mat, vec_t, vec_t>(chol_facts_solve_[cluster_i], Zty_[cluster_i], y_tilde_[cluster_i], false);
+					TriangularSolveGivenCholesky<T_chol, T_mat, vec_t, vec_t>(chol_facts_[cluster_i], Zty_[cluster_i], y_tilde_[cluster_i], false);
 					if (also_calculate_ytilde2) {
 						vec_t ytilde_aux;
-						TriangularSolveGivenCholesky<T_chol, T_mat, vec_t, vec_t>(chol_facts_solve_[cluster_i], y_tilde_[cluster_i], ytilde_aux, true);
+						TriangularSolveGivenCholesky<T_chol, T_mat, vec_t, vec_t>(chol_facts_[cluster_i], y_tilde_[cluster_i], ytilde_aux, true);
 						y_tilde2_[cluster_i] = Zt_[cluster_i].transpose() * ytilde_aux;
 					}
 				}
@@ -4812,7 +5240,7 @@ namespace GPBoost {
 						}
 						else {
 							vec_t y_aux_sqrt;
-							TriangularSolveGivenCholesky<T_chol, T_mat, vec_t, vec_t>(chol_facts_solve_[cluster_i], y_[cluster_i], y_aux_sqrt, false);
+							TriangularSolveGivenCholesky<T_chol, T_mat, vec_t, vec_t>(chol_facts_[cluster_i], y_[cluster_i], y_aux_sqrt, false);
 							yTPsiInvy += (y_aux_sqrt.transpose() * y_aux_sqrt)(0, 0);
 						}
 					}//end not only_grouped_REs_use_woodbury_identity_
@@ -4877,6 +5305,7 @@ namespace GPBoost {
 			bool transf_scale,
 			bool include_error_var,
 			bool use_saved_psi_inv) {
+			CHECK(gauss_likelihood_);
 			if (include_error_var) {
 				FI = den_mat_t(num_cov_par_, num_cov_par_);
 			}
@@ -4952,11 +5381,11 @@ namespace GPBoost {
 							}
 							else {
 								for (int j = 0; j < num_comps_total_; ++j) {
-									if (CholeskyHasPermutation<T_chol>(chol_facts_solve_[cluster_i])) {
-										TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), P_ZtZj_[cluster_i][j], LInvZtZj_[cluster_i][j], false);
+									if (CholeskyHasPermutation<T_chol>(chol_facts_[cluster_i])) {
+										TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), P_ZtZj_[cluster_i][j], LInvZtZj_[cluster_i][j], false);
 									}
 									else {
-										TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i].CholFactMatrix(), ZtZj_[cluster_i][j], LInvZtZj_[cluster_i][j], false);
+										TriangularSolve<T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i].CholFactMatrix(), ZtZj_[cluster_i][j], LInvZtZj_[cluster_i][j], false);
 									}
 								}
 							}
@@ -4978,7 +5407,7 @@ namespace GPBoost {
 									MInv_ZtZ.diagonal().array() = ZtZ_[cluster_i].diagonal().array() / (sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array().square());
 								}
 								else {
-									SolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i], ZtZ_[cluster_i], MInv_ZtZ);
+									SolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i], ZtZ_[cluster_i], MInv_ZtZ);
 
 								}
 								T_mat MInv_ZtZ_t = MInv_ZtZ.transpose();
@@ -4988,7 +5417,7 @@ namespace GPBoost {
 									double trace_PsiInvGradPsi;
 									if (num_comps_total_ > 1) {
 										T_mat MInv_ZtZj;
-										SolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i], ZtZj_[cluster_i][j], MInv_ZtZj);
+										SolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i], ZtZj_[cluster_i][j], MInv_ZtZj);
 										trace_PsiInvGradPsi = Zj_square_sum_[cluster_i][j] - 2. * (double)(LInvZtZj_[cluster_i][j].squaredNorm()) +
 											(double)(ZjZ_MInv_ZtZ_t.cwiseProduct(MInv_ZtZj)).sum();
 									}
@@ -5097,7 +5526,7 @@ namespace GPBoost {
 		* \param X Covariate data for linear fixed-effect
 		* \param[out] std_dev Standard deviations
 		*/
-		void CalcStdDevCoef(vec_t& cov_pars,
+		void CalcStdDevCoef(const vec_t& cov_pars,
 			const den_mat_t& X,
 			vec_t& std_dev) {
 			if ((int)std_dev.size() >= num_data_) {
@@ -5142,10 +5571,10 @@ namespace GPBoost {
 				// Gradient vector at beta plus / minus delta
 				UpdateFixedEffects(beta_change1, fixed_effects, fixed_effects_vec);
 				CalcCovFactorOrModeAndNegLL(cov_pars, fixed_effects_vec.data());
-				CalcLinCoefGrad(1., beta_change1, grad_beta_change1, fixed_effects_vec.data());
+				CalcGradLinCoef(1., beta_change1, grad_beta_change1, fixed_effects_vec.data());
 				UpdateFixedEffects(beta_change2, fixed_effects, fixed_effects_vec);
 				CalcCovFactorOrModeAndNegLL(cov_pars, fixed_effects_vec.data());
-				CalcLinCoefGrad(1., beta_change2, grad_beta_change2, fixed_effects_vec.data());
+				CalcGradLinCoef(1., beta_change2, grad_beta_change2, fixed_effects_vec.data());
 				// Approximate gradient of gradient
 				H.row(i) = (grad_beta_change1 - grad_beta_change2) / (2. * delta_step[i]);
 			}
@@ -5155,15 +5584,15 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Find minimum for paramters using an external optimization library (cppoptlib)
-		* \param cov_pars[out] Covariance parameters (initial values and output written on it)
+		* \brief Find minimum for parameters using an external optimization library (cppoptlib)
+		* \param cov_pars[out] Covariance parameters (initial values and output written on it). Note: any potential estimated additional likelihood parameters (aux_pars) are also written on this
 		* \param beta[out] Linear regression coefficients (if there are any) (initial values and output written on it)
 		* \param fixed_effects Externally provided fixed effects component of location parameter (only used for non-Gaussian data)
 		* \param max_iter Maximal number of iterations
 		* \param delta_rel_conv Convergence criterion: stop iteration if relative change in in parameters is below this value
 		* \param convergence_criterion The convergence criterion used for terminating the optimization algorithm. Options: "relative_change_in_log_likelihood" or "relative_change_in_parameters"
 		* \param num_it[out] Number of iterations
-		* \param learn_covariance_parameters If true, covariance parameters are estimated
+		* \param learn_covariance_parameters If true, covariance parameters and additional likelihood parameters (aux_pars) are estimated, otherwise not
 		* \param optimizer Optimizer
 		* \param profile_out_marginal_variance If true, the error variance sigma is profiled out (=use closed-form expression for error / nugget variance)
 		*/
@@ -5178,16 +5607,21 @@ namespace GPBoost {
 			string_t optimizer,
 			bool profile_out_marginal_variance) {
 			// Some checks
-			CHECK(num_cov_par_ == (int)cov_pars.size());
+			if (estimate_aux_pars_) {
+				CHECK(num_cov_par_ + NumAuxPars() == (int)cov_pars.size());
+			}
+			else {
+				CHECK(num_cov_par_ == (int)cov_pars.size());
+			}
 			if (has_covariates_) {
 				CHECK(beta.size() == X_.cols());
 			}
-			// Determine number of covariance and linear regression coefficient paramters
-			int num_cov_pars_optim, num_covariates;
+			// Determine number of covariance and linear regression coefficient parameters
+			int num_cov_pars_optim, num_covariates, num_aux_pars;
 			if (learn_covariance_parameters) {
 				num_cov_pars_optim = num_cov_par_;
 				if (profile_out_marginal_variance) {
-					num_cov_pars_optim -= 1;
+					num_cov_pars_optim = num_cov_par_ - 1;
 				}
 			}
 			else {
@@ -5199,21 +5633,34 @@ namespace GPBoost {
 			else {
 				num_covariates = 0;
 			}
+			bool estimate_aux_pars = estimate_aux_pars_ && learn_covariance_parameters;
+			if (estimate_aux_pars) {
+				num_aux_pars = NumAuxPars();
+			}
+			else {
+				num_aux_pars = 0;
+			}
 			// Initialization of parameters
-			vec_t pars_init(num_cov_pars_optim + num_covariates);
+			vec_t pars_init(num_cov_pars_optim + num_covariates + num_aux_pars);
 			if (learn_covariance_parameters) {
 				if (profile_out_marginal_variance) {
 					pars_init.segment(0, num_cov_pars_optim) = cov_pars.segment(1, num_cov_pars_optim).array().log().matrix();//exclude nugget and transform to log-scale
 				}
 				else {
-					pars_init.segment(0, num_cov_pars_optim) = cov_pars.array().log().matrix();//transform to log-scale
+					pars_init.segment(0, num_cov_pars_optim) = cov_pars.segment(0, num_cov_pars_optim).array().log().matrix();//transform to log-scale
 				}
 			}
 			if (has_covariates_) {
 				pars_init.segment(num_cov_pars_optim, num_covariates) = beta;//regresion coefficients
 			}
+			if (estimate_aux_pars_) {
+				for (int i = 0; i < num_aux_pars; ++i) {
+					pars_init[num_cov_pars_optim + num_covariates + i] = std::log(GetAuxPars()[i]);//transform to log-scale
+				}
+			}
 			//Do optimization
-			OptDataOptimLib<T_mat, T_chol> opt_data = OptDataOptimLib<T_mat, T_chol>(this, fixed_effects, learn_covariance_parameters, cov_pars, profile_out_marginal_variance);
+			OptDataOptimLib<T_mat, T_chol> opt_data = OptDataOptimLib<T_mat, T_chol>(this, fixed_effects, learn_covariance_parameters,
+				cov_pars.segment(0, num_cov_par_), profile_out_marginal_variance);
 			optim::algo_settings_t settings;
 			settings.iter_max = max_iter;
 			if (convergence_criterion == "relative_change_in_parameters") {
@@ -5244,14 +5691,19 @@ namespace GPBoost {
 			if (learn_covariance_parameters) {
 				if (profile_out_marginal_variance) {
 					cov_pars[0] = sigma2_;
-					cov_pars.segment(1, num_cov_pars_optim) = pars_init.segment(0, num_cov_pars_optim).array().exp().matrix();//back-transform to original scale
+					cov_pars.segment(1, num_cov_par_ - 1) = pars_init.segment(0, num_cov_pars_optim).array().exp().matrix();//back-transform to original scale
 				}
 				else {
-					cov_pars = pars_init.segment(0, num_cov_pars_optim).array().exp().matrix();//back-transform to original scale
+					cov_pars.segment(0, num_cov_par_) = pars_init.segment(0, num_cov_pars_optim).array().exp().matrix();//back-transform to original scale
 				}
 			}
 			if (has_covariates_) {
 				beta = pars_init.segment(num_cov_pars_optim, num_covariates);
+			}
+			if (estimate_aux_pars) {
+				for (int i = 0; i < num_aux_pars; ++i) {
+					cov_pars[num_cov_par_ + i] = std::exp(pars_init[num_cov_pars_optim + num_covariates + i]);//back-transform to original scale
+				}
 			}
 		}//end OptimExternal
 
@@ -5572,7 +6024,7 @@ namespace GPBoost {
 						}
 						else {
 							T_mat M_aux;
-							TriangularSolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i], ZtZ_[cluster_i], M_aux, false);
+							TriangularSolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i], ZtZ_[cluster_i], M_aux, false);
 							sp_mat_t ZtildeSigma = Ztilde * Sigma;
 							T_mat M_aux2 = M_aux * ZtildeSigma.transpose();
 							M_aux.resize(0, 0);
@@ -5582,7 +6034,7 @@ namespace GPBoost {
 					}
 					else {
 						T_mat M_aux;
-						TriangularSolveGivenCholesky<T_chol, T_mat, T_mat, T_mat>(chol_facts_solve_[cluster_i], cross_cov.transpose(), M_aux, false);
+						TriangularSolveGivenCholesky<T_chol, T_mat, T_mat, T_mat>(chol_facts_[cluster_i], cross_cov.transpose(), M_aux, false);
 						cov_mat_pred_id -= (T_mat)(M_aux.transpose() * M_aux);
 					}
 				}//end predict_cov_mat
@@ -5600,7 +6052,7 @@ namespace GPBoost {
 						}
 						else {//more than one grouped RE component
 							T_mat M_aux;
-							TriangularSolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_solve_[cluster_i], ZtZ_[cluster_i], M_aux, false);
+							TriangularSolveGivenCholesky<T_chol, T_mat, sp_mat_t, T_mat>(chol_facts_[cluster_i], ZtZ_[cluster_i], M_aux, false);
 							sp_mat_t ZtildeSigma = Ztilde * Sigma;
 							T_mat M_aux2 = M_aux * ZtildeSigma.transpose();
 							M_aux.resize(0, 0);
@@ -5615,7 +6067,7 @@ namespace GPBoost {
 					}//end only_grouped_REs_use_woodbury_identity_
 					else {//not only_grouped_REs_use_woodbury_identity_
 						T_mat M_aux2;
-						TriangularSolveGivenCholesky<T_chol, T_mat, T_mat, T_mat>(chol_facts_solve_[cluster_i], cross_cov.transpose(), M_aux2, false);
+						TriangularSolveGivenCholesky<T_chol, T_mat, T_mat, T_mat>(chol_facts_[cluster_i], cross_cov.transpose(), M_aux2, false);
 						M_aux2 = M_aux2.cwiseProduct(M_aux2);
 #pragma omp parallel for schedule(static)
 						for (int i = 0; i < num_REs_pred; ++i) {
@@ -5629,7 +6081,7 @@ namespace GPBoost {
 				// Note that fixed_effects_cluster_i_ptr is not used since calc_mode == false
 				// The mode has been calculated already before in the Predict() function above
 				if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
-					likelihood_[cluster_i]->PredictLAApproxGroupedRE(y_[cluster_i].data(),
+					likelihood_[cluster_i]->PredictLaplaceApproxGroupedRE(y_[cluster_i].data(),
 						y_int_[cluster_i].data(),
 						fixed_effects_cluster_i_ptr,
 						num_data_per_cluster_[cluster_i],
@@ -5645,7 +6097,7 @@ namespace GPBoost {
 						false);
 				}
 				else if (only_one_grouped_RE_calculations_on_RE_scale_) {
-					likelihood_[cluster_i]->PredictLAApproxOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(),
+					likelihood_[cluster_i]->PredictLaplaceApproxOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(),
 						y_int_[cluster_i].data(),
 						fixed_effects_cluster_i_ptr,
 						num_data_per_cluster_[cluster_i],
@@ -5660,7 +6112,7 @@ namespace GPBoost {
 						false);
 				}
 				else if (only_one_GP_calculations_on_RE_scale_) {
-					likelihood_[cluster_i]->PredictLAApproxOnlyOneGPCalculationsOnREScale(y_[cluster_i].data(),
+					likelihood_[cluster_i]->PredictLaplaceApproxOnlyOneGPCalculationsOnREScale(y_[cluster_i].data(),
 						y_int_[cluster_i].data(),
 						fixed_effects_cluster_i_ptr,
 						num_data_per_cluster_[cluster_i],
@@ -5675,7 +6127,7 @@ namespace GPBoost {
 						false);
 				}
 				else {
-					likelihood_[cluster_i]->PredictLAApproxStable(y_[cluster_i].data(),
+					likelihood_[cluster_i]->PredictLaplaceApproxStable(y_[cluster_i].data(),
 						y_int_[cluster_i].data(),
 						fixed_effects_cluster_i_ptr,
 						num_data_per_cluster_[cluster_i],
@@ -5742,9 +6194,15 @@ namespace GPBoost {
 					vecchia_neighbor_selection_, rng_);
 			}
 			else {//find neighbors among both the observed and prediction locations
+				if (!gauss_likelihood_) {
+					check_has_duplicates = true;
+				}
 				find_nearest_neighbors_Vecchia_fast(coords_all, num_data_cli + num_data_pred_cli, num_neighbors_pred_,
 					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, num_data_cli, -1, check_has_duplicates,
 					vecchia_neighbor_selection_, rng_);
+				if (check_has_duplicates) {
+					Log::REFatal(DUPLICATES_PRED_VECCHIA_COND_ALL_NONGAUSS_);
+				}
 			}
 			//Random coefficients
 			std::vector<std::vector<den_mat_t>> z_outer_z_obs_neighbors_cluster_i(num_data_pred_cli);
@@ -5868,10 +6326,9 @@ namespace GPBoost {
 						}
 					}
 					else {
-						sp_mat_t Identity(num_data_pred_cli, num_data_pred_cli);
-						Identity.setIdentity();
-						sp_mat_t Bp_inv;
-						eigen_sp_Lower_sp_RHS_cs_solve(Bp, Identity, Bp_inv, true);
+						sp_mat_t Bp_inv(num_data_pred_cli, num_data_pred_cli);
+						Bp_inv.setIdentity();
+						TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(Bp, Bp_inv, Bp_inv, false);
 						sp_mat_t Bp_inv_Dp = Bp_inv * Dp.asDiagonal();
 						if (calc_pred_cov) {
 							pred_cov = T_mat(Bp_inv_Dp * Bp_inv.transpose());
@@ -6072,11 +6529,9 @@ namespace GPBoost {
 			vec_t y_aux = Bop.transpose() * (Do_inv.asDiagonal() * (Bo * y_[cluster_i]));
 			pred_mean = -CholFact.solve(y_aux);
 			if (calc_pred_cov || calc_pred_var) {
-				sp_mat_t Identity(num_data_pred_cli, num_data_pred_cli);
-				Identity.setIdentity();
-				sp_mat_t cond_prec_chol = CholFact.matrixL();
-				sp_mat_t cond_prec_chol_inv;
-				eigen_sp_Lower_sp_RHS_cs_solve(cond_prec_chol, Identity, cond_prec_chol_inv, true);
+				sp_mat_t cond_prec_chol_inv(num_data_pred_cli, num_data_pred_cli);
+				cond_prec_chol_inv.setIdentity();
+				TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(CholFact.CholFactMatrix(), cond_prec_chol_inv, cond_prec_chol_inv, false);
 				if (calc_pred_cov) {
 					pred_cov = T_mat(cond_prec_chol_inv.transpose() * cond_prec_chol_inv);
 				}
@@ -6099,6 +6554,7 @@ namespace GPBoost {
 		 * \param gp_coords_mat_pred Coordinates for prediction locations
 		* \param calc_pred_cov If true, the covariance matrix is also calculated
 		* \param calc_pred_var If true, predictive variances are also calculated
+		* \param predict_response If true, the response variable (label) is predicted, otherwise the latent random effects (only has an effect on pred_cov and pred_var)
 		* \param[out] pred_mean Predictive mean
 		* \param[out] pred_cov Predictive covariance matrix
 		* \param[out] pred_var Predictive variances
@@ -6110,6 +6566,7 @@ namespace GPBoost {
 			const den_mat_t& gp_coords_mat_pred,
 			bool calc_pred_cov,
 			bool calc_pred_var,
+			bool predict_response,
 			vec_t& pred_mean,
 			T_mat& pred_cov,
 			vec_t& pred_var) {
@@ -6154,7 +6611,7 @@ namespace GPBoost {
 			std::vector<std::vector<int>> nearest_neighbors_cluster_i(num_coord_unique);
 			std::vector<den_mat_t> dist_obs_neighbors_cluster_i(num_coord_unique);
 			std::vector<den_mat_t> dist_between_neighbors_cluster_i(num_coord_unique);
-			bool check_has_duplicates = false;
+			bool check_has_duplicates = true;
 			if (CondObsOnly) {//find neighbors among both the observed locations only
 				find_nearest_neighbors_Vecchia_fast(coords_all_unique, num_coord_unique, num_neighbors_pred_,
 					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, num_coord_unique_obs - 1, check_has_duplicates,
@@ -6164,6 +6621,9 @@ namespace GPBoost {
 				find_nearest_neighbors_Vecchia_fast(coords_all_unique, num_coord_unique, num_neighbors_pred_,
 					nearest_neighbors_cluster_i, dist_obs_neighbors_cluster_i, dist_between_neighbors_cluster_i, 0, -1, check_has_duplicates,
 					vecchia_neighbor_selection_, rng_);
+			}
+			if (check_has_duplicates) {
+				Log::REFatal(DUPLICATES_PRED_VECCHIA_LATENT_);
 			}
 			// Determine Triplet for initializing Bpo and Bp
 			std::vector<Triplet_t> entries_init_B;
@@ -6205,10 +6665,9 @@ namespace GPBoost {
 			}//end loop over data i
 			//Calculate D_inv and B_inv in order to calcualte Sigma and Sigma^-1
 			vec_t D_inv = D.cwiseInverse();
-			sp_mat_t Identity_all(num_coord_unique, num_coord_unique);
-			Identity_all.setIdentity();
-			sp_mat_t B_inv;
-			eigen_sp_Lower_sp_RHS_cs_solve(B, Identity_all, B_inv, true);
+			sp_mat_t B_inv(num_coord_unique, num_coord_unique);
+			B_inv.setIdentity();
+			TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(B, B_inv, B_inv, false);
 			//Calculate inverse of covariance matrix for observed data using the Woodbury identity
 			sp_mat_t M_aux_Woodbury = B.transpose() * D_inv.asDiagonal() * B + Z_o.transpose() * Z_o;
 			chol_sp_mat_t CholFac_M_aux_Woodbury;
@@ -6226,13 +6685,18 @@ namespace GPBoost {
 				pred_mean = M_aux * y_[cluster_i];
 				if (calc_pred_cov) {
 					pred_cov = T_mat(Z_p_B_inv_D * Z_p_B_inv.transpose() - M_aux * ZpSigmaZoT.transpose());
-					pred_cov.diagonal().array() += 1.;
+					if (predict_response) {
+						pred_cov.diagonal().array() += 1.;
+					}
 				}
 				if (calc_pred_var) {
 					pred_var = vec_t(num_data_pred_cli);
 #pragma omp parallel for schedule(static)
 					for (int i = 0; i < num_data_pred_cli; ++i) {
-						pred_var[i] = (Z_p_B_inv_D.row(i)).dot(Z_p_B_inv.row(i)) + 1. - (M_aux.row(i)).dot(ZpSigmaZoT.row(i));
+						pred_var[i] = (Z_p_B_inv_D.row(i)).dot(Z_p_B_inv.row(i)) - (M_aux.row(i)).dot(ZpSigmaZoT.row(i));
+					}
+					if (predict_response) {
+						pred_var.array() += 1.;
 					}
 				}
 			}//end calc_pred_cov || calc_pred_var

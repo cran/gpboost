@@ -63,7 +63,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_lt(sum(abs(cov_pars_est-cov_pars[c(1,3)])),1E-5)
     expect_equal(class(cov_pars_est), "numeric")
     expect_equal(length(cov_pars_est), 2)
-    expect_equal(gp_model$get_num_optim_iter(), 9)
+    expect_equal(gp_model$get_num_optim_iter(), 8)
     # Using gradient descent with Nesterov acceleration
     gp_model <- fitGPModel(group_data = group, y = y,
                            params = list(optimizer_cov = "gradient_descent", std_dev = FALSE,
@@ -78,7 +78,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                                          lr_cov = 10, use_nesterov_acc = FALSE,
                                          maxit = 1000, convergence_criterion = "relative_change_in_parameters"))
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars[c(1,3)])),TOL_STRICT)
-    expect_equal(gp_model$get_num_optim_iter(), 32)
+    expect_equal(gp_model$get_num_optim_iter(), 8)
     # Different termination criterion
     gp_model <- fitGPModel(group_data = group, y = y,
                            params = list(optimizer_cov = "fisher_scoring", std_dev = TRUE,
@@ -130,12 +130,15 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_lt(sum(abs(as.vector(pred$cov)-expected_cov)),TOL_STRICT)
     
     # Predict training data random effects
-    all_training_data_random_effects <- predict_training_data_random_effects(gp_model)
+    gp_model <- fitGPModel(group_data = group, y = y)
+    all_training_data_random_effects <- predict_training_data_random_effects(gp_model, predict_var = TRUE)
     first_occurences <- match(unique(group), group)
-    training_data_random_effects <- all_training_data_random_effects[first_occurences] 
+    training_data_random_effects <- all_training_data_random_effects[first_occurences,] 
     group_unique <- unique(group)
-    pred_random_effects <- predict(gp_model, group_data_pred = group_unique)
-    expect_lt(sum(abs(training_data_random_effects - pred_random_effects$mu)),TOL_STRICT)
+    pred_random_effects <- predict(gp_model, group_data_pred = group_unique, 
+                                   predict_var = TRUE, predict_response = FALSE)
+    expect_lt(sum(abs(training_data_random_effects[,1] - pred_random_effects$mu)),TOL_STRICT)
+    expect_lt(sum(abs(training_data_random_effects[,2] - pred_random_effects$var)),TOL_STRICT)
     
     # Evaluate negative log-likelihood
     nll <- gp_model$neg_log_likelihood(cov_pars=c(0.1,1),y=y)
@@ -209,9 +212,9 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                            y = y, X = X,
                            params = list(optimizer_cov = "gradient_descent", maxit=1000, std_dev = TRUE,
                                          optimizer_coef = "gradient_descent", lr_coef=1, use_nesterov_acc=TRUE))
-    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE)
+    expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOL_LOOSE)
     expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),TOL_LOOSE)
-    expect_equal(gp_model$get_num_optim_iter(), 8)
+    expect_equal(gp_model$get_num_optim_iter(), 9)
     
     # Fit model using Nelder-Mead
     gp_model <- fitGPModel(group_data = group,
@@ -255,8 +258,8 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                            y = y_L, X = X_L,
                            params = list(optimizer_cov = "gradient_descent", maxit=1000, std_dev = TRUE,
                                          optimizer_coef = "gradient_descent", lr_coef=0.1, use_nesterov_acc=TRUE))
-    cov_pars <- c(0.5005173784, 0.0007461273, 0.9983076514, 0.0046889994)
-    coef <- c(1.995527352, 0.003484790, 2.001518751, 0.002577176)
+    cov_pars <- c(0.500507115, 0.000746112, 0.998467820, 0.004689711)
+    coef <- c(1.995528216, 0.003485014, 2.001517023, 0.002577151)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOL_STRICT)
     expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),TOL_STRICT)
     expect_equal(gp_model$get_num_optim_iter(), 7)
@@ -283,6 +286,27 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-expected_values)),TOL_STRICT)
     expect_equal(gp_model$get_num_optim_iter(), 5)
     
+    # Predict training data random effects
+    cov_pars <- gp_model$get_cov_pars()[1,]
+    all_training_data_random_effects <- predict_training_data_random_effects(gp_model, 
+                                                                             predict_var = TRUE)
+    first_occurences_1 <- match(unique(group), group)
+    first_occurences_2 <- match(unique(group2), group2)
+    pred_random_effects <- all_training_data_random_effects[first_occurences_1,c(1,3)]
+    pred_random_effects_crossed <- all_training_data_random_effects[first_occurences_2,c(2,4)] 
+    group_unique <- unique(group)
+    group_data_pred = cbind(group_unique,rep(-1,length(group_unique)))
+    preds <- predict(gp_model, group_data_pred=group_data_pred,
+                     predict_var = TRUE, predict_response = FALSE)
+    expect_lt(sum(abs(pred_random_effects[,1] - preds$mu)),TOL_STRICT)
+    expect_lt(sum(abs(pred_random_effects[,2] - (preds$var - cov_pars[3]))),TOL_STRICT)
+    # Check whether crossed random effects are correct
+    group_unique <- unique(group2)
+    group_data_pred = cbind(rep(-1,length(group_unique)),group_unique)
+    preds <- predict(gp_model, group_data_pred=group_data_pred,
+                     predict_var = TRUE, predict_response = FALSE)
+    expect_lt(sum(abs(pred_random_effects_crossed[,1] - preds$mu)),TOL_STRICT)
+    expect_lt(sum(abs(pred_random_effects_crossed[,2] - (preds$var - cov_pars[2]))),TOL_STRICT)
     # Prediction after training
     group_data_pred = cbind(c(1,1,m+1),c(2,1,length(group2)+1))
     pred <- gp_model$predict(y = y, group_data_pred=group_data_pred, predict_var = TRUE)
@@ -328,27 +352,33 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_equal(gp_model$get_num_optim_iter(), 5)
     
     # Predict training data random effects
-    all_training_data_random_effects <- predict_training_data_random_effects(gp_model)
+    cov_pars <- gp_model$get_cov_pars()[1,]
+    all_training_data_random_effects <- predict_training_data_random_effects(gp_model, predict_var = TRUE)
     first_occurences_1 <- match(unique(group), group)
     first_occurences_2 <- match(unique(group2), group2)
-    pred_random_effects <- all_training_data_random_effects[first_occurences_1,1]
-    pred_random_slopes <- all_training_data_random_effects[first_occurences_1,3]
-    pred_random_effects_crossed <- all_training_data_random_effects[first_occurences_2,2] 
+    pred_random_effects <- all_training_data_random_effects[first_occurences_1,c(1,4)]
+    pred_random_slopes <- all_training_data_random_effects[first_occurences_1,c(3,6)]
+    pred_random_effects_crossed <- all_training_data_random_effects[first_occurences_2,c(2,5)] 
     group_unique <- unique(group)
     group_data_pred = cbind(group_unique,rep(-1,length(group_unique)))
     x_pr = rep(0,length(group_unique))
-    preds <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr)
-    expect_lt(sum(abs(pred_random_effects - preds$mu)),TOL_STRICT)
+    preds <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr, 
+                     predict_var = TRUE, predict_response = FALSE)
+    expect_lt(sum(abs(pred_random_effects[,1] - preds$mu)),TOL_STRICT)
+    expect_lt(sum(abs(pred_random_effects[,2] - (preds$var - cov_pars[3]))),TOL_STRICT)
     # Check whether random slopes are correct
     x_pr = rep(1,length(group_unique))
-    preds2 <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr)
-    expect_lt(sum(abs(pred_random_slopes - (preds2$mu-preds$mu))),TOL_STRICT)
+    preds2 <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr,
+                      predict_var = TRUE, predict_response = FALSE)
+    expect_lt(sum(abs(pred_random_slopes[,1] - (preds2$mu-preds$mu))),TOL_STRICT)
     # Check whether crossed random effects are correct
     group_unique <- unique(group2)
     group_data_pred = cbind(rep(-1,length(group_unique)),group_unique)
     x_pr = rep(0,length(group_unique))
-    preds <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr)
-    expect_lt(sum(abs(pred_random_effects_crossed - preds$mu)),TOL_STRICT)
+    preds <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr,
+                     predict_var = TRUE, predict_response = FALSE)
+    expect_lt(sum(abs(pred_random_effects_crossed[,1] - preds$mu)),TOL_STRICT)
+    expect_lt(sum(abs(pred_random_effects_crossed[,2] - (preds$var - cov_pars[2]))),TOL_STRICT)
     
     # Prediction
     gp_model <- GPModel(group_data = cbind(group,group2),
@@ -422,23 +452,28 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_equal(gp_model$get_num_optim_iter(), 7)
     
     # Predict training data random effects
-    all_training_data_random_effects <- predict_training_data_random_effects(gp_model)
+    cov_pars <- gp_model$get_cov_pars()
+    all_training_data_random_effects <- predict_training_data_random_effects(gp_model, predict_var = TRUE)
     first_occurences_1 <- match(unique(group), group)
     first_occurences_2 <- match(unique(group2), group2)
-    pred_random_slopes <- all_training_data_random_effects[first_occurences_1,2]
-    pred_random_effects_crossed <- all_training_data_random_effects[first_occurences_2,1] 
+    pred_random_slopes <- all_training_data_random_effects[first_occurences_1,c(2,4)]
+    pred_random_effects_crossed <- all_training_data_random_effects[first_occurences_2,c(1,3)] 
     group_unique <- unique(group)
     group_data_pred = cbind(group_unique,rep(-1,length(group_unique)))
     # Check whether random slopes are correct
     x_pr = rep(1,length(group_unique))
-    preds <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr)
-    expect_lt(sum(abs(pred_random_slopes - preds$mu)),TOL_STRICT)
+    preds <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr,
+                     predict_var = TRUE, predict_response = FALSE)
+    expect_lt(sum(abs(pred_random_slopes[,1] - preds$mu)),TOL_STRICT)
+    expect_lt(sum(abs(pred_random_slopes[,2] - (preds$var - cov_pars[2]))),TOL_STRICT)
     # Check whether crossed random effects are correct
     group_unique <- unique(group2)
     group_data_pred = cbind(rep(-1,length(group_unique)),group_unique)
     x_pr = rep(0,length(group_unique))
-    preds <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr)
-    expect_lt(sum(abs(pred_random_effects_crossed - preds$mu)),TOL_STRICT)
+    preds <- predict(gp_model, group_data_pred=group_data_pred, group_rand_coef_data_pred=x_pr,
+                     predict_var = TRUE, predict_response = FALSE)
+    expect_lt(sum(abs(pred_random_effects_crossed[,1] - preds$mu)),TOL_STRICT)
+    expect_lt(sum(abs(pred_random_effects_crossed[,2] - preds$var)),TOL_STRICT)
     
     # Prediction
     gp_model <- GPModel(group_data = cbind(group,group2),
@@ -484,7 +519,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                     , file='NUL')
     cov_pars_expected <- c(0.49348532, 0.02326312, 1.22299520, 0.17995161)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_expected)),TOL_STRICT)
-    expect_equal(gp_model$get_num_optim_iter(), 9)
+    expect_equal(gp_model$get_num_optim_iter(), 8)
     
     # Predict training data random effects
     all_training_data_random_effects <- predict_training_data_random_effects(gp_model)
@@ -560,9 +595,9 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
                                          lr_cov = 0.1, use_nesterov_acc = TRUE, maxit = 1000,
                                          convergence_criterion = "relative_change_in_parameters"))
                     , file='NUL')
-    expected_values <- c(0.4927786, 1.2565095, 1.1333656)
+    expected_values <- c(0.4927786, 1.2565102, 1.1333662)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-expected_values)),TOL_STRICT)
-    expect_equal(gp_model$get_num_optim_iter(), 14)
+    expect_equal(gp_model$get_num_optim_iter(), 13)
     
   })
   

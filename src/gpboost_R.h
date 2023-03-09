@@ -706,6 +706,8 @@ GPBOOST_C_EXPORT SEXP GPB_REModelFree_R(
 * \param cg_preconditioner_type Type of preconditioner used for the conjugate gradient algorithm
 * \param seed_rand_vec_trace Seed number to generate random vectors (e.g. Rademacher) for stochastic approximation of the trace of a matrix
 * \param piv_chol_rank Rank of the pivoted cholseky decomposition used as preconditioner of the conjugate gradient algorithm
+* \param init_aux_pars Initial values for values for aux_pars_ (e.g., shape parameter of gamma likelihood)
+* \param estimate_aux_pars If true, any additional parameters for non-Gaussian likelihoods are also estimated (e.g., shape parameter of gamma likelihood)
 * \return 0 when succeed, -1 when failure happens
 */
 GPBOOST_C_EXPORT SEXP GPB_SetOptimConfig_R(
@@ -734,7 +736,9 @@ GPBOOST_C_EXPORT SEXP GPB_SetOptimConfig_R(
 	SEXP reuse_rand_vec_trace,
 	SEXP cg_preconditioner_type,
 	SEXP seed_rand_vec_trace,
-	SEXP piv_chol_rank
+	SEXP piv_chol_rank,
+	SEXP init_aux_pars,
+	SEXP estimate_aux_pars
 );
 
 /*!
@@ -795,7 +799,7 @@ GPBOOST_C_EXPORT SEXP GPB_GetCurrentNegLogLikelihood_R(
 );
 
 /*!
-* \brief Get covariance paramters
+* \brief Get covariance parameters
 *		 Note: You should pre-allocate memory for optim_cov_pars. Its length equals the number of covariance parameters (num_cov_pars) or twice this if calc_std_dev = true
 * \param handle Handle of REModel
 * \param calc_std_dev If true, standard deviations are also exported
@@ -809,7 +813,7 @@ GPBOOST_C_EXPORT SEXP GPB_GetCovPar_R(
 );
 
 /*!
-* \brief Get initial values for covariance paramters
+* \brief Get initial values for covariance parameters
 *		 Note: You should pre-allocate memory for optim_cov_pars. Its length equals the number of covariance parameters (num_cov_pars) or twice this if calc_std_dev = true
 * \param handle Handle of REModel
 * \param[out] init_cov_pars Initial covariance parameters
@@ -932,7 +936,8 @@ GPBOOST_C_EXPORT SEXP GPB_PredictREModel_R(
 * \param cov_pars_pred Covariance parameters of components
 * \param y_obs Response variable for observed data
 * \param fixed_effects Fixed effects component of location parameter for observed data (only used for non-Gaussian data)
-* \param[out] out_predict Predicted training data random effects
+* \param calc_var If true, variances are also calculated
+* \param[out] out_predict Predicted training data random effects and variances if calc_var
 * \return 0 when succeed, -1 when failure happens
 */
 GPBOOST_C_EXPORT SEXP GPB_PredictREModelTrainingDataRandomEffects_R(
@@ -940,6 +945,7 @@ GPBOOST_C_EXPORT SEXP GPB_PredictREModelTrainingDataRandomEffects_R(
 	SEXP cov_pars,
 	SEXP y_obs,
 	SEXP fixed_effects,
+	SEXP calc_var,
 	SEXP out_predict
 );
 
@@ -997,6 +1003,39 @@ GPBOOST_C_EXPORT SEXP GPB_GetResponseData_R(
 GPBOOST_C_EXPORT SEXP GPB_GetCovariateData_R(
 	SEXP handle,
 	SEXP covariate_data
+);
+
+/*!
+* \brief Get additional likelihood parameters (e.g., shape parameter for a gamma likelihood)
+* \param handle Handle of REModel
+* \param[out] Additional likelihood parameters (aux_pars_). This vector needs to be pre-allocated
+* \return R character vector (length=1) with the name of the first parameter
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetAuxPars_R(
+	SEXP handle,
+	SEXP aux_pars
+);
+
+/*!
+* \brief Get number of additional likelihood parameters (e.g., shape parameter for a gamma likelihood)
+* \param handle Handle of booster
+* \param[out] num_aux_pars Number of additional likelihood parameters
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetNumAuxPars_R(
+	SEXP handle,
+	SEXP num_aux_pars
+);
+
+/*!
+* \brief Get initial values for additional likelihood parameters (e.g., shape parameter for a gamma likelihood)
+* \param handle Handle of booster
+* \param[out] aux_pars Initial values for additional likelihood parameters
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetInitAuxPars_R(
+	SEXP handle,
+	SEXP aux_pars
 );
 
 #endif  // GPBOOST_R_H_
