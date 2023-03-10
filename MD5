@@ -1,4 +1,4 @@
-b515d3e46708e9a8da7bbe2ffcd74711 *DESCRIPTION
+22940d44b333fe44092e9b5dbc204b48 *DESCRIPTION
 62aa7e7a29985341875a00e6ac33d872 *LICENSE
 a167eb353c93a35f57b932e2f0b2b267 *NAMESPACE
 ffed6e47ca0ca150e5489a709c50289d *R/GPModel.R
@@ -16,7 +16,7 @@ ef974fc35f175ed12cf161702e32ebe3 *R/gpb.importance.R
 994f0720af2137d6da36dc25067ec6cf *R/gpb.plot.interpretation.R
 962d9cc400fcf732d3ea357b5253912f *R/gpb.plot.partial.dependence.R
 0b3937205a96254db7788a237929ed21 *R/gpb.train.R
-a36f90021cbbe69090beba5be7f1e24b *R/gpboost.R
+71ef6f376f39e6534b85a95051eebd03 *R/gpboost.R
 3a0ada361f6a7edfa3ca6a91732c2f9d *R/metrics.R
 e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 2febed098a233d39576a440da6e9e677 *R/saveRDS.gpb.Booster.R
@@ -24,7 +24,7 @@ e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 bb9c52ed31cdf5de00f4a19b1220b771 *README.md
 6071edd604dbeb75308cfbedc7790398 *cleanup
 64d337f86038dffbc64d54f1679346ca *configure
-b216babd08d044162719b814ecc009f0 *configure.ac
+21b48a523d51a5e594d0fac26857eaa4 *configure.ac
 143395cafb571049ffb58af627304dea *configure.win
 0276a7e04cef5f86e4146107bfb24e98 *data/GPBoost_data.RData
 05e29359ef24243df589703588987c0e *data/agaricus.test.rda
@@ -62,10 +62,10 @@ ed23b7220c019f117ce8238b538da152 *man/dimnames.gpb.Dataset.Rd
 db054d1d5eb278db396b2f84685fa5ae *man/gpb.Dataset.set.categorical.Rd
 2d3610be231ee487a817d0871b2a673e *man/gpb.Dataset.set.reference.Rd
 75d69c7280d81ff00ccb62024530c0f5 *man/gpb.convert_with_rules.Rd
-8e64a3e03fa9e1fcbef6126e3aabfe90 *man/gpb.cv.Rd
+9522c7f1e4cb6fb314db6ab8aa045a45 *man/gpb.cv.Rd
 d8b7a51691da9e6cb9e868833df0f109 *man/gpb.dump.Rd
 74d47646895d3e4a5c08cce351e25cea *man/gpb.get.eval.result.Rd
-5c763974be21476665ba3149135cbd43 *man/gpb.grid.search.tune.parameters.Rd
+981bceeae549764acb8a7ed3a1fc3d5f *man/gpb.grid.search.tune.parameters.Rd
 7d91a4ead0d7200bca14c93a75330b57 *man/gpb.importance.Rd
 d8a25cfd865042f68099012c6a9c7102 *man/gpb.interprete.Rd
 00da37ca666491db7257ec1ce2797453 *man/gpb.load.Rd
@@ -75,9 +75,9 @@ f33042ec4025c7554e1e3c681009bb65 *man/gpb.plot.interpretation.Rd
 2b71c867d8b3af736f891175f40453e5 *man/gpb.plot.part.dep.interact.Rd
 272811183152f61d5c1d00d80710f443 *man/gpb.plot.partial.dependence.Rd
 19615a3f82bc439e66c783d1513dfb80 *man/gpb.save.Rd
-0c403be8291646d4f9a5c0928a6556d4 *man/gpb.train.Rd
-eccdd18daed9d81f964005cd9e9851fa *man/gpb_shared_params.Rd
-5cb9e513906ddaa943646ba923e14b03 *man/gpboost.Rd
+b4e48fe13cdc1580693684a5104a1da2 *man/gpb.train.Rd
+6b5e70f14f9d6193d808db2cad5486c3 *man/gpb_shared_params.Rd
+ed85318d87622f2aabb9952bfb4c15ec *man/gpboost.Rd
 9aee48eb0115024e0182c0763fbb0c47 *man/group_data.Rd
 b87960c6c60b1d8b33a960eab11651fc *man/group_data_test.Rd
 5299b1157bcd238afe6d70c326500f54 *man/loadGPModel.Rd
@@ -434,7 +434,7 @@ c2c96628d2be989f2809f8d90919c483 *src/include/Eigen/src/plugins/MatrixCwiseUnary
 e4c23f54e09a2ee13afccf9c6a7fbd24 *src/include/GPBoost/GP_utils.h
 dbf69b400e4ceff9cc16cedf1adc5fcf *src/include/GPBoost/Vecchia_utils.h
 69017e30f699d6d49dac446e0dce7ced *src/include/GPBoost/cov_fcts.h
-9afc59bfe5eededc334cd235cab388aa *src/include/GPBoost/likelihoods.h
+f1e2cff9d5f922967f04e8c5d90f5033 *src/include/GPBoost/likelihoods.h
 07a0ea032eb7a22ed1a88d23cff7908d *src/include/GPBoost/re_comp.h
 25e5cd5b1b5e82b8f9bb3aae13c45402 *src/include/GPBoost/re_model.h
 30a4f931f6724a2d5aa1127123cd21e1 *src/include/GPBoost/re_model_template.h
