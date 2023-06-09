@@ -632,8 +632,6 @@ GPBOOST_C_EXPORT SEXP LGBM_BoosterDumpModel_R(
 * \param cov_fct_taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 * \param num_neighbors The number of neighbors used in the Vecchia approximation
 * \param vecchia_ordering Ordering used in the Vecchia approximation. "none" = no ordering, "random" = random ordering
-* \param vecchia_pred_type Type of Vecchia approximation for making predictions. "order_obs_first_cond_obs_only" = observed data is ordered first and neighbors are only observed points, "order_obs_first_cond_all" = observed data is ordered first and neighbors are selected among all points (observed + predicted), "order_pred_first" = predicted data is ordered first for making predictions, "latent_order_obs_first_cond_obs_only"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are only observed points, "latent_order_obs_first_cond_all"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are selected among all points
-* \param num_neighbors_pred The number of neighbors used in the Vecchia approximation for making predictions
 * \param num_ind_points Number of inducing points / knots for, e.g., a predictive process approximation
 * \param likelihood Likelihood function for the observed response variable
 * \param matrix_inversion_method Method which is used for matrix inversion
@@ -661,8 +659,6 @@ GPBOOST_C_EXPORT SEXP GPB_CreateREModel_R(
 	SEXP cov_fct_taper_shape,
 	SEXP num_neighbors,
 	SEXP vecchia_ordering,
-	SEXP vecchia_pred_type,
-	SEXP num_neighbors_pred,
 	SEXP num_ind_points,
 	SEXP likelihood,
 	SEXP matrix_inversion_method,
@@ -863,6 +859,8 @@ GPBOOST_C_EXPORT SEXP GPB_GetNumIt_R(
 * \param vecchia_pred_type Type of Vecchia approximation for making predictions. "order_obs_first_cond_obs_only" = observed data is ordered first and neighbors are only observed points, "order_obs_first_cond_all" = observed data is ordered first and neighbors are selected among all points (observed + predicted), "order_pred_first" = predicted data is ordered first for making predictions, "latent_order_obs_first_cond_obs_only"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are only observed points, "latent_order_obs_first_cond_all"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are selected among all points
 * \param num_neighbors_pred The number of neighbors used in the Vecchia approximation for making predictions (-1 means that the value already set at initialization is used)
 * \param cg_delta_conv_pred Tolerance level for L2 norm of residuals for checking convergence in conjugate gradient algorithm when being used for prediction
+* \param nsim_var_pred Number of samples when simulation is used for calculating predictive variances
+* \param rank_pred_approx_matrix_lanczos Rank of the matrix for approximating predictive covariances obtained using the Lanczos algorithm
 * \return 0 when succeed, -1 when failure happens
 */
 GPBOOST_C_EXPORT SEXP GPB_SetPredictionData_R(
@@ -876,7 +874,9 @@ GPBOOST_C_EXPORT SEXP GPB_SetPredictionData_R(
 	SEXP covariate_data_pred,
 	SEXP vecchia_pred_type,
 	SEXP num_neighbors_pred,
-	SEXP cg_delta_conv_pred
+	SEXP cg_delta_conv_pred,
+	SEXP nsim_var_pred,
+	SEXP rank_pred_approx_matrix_lanczos
 );
 
 /*!
@@ -899,9 +899,6 @@ GPBOOST_C_EXPORT SEXP GPB_SetPredictionData_R(
 * \param cov_pars Covariance parameters of RE components
 * \param covariate_data_pred Covariate data (=independent variables, features) for prediction
 * \param use_saved_data If true previusly set data on groups, coordinates, and covariates are used and some arguments of this function are ignored
-* \param vecchia_pred_type Type of Vecchia approximation for making predictions. "order_obs_first_cond_obs_only" = observed data is ordered first and neighbors are only observed points, "order_obs_first_cond_all" = observed data is ordered first and neighbors are selected among all points (observed + predicted), "order_pred_first" = predicted data is ordered first for making predictions, "latent_order_obs_first_cond_obs_only"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are only observed points, "latent_order_obs_first_cond_all"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are selected among all points
-* \param num_neighbors_pred The number of neighbors used in the Vecchia approximation for making predictions (-1 means that the value already set at initialization is used)
-* \param cg_delta_conv_pred Tolerance level for L2 norm of residuals for checking convergence in conjugate gradient algorithm when being used for prediction
 * \param fixed_effects Fixed effects component of location parameter for observed data (only used for non-Gaussian data)
 * \param fixed_effects_pred Fixed effects component of location parameter for predicted data (only used for non-Gaussian data)
 * \param[out] out_predict Predictive/conditional mean at prediciton points followed by the predictive covariance matrix in column-major format (if predict_cov_mat==true) or the predictive variances (if predict_var==true)
@@ -922,9 +919,6 @@ GPBOOST_C_EXPORT SEXP GPB_PredictREModel_R(
 	SEXP cov_pars,
 	SEXP covariate_data_pred,
 	SEXP use_saved_data,
-	SEXP vecchia_pred_type,
-	SEXP num_neighbors_pred,
-	SEXP cg_delta_conv_pred,
 	SEXP fixed_effects,
 	SEXP fixed_effects_pred,
 	SEXP out_predict
@@ -974,6 +968,14 @@ GPBOOST_C_EXPORT SEXP GPB_GetOptimizerCoef_R(
 );
 
 /*!
+* \brief Get name of preconditioner for conjugate gradient algorithm
+* \return R character vector (length=1) with optimizer name
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetCGPreconditionerType_R(
+	SEXP handle
+);
+
+/*!
 * \brief Set the type of likelihood
 * \param likelihood Likelihood name
 * \return 0 when succeed, -1 when failure happens
@@ -1008,7 +1010,7 @@ GPBOOST_C_EXPORT SEXP GPB_GetCovariateData_R(
 /*!
 * \brief Get additional likelihood parameters (e.g., shape parameter for a gamma likelihood)
 * \param handle Handle of REModel
-* \param[out] Additional likelihood parameters (aux_pars_). This vector needs to be pre-allocated
+* \param[out] aux_pars Additional likelihood parameters (aux_pars_). This vector needs to be pre-allocated
 * \return R character vector (length=1) with the name of the first parameter
 */
 GPBOOST_C_EXPORT SEXP GPB_GetAuxPars_R(

@@ -1340,8 +1340,6 @@ GPBOOST_C_EXPORT int LGBM_NetworkInitWithFunctions(int num_machines,
 * \param cov_fct_taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 * \param num_neighbors The number of neighbors used in the Vecchia approximation
 * \param vecchia_ordering Ordering used in the Vecchia approximation. "none" = no ordering, "random" = random ordering
-* \param vecchia_pred_type Type of Vecchia approximation for making predictions. "order_obs_first_cond_obs_only" = observed data is ordered first and neighbors are only observed points, "order_obs_first_cond_all" = observed data is ordered first and neighbors are selected among all points (observed + predicted), "order_pred_first" = predicted data is ordered first for making predictions, "latent_order_obs_first_cond_obs_only"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are only observed points, "latent_order_obs_first_cond_all"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are selected among all points
-* \param num_neighbors_pred The number of neighbors used in the Vecchia approximation for making predictions
 * \param num_ind_points Number of inducing points / knots for, e.g., a predictive process approximation
 * \param likelihood Likelihood function for the observed response variable
 * \param matrix_inversion_method Method which is used for matrix inversion
@@ -1369,8 +1367,6 @@ GPBOOST_C_EXPORT int GPB_CreateREModel(int32_t num_data,
     double cov_fct_taper_shape,
     int num_neighbors,
     const char* vecchia_ordering,
-    const char* vecchia_pred_type,
-    int num_neighbors_pred,
     int num_ind_points,
     const char* likelihood,
     const char* matrix_inversion_method,
@@ -1551,6 +1547,8 @@ GPBOOST_C_EXPORT int GPB_GetNumIt(REModelHandle handle,
 * \param vecchia_pred_type Type of Vecchia approximation for making predictions. "order_obs_first_cond_obs_only" = observed data is ordered first and neighbors are only observed points, "order_obs_first_cond_all" = observed data is ordered first and neighbors are selected among all points (observed + predicted), "order_pred_first" = predicted data is ordered first for making predictions, "latent_order_obs_first_cond_obs_only"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are only observed points, "latent_order_obs_first_cond_all"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are selected among all points
 * \param num_neighbors_pred The number of neighbors used in the Vecchia approximation for making predictions (-1 means that the value already set at initialization is used)
 * \param cg_delta_conv_pred Tolerance level for L2 norm of residuals for checking convergence in conjugate gradient algorithm when being used for prediction
+* \param nsim_var_pred Number of samples when simulation is used for calculating predictive variances
+* \param rank_pred_approx_matrix_lanczos Rank of the matrix for approximating predictive covariances obtained using the Lanczos algorithm
 */
 GPBOOST_C_EXPORT int GPB_SetPredictionData(REModelHandle handle,
     int32_t num_data_pred,
@@ -1562,7 +1560,9 @@ GPBOOST_C_EXPORT int GPB_SetPredictionData(REModelHandle handle,
     const double* covariate_data_pred,
     const char* vecchia_pred_type,
     int num_neighbors_pred,
-    double cg_delta_conv_pred);
+    double cg_delta_conv_pred,
+    int nsim_var_pred,
+    int rank_pred_approx_matrix_lanczos);
 
 /*!
 * \brief Make predictions: calculate conditional mean and variances or covariance matrix
@@ -1585,9 +1585,6 @@ GPBOOST_C_EXPORT int GPB_SetPredictionData(REModelHandle handle,
 * \param cov_pars Covariance parameters of RE components
 * \param covariate_data_pred Covariate data (=independent variables, features) for prediction
 * \param use_saved_data If true previusly set data on groups, coordinates, and covariates are used and some arguments of this function are ignored
-* \param vecchia_pred_type Type of Vecchia approximation for making predictions. "order_obs_first_cond_obs_only" = observed data is ordered first and neighbors are only observed points, "order_obs_first_cond_all" = observed data is ordered first and neighbors are selected among all points (observed + predicted), "order_pred_first" = predicted data is ordered first for making predictions, "latent_order_obs_first_cond_obs_only"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are only observed points, "latent_order_obs_first_cond_all"  = Vecchia approximation for the latent process and observed data is ordered first and neighbors are selected among all points
-* \param num_neighbors_pred The number of neighbors used in the Vecchia approximation for making predictions (-1 means that the value already set at initialization is used)
-* \param cg_delta_conv_pred Tolerance level for L2 norm of residuals for checking convergence in conjugate gradient algorithm when being used for prediction
 * \param fixed_effects Fixed effects component of location parameter for observed data (only used for non-Gaussian data). For Gaussian data, this is ignored
 * \param fixed_effects_pred Fixed effects component of location parameter for predicted data (only used for non-Gaussian data)
 * \return 0 when succeed, -1 when failure happens
@@ -1607,9 +1604,6 @@ GPBOOST_C_EXPORT int GPB_PredictREModel(REModelHandle handle,
     const double* cov_pars,
     const double* covariate_data_pred,
     bool use_saved_data,
-    const char* vecchia_pred_type,
-    int num_neighbors_pred,
-    double cg_delta_conv_pred,
     const double* fixed_effects,
     const double* fixed_effects_pred);
 
@@ -1664,6 +1658,17 @@ GPBOOST_C_EXPORT int GPB_GetOptimizerCoef(REModelHandle handle,
     int* num_char);
 
 /*!
+* \brief Get name of preconditioner for conjugate gradient algorithm
+* \param handle Handle of REModel
+* \param[out] out_str Optimizer name
+* \param[out] num_char Number of characters
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_GetCGPreconditionerType(REModelHandle handle,
+    char* out_str,
+    int* num_char);
+
+/*!
 * \brief Set the type of likelihood
 * \param handle Handle of REModel
 * \param likelihood Likelihood name
@@ -1693,7 +1698,7 @@ GPBOOST_C_EXPORT int GPB_GetCovariateData(REModelHandle handle,
 /*!
 * \brief Get additional likelihood parameters (e.g., shape parameter for a gamma likelihood)
 * \param handle Handle of REModel
-* \param[out] Additional likelihood parameters (aux_pars_). This vector needs to be pre-allocated
+* \param[out] aux_pars Additional likelihood parameters (aux_pars_). This vector needs to be pre-allocated
 * \param[out] out_str Name of the first parameter
 * \return 0 when succeed, -1 when failure happens
 */

@@ -115,6 +115,70 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       folds <- list()
       for(i in 1:4) folds[[i]] <- as.integer(1:(ntrain/4) + (ntrain/4) * (i-1))
       
+      # Create random effects model and train GPBoost model
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpboost(data = X_train, label = y_train, gp_model = gp_model,
+                     nrounds = 62, learning_rate = 0.01, max_depth = 6,
+                     min_data_in_leaf = 5, objective = "regression_l2", verbose = 0)
+      cov_pars <- c(0.005087137, 0.590527753, 0.390570179)
+      expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE)
+      # Prediction
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
+                      pred_latent = TRUE, predict_var = TRUE)
+      expect_lt(sqrt(mean((pred$fixed_effect - f_test)^2)),0.262)
+      expect_lt(sqrt(mean((pred$fixed_effect - y_test)^2)),1.0241)
+      expect_lt(sqrt(mean((pred$fixed_effect + pred$random_effect_mean - y_test)^2)),0.235)
+      re_mean <- c(0.3918770, -0.1655551, -1.2513672, rep(0,n_new))
+      re_var <- c(0.0003254678, 0.0003254678, 0.0003254678, 0.9810979337, 0.9810979337, 0.9810979337)
+      pred_fe <- c(4.392474, 4.294148, 3.561677, 5.072800, 5.048781, 3.864357)
+      expect_lt(sum(abs(tail(pred$random_effect_mean) - re_mean)),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$random_effect_cov) - re_var)),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$fixed_effect) - pred_fe)),TOLERANCE)
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
+                      pred_latent = FALSE, predict_var = TRUE)
+      expect_lt(sum(abs(tail(pred$response_mean) - re_mean - pred_fe)),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$response_var) - (re_var + cov_pars[1]))),TOLERANCE)
+      
+      # objective does not need to be set
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpboost(data = X_train, label = y_train, gp_model = gp_model,
+                     nrounds = 62, learning_rate = 0.01, max_depth = 6,
+                     min_data_in_leaf = 5, verbose = 0)
+      expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE)
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
+                      pred_latent = FALSE, predict_var = TRUE)
+      expect_lt(sum(abs(tail(pred$response_mean) - re_mean - pred_fe)),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$response_var) - (re_var + cov_pars[1]))),TOLERANCE)
+      
+      # Training with alternative objective names
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpboost(data = X_train, label = y_train, gp_model = gp_model,
+                     nrounds = 62, learning_rate = 0.01, max_depth = 6,
+                     min_data_in_leaf = 5, verbose = 0, objective = "gaussian")
+      expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE)
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
+                      pred_latent = FALSE, predict_var = TRUE)
+      expect_lt(sum(abs(tail(pred$response_mean) - re_mean - pred_fe)),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$response_var) - (re_var + cov_pars[1]))),TOLERANCE)
+      
+      # Training with "wrong" likelihood
+      gp_model <- GPModel(group_data = group_data_train, likelihood = "bernoulli_probit")
+      expect_error({ 
+        bst <- gpboost(data = X_train, label = y_train, gp_model = gp_model,
+                       nrounds = 62, learning_rate = 0.01, max_depth = 6,
+                       min_data_in_leaf = 5, verbose = 0, objective = "gaussian")
+      })
+      # objective and likelihood do not match
+      gp_model <- GPModel(group_data = group_data_train)
+      capture.output( expect_error({ 
+        bst <- gpboost(data = X_train, label = y_train, gp_model = gp_model,
+                       nrounds = 62, learning_rate = 0.01, max_depth = 6,
+                       min_data_in_leaf = 5, verbose = 0, objective = "binary")
+      }) , file='NUL')
+      
       # Validation metrics for training data
       # Default metric is "Negative log-likelihood" if there is only one training set
       gp_model <- GPModel(group_data = group_data_train)
@@ -158,34 +222,43 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                       verbose = 0)
       expect_equal(cvbst$best_iter, 59)
       expect_lt(abs(cvbst$best_score-0.6526893), TOLERANCE)
-      
-      # Create random effects model and train GPBoost model
-      gp_model <- GPModel(group_data = group_data_train)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      bst <- gpboost(data = X_train,
-                     label = y_train,
-                     gp_model = gp_model,
-                     nrounds = 62,
-                     learning_rate = 0.01,
-                     max_depth = 6,
-                     min_data_in_leaf = 5,
-                     objective = "regression_l2",
-                     verbose = 0,
-                     leaves_newton_update = FALSE)
-      cov_pars <- c(0.005087137, 0.590527753, 0.390570179)
-      expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE)
-      # Prediction
-      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
-                      pred_latent = TRUE)
-      expect_lt(sqrt(mean((pred$fixed_effect - f_test)^2)),0.262)
-      expect_lt(sqrt(mean((pred$fixed_effect - y_test)^2)),1.0241)
-      expect_lt(sqrt(mean((pred$fixed_effect + pred$random_effect_mean - y_test)^2)),0.235)
-      expect_lt(sum(abs(tail(pred$random_effect_mean)-c(0.3918770, -0.1655551, -1.2513672,
-                                                        rep(0,n_new)))),TOLERANCE)
-      expect_lt(sum(abs(head(pred$random_effect_mean)-c(-.5559122, 0.5031307, 0.5676980,
-                                                        -0.9293673, -0.5188209, -0.2505326))),TOLERANCE)
-      expect_lt(sum(abs(head(pred$fixed_effect)-c(4.894403, 3.957849, 3.281690,
-                                                  4.162436, 5.101025, 4.889397))),TOLERANCE)
+      # Parameter tuning
+      param_grid = list("learning_rate" = c(1,0.1), 
+                        "min_data_in_leaf" = c(10,100))
+      other_params <- list(objective = "regression_l2", max_depth = 6, num_leaves = 2^10)
+      opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = other_params,
+                                                    folds = folds, data = dtrain, gp_model = gp_model,
+                                                    use_gp_model_for_validation=TRUE, verbose_eval = 0,
+                                                    nrounds = 1000, early_stopping_rounds = 10,
+                                                    metric = "l2")
+      expect_equal(opt_params$best_params$learning_rate, 0.1)
+      expect_equal(opt_params$best_params$min_data_in_leaf, 10)
+      expect_equal(opt_params$best_iter, 7)
+      expect_lt(abs(opt_params$best_score-0.6767217), TOLERANCE)
+      # Parameter tuning: can catch errors
+      param_grid_wrong = list("learning_rate" = c(-1,0.1), 
+                              "min_data_in_leaf" = c(10,100))
+      capture.output( capture_messages( capture_error(
+        opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid_wrong, params = other_params,
+                                                      folds = folds, data = dtrain, gp_model = gp_model,
+                                                      use_gp_model_for_validation=TRUE, verbose_eval = 0,
+                                                      nrounds = 1000, early_stopping_rounds = 10, metric = "l2") 
+      ) ), file='NUL')
+      expect_equal(opt_params$best_params$learning_rate, 0.1)
+      expect_equal(opt_params$best_params$min_data_in_leaf, 10)
+      expect_equal(opt_params$best_iter, 7)
+      expect_lt(abs(opt_params$best_score-0.6767217), TOLERANCE)
+      # Using 'test_neg_log_likelihood' as metric
+      opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = other_params,
+                                                    folds = folds, data = dtrain, gp_model = gp_model,
+                                                    use_gp_model_for_validation=TRUE, verbose_eval = 0,
+                                                    nrounds = 1000, early_stopping_rounds = 10,
+                                                    metric = "test_neg_log_likelihood")
+      expect_equal(opt_params$best_params$learning_rate, 0.1)
+      expect_equal(opt_params$best_params$min_data_in_leaf, 10)
+      expect_equal(opt_params$best_iter, 7)
+      expect_lt(abs(opt_params$best_score-1.224379), TOLERANCE)
+      dtrain <- gpb.Dataset(data = X_train, label = y_train)
       
       ## Prediction when having only one grouped random effect
       group_1 <- rep(1,ntrain) # grouping variable
@@ -256,160 +329,6 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       cov_pars_OOS <- c(0.055, 0.59, 0.39)
       expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_OOS)),0.1)
       
-      # Newton updates for tree leaves
-      params <- list(learning_rate = 0.1,
-                     max_depth = 6,
-                     min_data_in_leaf = 5,
-                     objective = "regression_l2",
-                     leaves_newton_update = TRUE)
-      gp_model <- GPModel(group_data = group_data_train)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      cvbst <- gpb.cv(params = params,
-                      data = dtrain,
-                      gp_model = gp_model,
-                      nrounds = 100,
-                      nfold = 4,
-                      eval = "l2",
-                      early_stopping_rounds = 5,
-                      use_gp_model_for_validation = FALSE,
-                      fit_GP_cov_pars_OOS = TRUE,
-                      folds = folds,
-                      verbose = 0)
-      expect_equal(cvbst$best_iter, 52)
-      cov_pars_OOS <- c(0.04468342, 0.60930957, 0.38893938)
-      expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_OOS)),TOLERANCE)
-      
-      # Using validation set
-      # Do not include random effect predictions for validation
-      gp_model <- GPModel(group_data = group_data_train)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      bst <- gpb.train(data = dtrain,
-                       gp_model = gp_model,
-                       nrounds = 100,
-                       learning_rate = 0.01,
-                       max_depth = 6,
-                       min_data_in_leaf = 5,
-                       objective = "regression_l2",
-                       verbose = 0,
-                       valids = valids,
-                       early_stopping_rounds = 5,
-                       use_gp_model_for_validation = FALSE)
-      expect_equal(bst$best_iter, 57)
-      expect_lt(abs(bst$best_score - 1.0326),TOLERANCE)
-      # Include random effect predictions for validation 
-      gp_model <- GPModel(group_data = group_data_train)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      gp_model$set_prediction_data(group_data_pred = group_data_test)
-      bst <- gpb.train(data = dtrain,
-                       gp_model = gp_model,
-                       nrounds = 100,
-                       learning_rate = 0.01,
-                       max_depth = 6,
-                       min_data_in_leaf = 5,
-                       objective = "regression_l2",
-                       verbose = 0,
-                       valids = valids,
-                       early_stopping_rounds = 5,
-                       use_gp_model_for_validation = TRUE)
-      expect_equal(bst$best_iter, 59)
-      expect_lt(abs(bst$best_score - 0.04753591),TOLERANCE)
-      # Same thing using the set_prediction_data method 
-      gp_model <- GPModel(group_data = group_data_train)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      set_prediction_data(gp_model, group_data_pred = group_data_test)
-      bst <- gpb.train(data = dtrain,
-                       gp_model = gp_model,
-                       nrounds = 100,
-                       learning_rate = 0.01,
-                       max_depth = 6,
-                       min_data_in_leaf = 5,
-                       objective = "regression_l2",
-                       verbose = 0,
-                       valids = valids,
-                       early_stopping_rounds = 5,
-                       use_gp_model_for_validation = TRUE)
-      expect_equal(bst$best_iter, 59)
-      expect_lt(abs(bst$best_score - 0.04753591),TOLERANCE)
-      
-      # Use of validation data and cross-validation with custom metric
-      l4_loss <- function(preds, dtrain) {
-        labels <- getinfo(dtrain, "label")
-        return(list(name="l4",value=mean((preds-labels)^4),higher_better=FALSE))
-      }
-      gp_model <- GPModel(group_data = group_data_train)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      bst <- gpb.train(data = dtrain,
-                       gp_model = gp_model,
-                       nrounds = 100,
-                       learning_rate = 0.01,
-                       max_depth = 6,
-                       min_data_in_leaf = 5,
-                       objective = "regression_l2",
-                       verbose = 0,
-                       valids = valids,
-                       early_stopping_rounds = 5,
-                       use_gp_model_for_validation = FALSE,
-                       eval = l4_loss, metric = "l4")
-      expect_equal(bst$best_iter, 57)
-      expect_lt(abs(bst$best_score - 3.058637),TOLERANCE)
-      # CV
-      gp_model <- GPModel(group_data = group_data_train)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      cvbst <- gpb.cv(params = params,
-                      data = dtrain,
-                      gp_model = gp_model,
-                      nrounds = 100,
-                      nfold = 4,
-                      early_stopping_rounds = 5,
-                      use_gp_model_for_validation = FALSE,
-                      fit_GP_cov_pars_OOS = FALSE,
-                      folds = folds,
-                      verbose = 0,
-                      eval = l4_loss, metric = "l4")
-      expect_equal(cvbst$best_iter, 52)
-      expect_lt(abs(cvbst$best_score - 2.932338),TOLERANCE)
-      
-      # Use of validation data and gaussian_neg_log_likelihood as metric
-      gp_model <- GPModel(group_data = group_data_train)
-      set_prediction_data(gp_model, group_data_pred = group_data_test)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 10,
-                       learning_rate = 0.01, max_depth = 6, min_data_in_leaf = 5,
-                       objective = "regression_l2", verbose = 0,
-                       valids = valids, early_stopping_rounds = 5,
-                       use_gp_model_for_validation = TRUE, metric = "gaussian_neg_log_likelihood")
-      expect_equal(bst$best_iter, 10)
-      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
-                      pred_latent = FALSE, predict_var = TRUE)
-      nll <- 0.5 * mean((y_test - pred[['response_mean']])^2 / 
-                          pred[['response_var']] + log(pred[['response_var']] * 2 * pi))
-      expect_lt(abs(bst$best_score - nll),TOLERANCE)
-      # Use of validation data and gaussian_neg_log_likelihood as metric but set use_gp_model_for_validation = FALSE
-      gp_model <- GPModel(group_data = group_data_train)
-      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 10,
-                       learning_rate = 0.01, max_depth = 6, min_data_in_leaf = 5,
-                       objective = "regression_l2", verbose = 0,
-                       valids = valids, early_stopping_rounds = 5,
-                       use_gp_model_for_validation = FALSE, metric = "gaussian_neg_log_likelihood")
-      expect_equal(bst$best_iter, 10)
-      predtrain <- predict(bst, data = X_train, group_data_pred = group_data_train, pred_latent = TRUE)
-      var_est <- var(y_train - predtrain$fixed_effect)
-      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, pred_latent = TRUE)
-      nll <- 0.5 * mean((y_test - pred[['fixed_effect']])^2 / var_est + log(var_est * 2 * pi))
-      expect_lt(abs(bst$best_score - nll),TOLERANCE)
-      # Use of validation data and gaussian_neg_log_likelihood as metric without a GPModel
-      bst <- gpb.train(data = dtrain, nrounds = 10, learning_rate = 0.01, max_depth = 6, min_data_in_leaf = 5,
-                       objective = "regression_l2", verbose = 0,
-                       valids = valids, early_stopping_rounds = 5,
-                       metric = "gaussian_neg_log_likelihood")
-      expect_equal(bst$best_iter, 10)
-      predtrain <- predict(bst, data = X_train, pred_latent = TRUE)
-      var_est <- var(y_train - predtrain)
-      pred <- predict(bst, data = X_test, pred_latent = TRUE)
-      nll <- 0.5 * mean((y_test - pred)^2 / var_est + log(var_est * 2 * pi))
-      expect_lt(abs(bst$best_score - nll),TOLERANCE)
-      
       # Use Nelder-Mead for training
       gp_model <- GPModel(group_data = group_data_train)
       gp_model$set_optim_params(params = list(optimizer_cov="nelder_mead", delta_rel_conv=1e-6))
@@ -460,6 +379,160 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                      verbose = 0,
                      leaves_newton_update = FALSE)
       expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE2)
+      
+      # Newton updates for tree leaves
+      params <- list(learning_rate = 0.1,
+                     max_depth = 6,
+                     min_data_in_leaf = 5,
+                     objective = "regression_l2",
+                     leaves_newton_update = TRUE)
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      cvbst <- gpb.cv(params = params,
+                      data = dtrain,
+                      gp_model = gp_model,
+                      nrounds = 100,
+                      nfold = 4,
+                      eval = "l2",
+                      early_stopping_rounds = 5,
+                      use_gp_model_for_validation = FALSE,
+                      fit_GP_cov_pars_OOS = TRUE,
+                      folds = folds,
+                      verbose = 0)
+      expect_equal(cvbst$best_iter, 52)
+      cov_pars_OOS <- c(0.04468342, 0.60930957, 0.38893938)
+      expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_OOS)),TOLERANCE)
+      
+      # Using validation set
+      # Do not include random effect predictions for validation
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpb.train(data = dtrain,
+                       gp_model = gp_model,
+                       nrounds = 100,
+                       learning_rate = 0.01,
+                       max_depth = 6,
+                       min_data_in_leaf = 5,
+                       objective = "regression_l2",
+                       verbose = 0,
+                       valids = valids,
+                       early_stopping_rounds = 5,
+                       use_gp_model_for_validation = FALSE, metric = "l2")
+      expect_equal(bst$best_iter, 57)
+      expect_lt(abs(bst$best_score - 1.0326),TOLERANCE)
+      # Include random effect predictions for validation 
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      gp_model$set_prediction_data(group_data_pred = group_data_test)
+      bst <- gpb.train(data = dtrain,
+                       gp_model = gp_model,
+                       nrounds = 100,
+                       learning_rate = 0.01,
+                       max_depth = 6,
+                       min_data_in_leaf = 5,
+                       objective = "regression_l2",
+                       verbose = 0,
+                       valids = valids,
+                       early_stopping_rounds = 5,
+                       use_gp_model_for_validation = TRUE, metric = "l2")
+      expect_equal(bst$best_iter, 59)
+      expect_lt(abs(bst$best_score - 0.04753591),TOLERANCE)
+      # Same thing using the set_prediction_data method 
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      set_prediction_data(gp_model, group_data_pred = group_data_test)
+      bst <- gpb.train(data = dtrain,
+                       gp_model = gp_model,
+                       nrounds = 100,
+                       learning_rate = 0.01,
+                       max_depth = 6,
+                       min_data_in_leaf = 5,
+                       objective = "regression_l2",
+                       verbose = 0,
+                       valids = valids,
+                       early_stopping_rounds = 5,
+                       use_gp_model_for_validation = TRUE, metric = "l2")
+      expect_equal(bst$best_iter, 59)
+      expect_lt(abs(bst$best_score - 0.04753591),TOLERANCE)
+      
+      # Use of validation data and cross-validation with custom metric
+      l4_loss <- function(preds, dtrain) {
+        labels <- getinfo(dtrain, "label")
+        return(list(name="l4",value=mean((preds-labels)^4),higher_better=FALSE))
+      }
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpb.train(data = dtrain,
+                       gp_model = gp_model,
+                       nrounds = 100,
+                       learning_rate = 0.01,
+                       max_depth = 6,
+                       min_data_in_leaf = 5,
+                       objective = "regression_l2",
+                       verbose = 0,
+                       valids = valids,
+                       early_stopping_rounds = 5,
+                       use_gp_model_for_validation = FALSE,
+                       eval = l4_loss, metric = "l4")
+      expect_equal(bst$best_iter, 57)
+      expect_lt(abs(bst$best_score - 3.058637),TOLERANCE)
+      # CV
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      cvbst <- gpb.cv(params = params,
+                      data = dtrain,
+                      gp_model = gp_model,
+                      nrounds = 100,
+                      nfold = 4,
+                      early_stopping_rounds = 5,
+                      use_gp_model_for_validation = FALSE,
+                      fit_GP_cov_pars_OOS = FALSE,
+                      folds = folds,
+                      verbose = 0,
+                      eval = l4_loss, metric = "l4")
+      expect_equal(cvbst$best_iter, 52)
+      expect_lt(abs(cvbst$best_score - 2.932338),TOLERANCE)
+      
+      # Use of validation data and test_neg_log_likelihood as metric
+      gp_model <- GPModel(group_data = group_data_train)
+      set_prediction_data(gp_model, group_data_pred = group_data_test)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 10,
+                       learning_rate = 0.01, max_depth = 6, min_data_in_leaf = 5,
+                       objective = "regression_l2", verbose = 0,
+                       valids = valids, early_stopping_rounds = 5,
+                       use_gp_model_for_validation = TRUE, metric = "test_neg_log_likelihood")
+      expect_equal(bst$best_iter, 10)
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
+                      pred_latent = FALSE, predict_var = TRUE)
+      nll <- 0.5 * mean((y_test - pred[['response_mean']])^2 / 
+                          pred[['response_var']] + log(pred[['response_var']] * 2 * pi))
+      expect_lt(abs(bst$best_score - nll),TOLERANCE)
+      # Use of validation data and test_neg_log_likelihood as metric but set use_gp_model_for_validation = FALSE
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 10,
+                       learning_rate = 0.01, max_depth = 6, min_data_in_leaf = 5,
+                       objective = "regression_l2", verbose = 0,
+                       valids = valids, early_stopping_rounds = 5,
+                       use_gp_model_for_validation = FALSE, metric = "test_neg_log_likelihood")
+      expect_equal(bst$best_iter, 10)
+      predtrain <- predict(bst, data = X_train, group_data_pred = group_data_train, pred_latent = TRUE)
+      var_est <- var(y_train - predtrain$fixed_effect)
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, pred_latent = TRUE)
+      nll <- 0.5 * mean((y_test - pred[['fixed_effect']])^2 / var_est + log(var_est * 2 * pi))
+      expect_lt(abs(bst$best_score - nll),TOLERANCE)
+      # Use of validation data and test_neg_log_likelihood as metric without a GPModel
+      bst <- gpb.train(data = dtrain, nrounds = 10, learning_rate = 0.01, max_depth = 6, min_data_in_leaf = 5,
+                       objective = "regression_l2", verbose = 0,
+                       valids = valids, early_stopping_rounds = 5,
+                       metric = "test_neg_log_likelihood")
+      expect_equal(bst$best_iter, 10)
+      predtrain <- predict(bst, data = X_train, pred_latent = TRUE)
+      var_est <- var(y_train - predtrain)
+      pred <- predict(bst, data = X_test, pred_latent = TRUE)
+      nll <- 0.5 * mean((y_test - pred)^2 / var_est + log(var_est * 2 * pi))
+      expect_lt(abs(bst$best_score - nll),TOLERANCE)
       
       ## Cannot have NA's in response variable
       expect_error({
@@ -589,7 +662,7 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                        valids = valids,
                        early_stopping_rounds = 5,
                        use_gp_model_for_validation = FALSE,
-                       seed = 0)
+                       seed = 0, metric = "l2")
       expect_equal(bst$best_iter, 27)
       expect_lt(abs(bst$best_score - 1.293498),TOLERANCE)
       
@@ -608,7 +681,7 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                        valids = valids,
                        early_stopping_rounds = 5,
                        use_gp_model_for_validation = TRUE,
-                       seed = 0)
+                       seed = 0, metric = "l2")
       expect_equal(bst$best_iter, 27)
       expect_lt(abs(bst$best_score - 0.5485127),TOLERANCE)
     })
@@ -666,13 +739,13 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       # Same thing with Vecchia approximation
       capture.output( gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
                                           gp_approx = "vecchia", num_neighbors = ntrain-1, 
-                                          num_neighbors_pred = ntrain+ntest-1, vecchia_ordering = "none",
-                                          vecchia_pred_type = "order_obs_first_cond_all"), file='NUL')
+                                          vecchia_ordering = "none"), file='NUL')
       gp_model$set_optim_params(params=list(maxit=20, optimizer_cov="fisher_scoring"))
       bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 20,
                        learning_rate = 0.05, max_depth = 6,
                        min_data_in_leaf = 5, objective = "regression_l2", verbose = 0)
       expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_est)),TOLERANCE)
+      gp_model$set_prediction_data(vecchia_pred_type = "order_obs_first_cond_all", num_neighbors_pred = ntrain+ntest-1)
       pred <- predict(bst, data = X_test, gp_coords_pred = coords_test, predict_var=TRUE, pred_latent = TRUE)
       expect_lt(sum(abs(tail(pred$random_effect_mean, n=4)-pred_re)),TOLERANCE)
       expect_lt(sum(abs(tail(pred$random_effect_cov, n=4)-pred_cov)),TOLERANCE)
@@ -681,13 +754,13 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       # Same thing with Vecchia approximation and random ordering
       capture.output( gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
                                           gp_approx = "vecchia", num_neighbors = ntrain-1, 
-                                          num_neighbors_pred = ntrain+ntest-1, vecchia_ordering = "random",
-                                          vecchia_pred_type = "order_obs_first_cond_all"), file='NUL')
+                                          vecchia_ordering = "random"), file='NUL')
       gp_model$set_optim_params(params=list(maxit=20, optimizer_cov="fisher_scoring"))
       bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 20,
                        learning_rate = 0.05, max_depth = 6,
                        min_data_in_leaf = 5, objective = "regression_l2", verbose = 0)
       expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_est)),TOLERANCE)
+      gp_model$set_prediction_data(vecchia_pred_type = "order_obs_first_cond_all", num_neighbors_pred = ntrain+ntest-1)
       pred <- predict(bst, data = X_test, gp_coords_pred = coords_test, predict_var=TRUE, pred_latent = TRUE)
       expect_lt(sum(abs(tail(pred$random_effect_mean, n=4)-pred_re)),TOLERANCE)
       expect_lt(sum(abs(tail(pred$random_effect_cov, n=4)-pred_cov)),TOLERANCE)
@@ -696,13 +769,13 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       # Same thing with Vecchia approximation and Nelder-Mead
       capture.output( gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
                                           gp_approx = "vecchia", num_neighbors = ntrain-1,
-                                          num_neighbors_pred = ntrain+ntest-1, vecchia_ordering = "none",
-                                          vecchia_pred_type = "order_obs_first_cond_all"), file='NUL')
+                                          vecchia_ordering = "none"), file='NUL')
       gp_model$set_optim_params(params=list(optimizer_cov="nelder_mead", delta_rel_conv=1e-6))
       bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 20,
                        learning_rate = 0.05, max_depth = 6,
                        min_data_in_leaf = 5, objective = "regression_l2", verbose = 0)
       expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-c(0.24097347, 0.88916662, 0.08253709))),TOLERANCE)
+      gp_model$set_prediction_data(vecchia_pred_type = "order_obs_first_cond_all", num_neighbors_pred = ntrain+ntest-1)
       pred <- predict(bst, data = X_test, gp_coords_pred = coords_test, predict_var=TRUE, pred_latent = TRUE)
       expect_lt(sum(abs(tail(pred$random_effect_mean, n=4)-c(-0.4969191, -0.7867247, -0.5883281, -0.2374269))),TOLERANCE)
       expect_lt(sum(abs(tail(pred$random_effect_cov, n=4)-c(0.4761964, 0.5945182, 0.6208525, 0.8364343))),TOLERANCE)
@@ -888,7 +961,7 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                        valids = valids,
                        early_stopping_rounds = 5,
                        use_gp_model_for_validation = FALSE,
-                       use_nesterov_acc = TRUE)
+                       use_nesterov_acc = TRUE, metric = "l2")
       expect_equal(bst$best_iter, 19)
       expect_lt(abs(bst$best_score - 1.035405),TOLERANCE)
       # Include random effect predictions for validation 
@@ -906,12 +979,12 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                        valids = valids,
                        early_stopping_rounds = 5,
                        use_gp_model_for_validation = TRUE,
-                       use_nesterov_acc = TRUE)
+                       use_nesterov_acc = TRUE, metric = "l2")
       expect_equal(bst$best_iter, 19)
       expect_lt(abs(bst$best_score - 0.05520368),TOLERANCE)
     })
     
-    test_that("Saving and loading a booster with a gp_model from a file works", {
+    test_that("Saving and loading a booster with a gp_model from a file and from a string", {
       ntrain <- ntest <- 1000
       n <- ntrain + ntest
       # Simulate fixed effects
@@ -941,24 +1014,16 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       X_test <- X[1:ntest+ntrain,]
       f_test <- f[1:ntest+ntrain]
       group_data_test <- group_data[1:ntest+ntrain]
-      params <- list(learning_rate = 0.01,
-                     max_depth = 6,
-                     min_data_in_leaf = 5,
-                     objective = "regression_l2",
-                     feature_pre_filter = FALSE)
+      params <- list(learning_rate = 0.01, max_depth = 6, min_data_in_leaf = 5,
+                     objective = "regression_l2", feature_pre_filter = FALSE)
       # Train model and make predictions
       gp_model <- GPModel(group_data = group_data_train)
       gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
-      bst <- gpboost(data = X_train,
-                     label = y_train,
-                     gp_model = gp_model,
-                     nrounds = 62,
-                     learning_rate = 0.01,
-                     max_depth = 6,
-                     min_data_in_leaf = 5,
-                     objective = "regression_l2",
-                     verbose = 0)
-      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, predict_var = TRUE, pred_latent = TRUE)
+      bst <- gpboost(data = X_train, label = y_train, gp_model = gp_model,
+                     nrounds = 62, learning_rate = 0.01, max_depth = 6,
+                     min_data_in_leaf = 5, objective = "regression_l2", verbose = 0)
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
+                      predict_var = TRUE, pred_latent = TRUE)
       num_iteration <- 50
       start_iteration <- 0# saving and loading with start_iteration!=0 currently does not work for the LightGBM part
       pred_num_it <- predict(bst, data = X_test, group_data_pred = group_data_test,
@@ -1020,7 +1085,8 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                      nrounds = 62, learning_rate = 0.01, max_depth = 6,
                      min_data_in_leaf = 5, objective = "regression_l2", verbose = 0,
                      use_nesterov_acc = TRUE, momentum_offset = 10)
-      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, predict_var = TRUE, pred_latent = TRUE)
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
+                      predict_var = TRUE, pred_latent = TRUE)
       # Save to file
       filename <- tempfile(fileext = ".model")
       gpb.save(bst, filename=filename, save_raw_data = FALSE)
@@ -1031,10 +1097,72 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       rm(gp_model)
       # Load from file and make predictions again with save_raw_data = FALSE option
       bst_loaded <- gpb.load(filename = filename)
-      pred_loaded <- predict(bst_loaded, data = X_test, group_data_pred = group_data_test, predict_var= TRUE, pred_latent = TRUE)
+      pred_loaded <- predict(bst_loaded, data = X_test, group_data_pred = group_data_test, 
+                             predict_var= TRUE, pred_latent = TRUE)
       expect_equal(pred$fixed_effect, pred_loaded$fixed_effect)
       expect_equal(pred$random_effect_mean, pred_loaded$random_effect_mean)
       expect_equal(pred$random_effect_cov, pred_loaded$random_effect_cov)
+      
+      # Saving to string and loading
+      gp_model <- GPModel(group_data = group_data_train)
+      gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpboost(data = X_train, label = y_train, gp_model = gp_model,
+                     nrounds = 62, learning_rate = 0.01, max_depth = 6,
+                     min_data_in_leaf = 5, objective = "regression_l2", verbose = 0)
+      pred <- predict(bst, data = X_test, group_data_pred = group_data_test, 
+                      predict_var = TRUE, pred_latent = TRUE)
+      num_iteration <- 50
+      start_iteration <- 0# saving and loading with start_iteration!=0 currently does not work for the LightGBM part
+      pred_num_it <- predict(bst, data = X_test, group_data_pred = group_data_test,
+                             predict_var = TRUE, num_iteration = num_iteration, start_iteration = start_iteration, pred_latent = TRUE)
+      pred_num_it2 <- predict(bst, data = X_test, group_data_pred = group_data_test,
+                              predict_var = TRUE, num_iteration = 45, start_iteration = 10, pred_latent = TRUE)
+      # Save to string
+      model_str <- bst$save_model_to_string(save_raw_data = FALSE)
+      model_str_num_it <- bst$save_model_to_string(num_iteration = num_iteration, 
+                                                   start_iteration = start_iteration)
+      model_str_raw_data <- bst$save_model_to_string(save_raw_data = TRUE)
+      # finalize and destroy models
+      bst$finalize()
+      expect_null(bst$.__enclos_env__$private$handle)
+      rm(bst)
+      rm(gp_model)
+      # Load from file and make predictions again with save_raw_data = FALSE option
+      bst_loaded <- gpb.load(model_str = model_str)
+      pred_loaded <- predict(bst_loaded, data = X_test, group_data_pred = group_data_test, 
+                             predict_var= TRUE, pred_latent = TRUE)
+      expect_equal(pred$fixed_effect, pred_loaded$fixed_effect)
+      expect_equal(pred$random_effect_mean, pred_loaded$random_effect_mean)
+      expect_equal(pred$random_effect_cov, pred_loaded$random_effect_cov)
+      # Set num_iteration and start_iteration
+      bst_loaded <- gpb.load(model_str = model_str_num_it)
+      pred_loaded <- predict(bst_loaded, data = X_test, group_data_pred = group_data_test, 
+                             predict_var= TRUE, pred_latent = TRUE)
+      expect_equal(pred_num_it$fixed_effect, pred_loaded$fixed_effect)
+      expect_equal(pred_num_it$random_effect_mean, pred_loaded$random_effect_mean)
+      expect_equal(pred_num_it$random_effect_cov, pred_loaded$random_effect_cov)
+      expect_error({
+        pred_loaded <- predict(bst_loaded, data = X_test, group_data_pred = group_data_test,
+                               predict_var= TRUE, start_iteration=5, pred_latent = TRUE)
+      })
+      # Load from file and make predictions again with save_raw_data = TRUE option
+      bst_loaded <- gpb.load(model_str = model_str_raw_data)
+      pred_loaded <- predict(bst_loaded, data = X_test, group_data_pred = group_data_test,
+                             predict_var= TRUE, pred_latent = TRUE)
+      expect_equal(pred$fixed_effect, pred_loaded$fixed_effect)
+      expect_equal(pred$random_effect_mean, pred_loaded$random_effect_mean)
+      expect_equal(pred$random_effect_cov, pred_loaded$random_effect_cov)
+      # Set num_iteration and start_iteration
+      pred_loaded <- predict(bst_loaded, data = X_test, group_data_pred = group_data_test,
+                             predict_var= TRUE, num_iteration = num_iteration, start_iteration = start_iteration, pred_latent = TRUE)
+      expect_equal(pred_num_it$fixed_effect, pred_loaded$fixed_effect)
+      expect_equal(pred_num_it$random_effect_mean, pred_loaded$random_effect_mean)
+      expect_equal(pred_num_it$random_effect_cov, pred_loaded$random_effect_cov)
+      pred_loaded <- predict(bst_loaded, data = X_test, group_data_pred = group_data_test,
+                             predict_var= TRUE, num_iteration = 45, start_iteration = 10, pred_latent = TRUE)
+      expect_equal(pred_num_it2$fixed_effect, pred_loaded$fixed_effect)
+      expect_equal(pred_num_it2$random_effect_mean, pred_loaded$random_effect_mean)
+      expect_equal(pred_num_it2$random_effect_cov, pred_loaded$random_effect_cov)
     })
   }
   

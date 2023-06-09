@@ -9,9 +9,9 @@
   predcontrib = FALSE, header = FALSE, reshape = FALSE,
   group_data_pred = NULL, group_rand_coef_data_pred = NULL,
   gp_coords_pred = NULL, gp_rand_coef_data_pred = NULL,
-  cluster_ids_pred = NULL, vecchia_pred_type = NULL,
-  num_neighbors_pred = -1, predict_cov_mat = FALSE, predict_var = FALSE,
-  cov_pars = NULL, ignore_gp_model = FALSE, rawscore = NULL, ...)
+  cluster_ids_pred = NULL, predict_cov_mat = FALSE, predict_var = FALSE,
+  cov_pars = NULL, ignore_gp_model = FALSE, rawscore = NULL,
+  vecchia_pred_type = NULL, num_neighbors_pred = NULL, ...)
 }
 \arguments{
 \item{object}{Object of class \code{gpb.Booster}}
@@ -59,6 +59,22 @@ Gaussian process random coefficients (if there are some in the \code{GPModel})}
 random effects / Gaussian processes for which predictions are made 
 (set to NULL if you have not specified this when creating the \code{GPModel})}
 
+\item{predict_cov_mat}{A \code{boolean}. If TRUE, the (posterior) 
+predictive covariance is calculated in addition to the (posterior) predictive mean}
+
+\item{predict_var}{A \code{boolean}. If TRUE, the (posterior) 
+predictive variances are calculated}
+
+\item{cov_pars}{A \code{vector} containing covariance parameters which are used if the 
+\code{gp_model} has not been trained or if predictions should be made for other 
+parameters than the trained ones}
+
+\item{ignore_gp_model}{A \code{boolean}. If TRUE, predictions are only made for the tree ensemble part
+and the \code{gp_model} is ignored}
+
+\item{rawscore}{This is discontinued. Use the renamed equivalent argument 
+\code{pred_latent} instead}
+
 \item{vecchia_pred_type}{A \code{string} specifying the type of Vecchia approximation used for making predictions.
 Default value if vecchia_pred_type = NULL: "order_obs_first_cond_obs_only". 
 Available options:
@@ -77,22 +93,6 @@ ordered first for making predictions. This option is only available for Gaussian
 
 \item{num_neighbors_pred}{an \code{integer} specifying the number of neighbors for the Vecchia approximation 
 for making predictions. Default value if NULL: num_neighbors_pred = 2 * num_neighbors}
-
-\item{predict_cov_mat}{A \code{boolean}. If TRUE, the (posterior) 
-predictive covariance is calculated in addition to the (posterior) predictive mean}
-
-\item{predict_var}{A \code{boolean}. If TRUE, the (posterior) 
-predictive variances are calculated}
-
-\item{cov_pars}{A \code{vector} containing covariance parameters which are used if the 
-\code{gp_model} has not been trained or if predictions should be made for other 
-parameters than the trained ones}
-
-\item{ignore_gp_model}{A \code{boolean}. If TRUE, predictions are only made for the tree ensemble part
-and the \code{gp_model} is ignored}
-
-\item{rawscore}{This is discontinued. Use the renamed equivalent argument 
-\code{pred_latent} instead}
 
 \item{...}{Additional named arguments passed to the \code{predict()} method of
 the \code{gpb.Booster} object passed to \code{object}.}
@@ -121,6 +121,7 @@ Prediction function for \code{gpb.Booster} objects
 
 # See https://github.com/fabsig/GPBoost/tree/master/R-package for more examples
 
+\donttest{
 library(gpboost)
 data(GPBoost_data, package = "gpboost")
 
@@ -139,7 +140,7 @@ gp_model <- GPModel(group_data = group_data[,1], likelihood = "gaussian")
 # Train model
 bst <- gpboost(data = X, label = y, gp_model = gp_model, nrounds = 16,
                learning_rate = 0.05, max_depth = 6, min_data_in_leaf = 5,
-               objective = "regression_l2", verbose = 0)
+               verbose = 0)
 # Estimated random effects model
 summary(gp_model)
 
@@ -157,7 +158,6 @@ pred_resp$response_mean # Predicted response mean
 # For Gaussian data: pred$random_effect_mean + pred$fixed_effect = pred_resp$response_mean
 pred$random_effect_mean + pred$fixed_effect - pred_resp$response_mean
 
-\donttest{
 #--------------------Combine tree-boosting and Gaussian process model----------------
 # Create Gaussian process model
 gp_model <- GPModel(gp_coords = coords, cov_function = "exponential",
@@ -165,7 +165,7 @@ gp_model <- GPModel(gp_coords = coords, cov_function = "exponential",
 # Train model
 bst <- gpboost(data = X, label = y, gp_model = gp_model, nrounds = 8,
                learning_rate = 0.1, max_depth = 6, min_data_in_leaf = 5,
-               objective = "regression_l2", verbose = 0)
+               verbose = 0)
 # Estimated random effects model
 summary(gp_model)
 # Make predictions

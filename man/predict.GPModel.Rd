@@ -8,9 +8,9 @@
   group_rand_coef_data_pred = NULL, gp_coords_pred = NULL,
   gp_rand_coef_data_pred = NULL, cluster_ids_pred = NULL,
   predict_cov_mat = FALSE, predict_var = FALSE, cov_pars = NULL,
-  X_pred = NULL, use_saved_data = FALSE, vecchia_pred_type = NULL,
-  num_neighbors_pred = NULL, cg_delta_conv_pred = NULL,
-  predict_response = TRUE, ...)
+  X_pred = NULL, use_saved_data = FALSE, predict_response = TRUE,
+  fixed_effects = NULL, fixed_effects_pred = NULL,
+  vecchia_pred_type = NULL, num_neighbors_pred = NULL, ...)
 }
 \arguments{
 \item{object}{a \code{GPModel}}
@@ -50,6 +50,19 @@ fixed effects linear regression term (if there is one in the \code{GPModel})}
 \item{use_saved_data}{A \code{boolean}. If TRUE, predictions are done using 
 a priory set data via the function '$set_prediction_data' (this option is not used by users directly)}
 
+\item{predict_response}{A \code{boolean}. If TRUE, the response variable (label) 
+is predicted, otherwise the latent random effects}
+
+\item{fixed_effects}{(usually not used) A \code{numeric} \code{vector} with 
+additional external training data fixed effects.
+The length of this vector needs to equal the number of training data points.
+Used only for non-Gaussian data. For Gaussian data, this is ignored}
+
+\item{fixed_effects_pred}{(usually not used) A \code{numeric} \code{vector} 
+with additional external prediction fixed effects.
+The length of this vector needs to equal the number of prediction points.
+Used only for non-Gaussian data. For Gaussian data, this is ignored}
+
 \item{vecchia_pred_type}{A \code{string} specifying the type of Vecchia approximation used for making predictions.
 Default value if vecchia_pred_type = NULL: "order_obs_first_cond_obs_only". 
 Available options:
@@ -69,19 +82,19 @@ ordered first for making predictions. This option is only available for Gaussian
 \item{num_neighbors_pred}{an \code{integer} specifying the number of neighbors for the Vecchia approximation 
 for making predictions. Default value if NULL: num_neighbors_pred = 2 * num_neighbors}
 
-\item{cg_delta_conv_pred}{a \code{numeric} specifying the tolerance level for L2 norm of residuals for 
-checking convergence in conjugate gradient algorithm when being used for prediction}
-
-\item{predict_response}{A \code{boolean}. If TRUE, the response variable (label) 
-is predicted, otherwise the latent random effects}
-
 \item{...}{(not used, ignore this, simply here that there is no CRAN warning)}
 }
 \value{
-Predictions made using a \code{GPModel}. It returns a list of length three. 
-The first entry ('mu') is the predicted mean, the second entry ('cov') is the predicted covariance matrix 
-(=NULL if 'predict_cov_mat=FALSE'), and the third entry ('var') are predicted variances 
-(=NULL if 'predict_var=FALSE')
+Predictions from a \code{GPModel}. A list with three entries is returned:
+\itemize{
+\item{ "mu" (first entry): predictive (=posterior) mean. For (generalized) linear mixed
+effects models, i.e., models with a linear regression term, this consists of the sum of 
+fixed effects and random effects predictions }
+\item{ "cov" (second entry): predictive (=posterior) covariance matrix. 
+This is NULL if 'predict_cov_mat=FALSE'  }
+\item{ "var" (third entry) : predictive (=posterior) variances. 
+This is NULL if 'predict_var=FALSE'  }
+}
 }
 \description{
 Make predictions for a \code{GPModel}
@@ -89,6 +102,7 @@ Make predictions for a \code{GPModel}
 \examples{
 # See https://github.com/fabsig/GPBoost/tree/master/R-package for more examples
 
+\donttest{
 data(GPBoost_data, package = "gpboost")
 # Add intercept column
 X1 <- cbind(rep(1,dim(X)[1]),X)
@@ -110,7 +124,6 @@ pred$mu # Predicted mean
 pred$cov # Predicted covariance
 
 
-\donttest{
 #--------------------Gaussian process model----------------
 gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
                        likelihood="gaussian", y = y, X = X1, params = list(std_dev = TRUE))

@@ -10,8 +10,7 @@ fitGPModel(likelihood = "gaussian", group_data = NULL,
   gp_rand_coef_data = NULL, cov_function = "exponential",
   cov_fct_shape = 0.5, gp_approx = "none", cov_fct_taper_range = 1,
   cov_fct_taper_shape = 0, num_neighbors = 20L,
-  vecchia_ordering = "random", vecchia_pred_type = NULL,
-  num_neighbors_pred = 2 * num_neighbors, num_ind_points = 500L,
+  vecchia_ordering = "random", num_ind_points = 500L,
   matrix_inversion_method = "cholesky", seed = 0L, cluster_ids = NULL,
   free_raw_data = FALSE, y, X = NULL, params = list(),
   vecchia_approx = NULL)
@@ -95,25 +94,6 @@ the Vecchia approximation. Available options:
 \item{"random": a random ordering }
 }}
 
-\item{vecchia_pred_type}{A \code{string} specifying the type of Vecchia approximation used for making predictions.
-Default value if vecchia_pred_type = NULL: "order_obs_first_cond_obs_only". 
-Available options:
-\itemize{
-\item{"order_obs_first_cond_obs_only": Vecchia approximation for the observable process and observed training data is 
-ordered first and the neighbors are only observed training data points }
-\item{"order_obs_first_cond_all": Vecchia approximation for the observable process and observed training data is 
-ordered first and the neighbors are selected among all points (training + prediction) }
-\item{"latent_order_obs_first_cond_obs_only": Vecchia approximation for the latent process and observed data is 
-ordered first and neighbors are only observed points}
-\item{"latent_order_obs_first_cond_all": Vecchia approximation 
-for the latent process and observed data is ordered first and neighbors are selected among all points }
-\item{"order_pred_first": Vecchia approximation for the observable process and prediction data is 
-ordered first for making predictions. This option is only available for Gaussian likelihoods }
-}}
-
-\item{num_neighbors_pred}{an \code{integer} specifying the number of neighbors for the Vecchia approximation 
-for making predictions. Default value if NULL: num_neighbors_pred = 2 * num_neighbors}
-
 \item{num_ind_points}{An \code{integer} specifying the number of inducing 
 points / knots for, e.g., a predictive process approximation}
 
@@ -142,14 +122,17 @@ fixed effects linear regression term (if there is one)}
  \itemize{
     \item{optimizer_cov: Optimizer used for estimating covariance parameters. 
     Options: "gradient_descent", "fisher_scoring", "nelder_mead", "bfgs", "adam".
-    Default = "gradient_descent"}
+    Default = "gradient_descent". 
+    If there are additional auxiliary parameters for non-Gaussian likelihoods, 
+    'optimizer_cov' is also used for those }
     \item{optimizer_coef: Optimizer used for estimating linear regression coefficients, if there are any 
     (for the GPBoost algorithm there are usually none). 
     Options: "gradient_descent", "wls", "nelder_mead", "bfgs", "adam". Gradient descent steps are done simultaneously 
     with gradient descent steps for the covariance parameters. 
     "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
     Default = "wls" for Gaussian data and "gradient_descent" for other likelihoods.
-    If 'optimizer_cov' is set to "nelder_mead", "bfgs", or "adam", 'optimizer_coef' is automatically also set to the same value.}
+    If 'optimizer_cov' is set to "nelder_mead", "bfgs", or "adam", 
+    'optimizer_coef' is automatically also set to the same value.}
     \item{maxit: Maximal number of iterations for optimization algorithm. Default = 1000}
     \item{delta_rel_conv: Convergence tolerance. The algorithm stops if the relative change 
     in eiher the (approximate) log-likelihood or the parameters is below this value. 
@@ -164,9 +147,11 @@ fixed effects linear regression term (if there is one)}
     random effects (can be NULL). Default = NULL}
     \item{lr_coef: Learning rate for fixed effect regression coefficients if gradient descent is used.
     Default = 0.1}
-    \item{lr_cov: Learning rate for covariance parameters. 
-    If < 0, internal default values are used.
-    Default = 0.1 for "gradient_descent" and 1. for "fisher_scoring"}
+    \item{lr_cov: Initial learning rate for covariance parameters. 
+    If lr_cov < 0, internal default values are used.
+    Default = 0.1 for "gradient_descent" and 1. for "fisher_scoring"
+    If there are additional auxiliary parameters for non-Gaussian likelihoods, 
+    'lr_cov' is also used for those}
     \item{use_nesterov_acc: If TRUE Nesterov acceleration is used.
     This is used only for gradient descent. Default = TRUE}
     \item{acc_rate_coef: Acceleration rate for regression coefficients (if there are any) 
@@ -198,6 +183,7 @@ Estimates the parameters of a \code{GPModel} using maximum likelihood estimation
 \examples{
 # See https://github.com/fabsig/GPBoost/tree/master/R-package for more examples
 
+\donttest{
 data(GPBoost_data, package = "gpboost")
 # Add intercept column
 X1 <- cbind(rep(1,dim(X)[1]),X)
@@ -218,15 +204,12 @@ pred <- predict(gp_model, group_data_pred = group_data_test[,1],
 pred$mu # Predicted mean
 pred$cov # Predicted covariance
 
-
-\donttest{
 #--------------------Two crossed random effects and a random slope----------------
 gp_model <- fitGPModel(group_data = group_data, likelihood="gaussian",
                        group_rand_coef_data = X[,2],
                        ind_effect_group_rand_coef = 1,
                        y = y, X = X1, params = list(std_dev = TRUE))
 summary(gp_model)
-
 
 #--------------------Gaussian process model----------------
 gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
@@ -238,20 +221,17 @@ pred <- predict(gp_model, gp_coords_pred = coords_test,
 pred$mu # Predicted (posterior) mean of GP
 pred$cov # Predicted (posterior) covariance matrix of GP
 
-
 #--------------------Gaussian process model with Vecchia approximation----------------
 gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
                        gp_approx = "vecchia", num_neighbors = 20,
                        likelihood="gaussian", y = y)
 summary(gp_model)
 
-
 #--------------------Gaussian process model with random coefficients----------------
 gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
                        gp_rand_coef_data = X[,2], y=y,
                        likelihood = "gaussian", params = list(std_dev = TRUE))
 summary(gp_model)
-
 
 #--------------------Combine Gaussian process with grouped random effects----------------
 gp_model <- fitGPModel(group_data = group_data,

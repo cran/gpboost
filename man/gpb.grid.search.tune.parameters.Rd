@@ -48,9 +48,8 @@ the \code{nfold} and \code{stratified} parameters are ignored.}
 
 \item{weight}{vector of response values. If not NULL, will set to dataset}
 
-\item{obj}{objective function, can be character or custom objective function. Examples include
-\code{regression}, \code{regression_l1}, \code{huber},
-\code{binary}, \code{lambdarank}, \code{multiclass}, \code{multiclass}}
+\item{obj}{(character) The distribution of the response variable (=label) conditional on fixed and random effects.
+This only needs to be set when doing independent boosting without random effects / Gaussian processes.}
 
 \item{eval}{evaluation function(s). This can be a character vector, function, or list with a mixture of
             strings and functions.
@@ -144,36 +143,47 @@ Function that allows for choosing tuning parameters from a grid in a determinsti
 library(gpboost)
 data(GPBoost_data, package = "gpboost")
 
-# Create random effects model, dataset, and define parameter grif
+# Create random effects model, dataset, and define parameter grid
 gp_model <- GPModel(group_data = group_data[,1], likelihood="gaussian")
-dtrain <- gpb.Dataset(X, label = y)
-params <- list(objective = "regression_l2")
-param_grid = list("learning_rate" = c(0.1,0.01), "min_data_in_leaf" = c(20),
-                  "max_depth" = c(5,10), "num_leaves" = 2^17, "max_bin" = c(255,1000))
-# Parameter tuning using cross-validation and deterministic grid search
+dataset <- gpb.Dataset(X, label = y)
+param_grid = list("learning_rate" = c(1,0.1,0.01), 
+                  "min_data_in_leaf" = c(10,100,1000),
+                  "max_depth" = c(1,2,3,5,10),
+                  "lambda_l2" = c(0,1,10))
+other_params <- list(num_leaves = 2^10)
+# Note: here we try different values for 'max_depth' and thus set 'num_leaves' to a large value.
+#       An alternative strategy is to impose no limit on 'max_depth', 
+#       and try different values for 'num_leaves' as follows:
+# param_grid = list("learning_rate" = c(1,0.1,0.01), 
+#                   "min_data_in_leaf" = c(10,100,1000),
+#                   "num_leaves" = 2^(1:10),
+#                   "lambda_l2" = c(0,1,10))
+# other_params <- list(max_depth = -1)
 set.seed(1)
-opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid,
-                                              params = params,
-                                              num_try_random = NULL,
-                                              nfold = 4,
-                                              data = dtrain,
-                                              gp_model = gp_model,
-                                              verbose_eval = 1,
-                                              nrounds = 1000,
-                                              early_stopping_rounds = 5,
-                                              eval = "l2")
-# Parameter tuning using cross-validation and random grid search
-set.seed(1)
-opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid,
-                                              params = params,
-                                              num_try_random = 4,
-                                              nfold = 4,
-                                              data = dtrain,
-                                              gp_model = gp_model,
-                                              verbose_eval = 1,
-                                              nrounds = 1000,
-                                              early_stopping_rounds = 5,
-                                              eval = "l2")
+opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = other_params,
+                                              num_try_random = NULL, nfold = 4,
+                                              data = dataset, gp_model = gp_model,
+                                              use_gp_model_for_validation=TRUE, verbose_eval = 1,
+                                              nrounds = 1000, early_stopping_rounds = 10)
+print(paste0("Best parameters: ",
+             paste0(unlist(lapply(seq_along(opt_params$best_params), 
+                                  function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, 
+                                  y=opt_params$best_params, 
+                                  n=names(opt_params$best_params))), collapse=", ")))
+print(paste0("Best number of iterations: ", opt_params$best_iter))
+print(paste0("Best score: ", round(opt_params$best_score, digits=3)))
+# Note: other scoring / evaluation metrics can be chosen using the 
+#       'metric' argument, e.g., metric = "l1"
+
+# Using manually defined validation data instead of cross-validation
+valid_tune_idx <- sample.int(length(y), as.integer(0.2*length(y)))
+folds = list(valid_tune_idx)
+opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = other_params,
+                                              num_try_random = NULL, folds = folds,
+                                              data = dataset, gp_model = gp_model,
+                                              use_gp_model_for_validation=TRUE, verbose_eval = 1,
+                                              nrounds = 1000, early_stopping_rounds = 10)
+
 }
 }
 \author{

@@ -10,6 +10,8 @@
 #include <LightGBM/utils/log.h>
 using LightGBM::Log;
 using LightGBM::LogLevelRE;
+#include <LightGBM/meta.h>
+using LightGBM::label_t;
 
 namespace GPBoost {
 
@@ -36,8 +38,6 @@ namespace GPBoost {
 		double cov_fct_taper_shape,
 		int num_neighbors,
 		const char* vecchia_ordering,
-		const char* vecchia_pred_type,
-		int num_neighbors_pred,
 		int num_ind_points,
 		const char* likelihood,
 		const char* matrix_inversion_method,
@@ -89,8 +89,6 @@ namespace GPBoost {
 				cov_fct_taper_shape,
 				num_neighbors, 
 				vecchia_ordering,
-				vecchia_pred_type,
-				num_neighbors_pred,
 				num_ind_points,
 				likelihood,
 				matrix_inversion_method,
@@ -119,8 +117,6 @@ namespace GPBoost {
 				cov_fct_taper_shape,
 				num_neighbors,
 				vecchia_ordering,
-				vecchia_pred_type,
-				num_neighbors_pred,
 				num_ind_points,
 				likelihood,
 				matrix_inversion_method,
@@ -149,8 +145,6 @@ namespace GPBoost {
 				cov_fct_taper_shape,
 				num_neighbors,
 				vecchia_ordering,
-				vecchia_pred_type,
-				num_neighbors_pred,
 				num_ind_points,
 				likelihood,
 				matrix_inversion_method,
@@ -188,6 +182,11 @@ namespace GPBoost {
 	}
 
 	void REModel::SetLikelihood(const string_t& likelihood) {
+		if (model_has_been_estimated_) {
+			if (GetLikelihood() != likelihood) {
+				Log::REFatal("Cannot change likelihood after a model has been estimated ");
+			}
+		}
 		if (matrix_format_ == "sp_mat_t") {
 			re_model_sp_->SetLikelihood(likelihood);
 			num_cov_pars_ = re_model_sp_->num_cov_par_;
@@ -223,6 +222,18 @@ namespace GPBoost {
 		}
 		else {
 			return(re_model_den_->optimizer_coef_);
+		}
+	}
+
+	string_t REModel::GetCGPreconditionerType() const {
+		if (matrix_format_ == "sp_mat_t") {
+			return(re_model_sp_->cg_preconditioner_type_);
+		}
+		else if (matrix_format_ == "sp_mat_rm_t") {
+			return(re_model_sp_rm_->cg_preconditioner_type_);
+		}
+		else {
+			return(re_model_den_->cg_preconditioner_type_);
 		}
 	}
 
@@ -388,6 +399,7 @@ namespace GPBoost {
 		}
 		has_covariates_ = false;
 		covariance_matrix_has_been_factorized_ = true;
+		model_has_been_estimated_ = true;
 	}
 
 	void REModel::OptimLinRegrCoefCovPar(const double* y_data,
@@ -465,6 +477,7 @@ namespace GPBoost {
 		has_covariates_ = true;
 		coef_given_or_estimated_ = true;
 		covariance_matrix_has_been_factorized_ = true;
+		model_has_been_estimated_ = true;
 	}
 
 	void REModel::FindInitialValueBoosting(double* init_score) {
@@ -803,7 +816,9 @@ namespace GPBoost {
 		const double* covariate_data_pred,
 		const char* vecchia_pred_type,
 		int num_neighbors_pred,
-		double cg_delta_conv_pred) {
+		double cg_delta_conv_pred,
+		int nsim_var_pred,
+		int rank_pred_approx_matrix_lanczos) {
 		if (matrix_format_ == "sp_mat_t") {
 			re_model_sp_->SetPredictionData(num_data_pred,
 				cluster_ids_data_pred,
@@ -814,7 +829,9 @@ namespace GPBoost {
 				covariate_data_pred,
 				vecchia_pred_type,
 				num_neighbors_pred,
-				cg_delta_conv_pred);
+				cg_delta_conv_pred,
+				nsim_var_pred,
+				rank_pred_approx_matrix_lanczos);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->SetPredictionData(num_data_pred,
@@ -826,7 +843,9 @@ namespace GPBoost {
 				covariate_data_pred,
 				vecchia_pred_type,
 				num_neighbors_pred,
-				cg_delta_conv_pred);
+				cg_delta_conv_pred,
+				nsim_var_pred,
+				rank_pred_approx_matrix_lanczos);
 		}
 		else {
 			re_model_den_->SetPredictionData(num_data_pred,
@@ -838,7 +857,9 @@ namespace GPBoost {
 				covariate_data_pred,
 				vecchia_pred_type,
 				num_neighbors_pred,
-				cg_delta_conv_pred);
+				cg_delta_conv_pred,
+				nsim_var_pred,
+				rank_pred_approx_matrix_lanczos);
 		}
 	}
 
@@ -856,9 +877,6 @@ namespace GPBoost {
 		const double* cov_pars_pred,
 		const double* covariate_data_pred,
 		bool use_saved_data,
-		const char* vecchia_pred_type,
-		int num_neighbors_pred,
-		double cg_delta_conv_pred,
 		const double* fixed_effects,
 		const double* fixed_effects_pred,
 		bool suppress_calc_cov_factor) {
@@ -920,9 +938,6 @@ namespace GPBoost {
 				gp_coords_data_pred,
 				gp_rand_coef_data_pred,
 				use_saved_data,
-				vecchia_pred_type,
-				num_neighbors_pred,
-				cg_delta_conv_pred,
 				fixed_effects,
 				fixed_effects_pred);
 		}
@@ -943,9 +958,6 @@ namespace GPBoost {
 				gp_coords_data_pred,
 				gp_rand_coef_data_pred,
 				use_saved_data,
-				vecchia_pred_type,
-				num_neighbors_pred,
-				cg_delta_conv_pred,
 				fixed_effects,
 				fixed_effects_pred);
 		}
@@ -966,9 +978,6 @@ namespace GPBoost {
 				gp_coords_data_pred,
 				gp_rand_coef_data_pred,
 				use_saved_data,
-				vecchia_pred_type,
-				num_neighbors_pred,
-				cg_delta_conv_pred,
 				fixed_effects,
 				fixed_effects_pred);
 		}
@@ -1145,6 +1154,32 @@ namespace GPBoost {
 			for (int j = 0; j < NumAuxPars(); ++j) {
 				aux_pars[j] = -1.;
 			}
+		}
+	}
+
+	/*!
+	* \brief Calculate test log-likelihood using adaptive GH quadrature
+	* \param y_test Test response variable
+	* \param pred_mean Predictive mean of latent random effects
+	* \param pred_var Predictive variances of latent random effects
+	* \param num_data Number of data points
+	*/
+	double REModel::TestNegLogLikelihoodAdaptiveGHQuadrature(const label_t* y_test,
+		const double* pred_mean,
+		const double* pred_var,
+		const data_size_t num_data) {
+		if (GetLikelihood() == "gaussian") {
+			double aux_par = 1. / (std::sqrt(cov_pars_[0]));
+			SetAuxPars(&aux_par);
+		}
+		if (matrix_format_ == "sp_mat_t") {
+			return(re_model_sp_->TestNegLogLikelihoodAdaptiveGHQuadrature(y_test, pred_mean, pred_var, num_data));
+		}
+		else if (matrix_format_ == "sp_mat_rm_t") {
+			return(re_model_sp_rm_->TestNegLogLikelihoodAdaptiveGHQuadrature(y_test, pred_mean, pred_var, num_data));
+		}
+		else {
+			return(re_model_den_->TestNegLogLikelihoodAdaptiveGHQuadrature(y_test, pred_mean, pred_var, num_data));
 		}
 	}
 

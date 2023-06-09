@@ -21,6 +21,7 @@
 #' This is only returned if \code{return_plot_data==TRUE}
 #' 
 #' @examples
+#' \donttest{
 #' library(gpboost)
 #' data(GPBoost_data, package = "gpboost")
 #'
@@ -32,9 +33,9 @@
 #'                          learning_rate = 0.05,
 #'                          max_depth = 6,
 #'                          min_data_in_leaf = 5,
-#'                          objective = "regression_l2",
 #'                          verbose = 0)
 #' gpb.plot.partial.dependence(gpboost_model, X, variable = 1)
+#' }
 #' @export
 gpb.plot.partial.dependence <- function(model, data, variable, n.pt = 100,
                                         subsample = pmin(1, n.pt * 100 / nrow(data)), 
@@ -50,7 +51,7 @@ gpb.plot.partial.dependence <- function(model, data, variable, n.pt = 100,
   }
   
   if (discrete.x) {
-    x <- unique(data[, variable])
+    x <- sort(unique(data[, variable]))
   } else {
     x <- quantile(data[, variable], seq(0.01, 0.99, length.out = n.pt), names = FALSE)
   }
@@ -111,6 +112,7 @@ gpb.plot.partial.dependence <- function(model, data, variable, n.pt = 100,
 #' with z-coordinates. This is only returned if \code{return_plot_data==TRUE}
 #' 
 #' @examples
+#' \donttest{
 #' library(gpboost)
 #' data(GPBoost_data, package = "gpboost")
 #' gp_model <- GPModel(group_data = group_data[,1], likelihood = "gaussian")
@@ -121,9 +123,9 @@ gpb.plot.partial.dependence <- function(model, data, variable, n.pt = 100,
 #'                         learning_rate = 0.05,
 #'                         max_depth = 6,
 #'                         min_data_in_leaf = 5,
-#'                         objective = "regression_l2",
 #'                         verbose = 0)
 #' gpb.plot.part.dep.interact(gpboost_model, X, variables = c(1,2))
+#' }
 #' @export
 gpb.plot.part.dep.interact <- function(model, data, variables, n.pt.per.var = 20,
                                        subsample = pmin(1, n.pt.per.var^2 * 100 / nrow(data)), 
@@ -146,14 +148,14 @@ gpb.plot.part.dep.interact <- function(model, data, variables, n.pt.per.var = 20
   }
   
   if (discrete.variables[1]) {
-    x <- unique(data[, variables[1]])
+    x <- sort(unique(data[, variables[1]]))
   } else {
     x <- quantile(data[, variables[1]],
                   seq(0.01, 0.99, length.out = n.pt.per.var), names = FALSE)
     x <- unique(x)
   }
   if (discrete.variables[2]) {
-    y <- unique(data[, variables[2]])
+    y <- sort(unique(data[, variables[2]]))
   } else {
     y <- quantile(data[, variables[2]],
                   seq(0.01, 0.99, length.out = n.pt.per.var), names = FALSE)

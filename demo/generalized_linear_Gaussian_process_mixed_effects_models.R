@@ -18,7 +18,7 @@ simulate_response_variable <- function (lp, rand_eff, likelihood) {
   ## Function that simulates response variable for various likelihoods
   n <- length(rand_eff)
   if (likelihood == "gaussian") {
-    xi <- 0.25 * rnorm(n) # error term
+    xi <- sqrt(0.1) * rnorm(n) # error term, variance = 0.1
     y <- lp + rand_eff + xi
   } else if (likelihood == "bernoulli_probit") {
     probs <- pnorm(lp + rand_eff)
@@ -39,7 +39,7 @@ simulate_response_variable <- function (lp, rand_eff, likelihood) {
 # Choose likelihood: either "gaussian" (=regression), 
 #                     "bernoulli_probit", "bernoulli_logit", (=classification)
 #                     "poisson", or "gamma"
-likelihood <- "gamma"
+likelihood <- "gaussian"
 
 #################################
 # Grouped random effects
@@ -47,26 +47,24 @@ likelihood <- "gamma"
 # --------------------Simulate data----------------
 # Single-level grouped random effects
 n <- 1000 # number of samples
-m <- 100 # number of categories / levels for grouping variable
+m <- 200 # number of categories / levels for grouping variable
 group <- rep(1,n) # grouping variable
 for(i in 1:m) group[((i-1)*n/m+1):(i*n/m)] <- i
 set.seed(1)
-b <- 1 * rnorm(m) # simulate random effects
+b <- sqrt(0.25) * rnorm(m) # simulate random effects, variance = 0.25
 rand_eff <- b[group]
 rand_eff <- rand_eff - mean(rand_eff)
 # Simulate linear regression fixed effects
 X <- cbind(rep(1,n),runif(n)-0.5) # design matrix / covariate data for fixed effects
-beta <- c(0,3) # regression coefficients
+beta <- c(0,2) # regression coefficients
 lp <- X %*% beta
 y <- simulate_response_variable(lp=lp, rand_eff=rand_eff, likelihood=likelihood)
 hist(y, breaks=20)  # visualize response variable
-# Crossed grouped random effects and a random slope
+# Crossed grouped random effects and random slopes
+group_crossed <- group[sample.int(n,n)]
+b_crossed <- sqrt(0.25) * rnorm(m) # simulate crossed random effects
+b_random_slope <- sqrt(0.25) * rnorm(m) # simulate random slope effects
 x <- runif(n) # covariate data for random slope
-n_obs_gr <- n/m # number of samples per group
-group_crossed <- rep(1,n) # grouping variable for second crossed random effect
-for(i in 1:m) group_crossed[(1:n_obs_gr)+n_obs_gr*(i-1)] <- 1:n_obs_gr
-b_crossed <- 0.5 * rnorm(n_obs_gr) # second random effect
-b_random_slope <- 0.75 * rnorm(m) # simulate random effects
 rand_eff <- b[group] + b_crossed[group_crossed] + x * b_random_slope[group]
 rand_eff <- rand_eff - mean(rand_eff)
 y_crossed_random_slope <- simulate_response_variable(lp=lp, rand_eff=rand_eff, likelihood=likelihood)
@@ -77,7 +75,7 @@ for(i in 1:m) {
   group_inner[((i-0.5)*n/m + 1):((i)*n/m)] <- 2
 }
 group_nested <- get_nested_categories(group, group_inner)
-b_nested <- 1. * rnorm(length(group_nested)) # nested lower level random effects
+b_nested <- sqrt(0.25) * rnorm(length(group_nested)) # simulate nested random effects
 rand_eff <- b[group] + b_nested[group_nested]
 rand_eff <- rand_eff - mean(rand_eff)
 y_nested <- simulate_response_variable(lp=lp, rand_eff=rand_eff, likelihood=likelihood)
@@ -155,7 +153,7 @@ sum(abs(pred$var - pred_loaded$var))
 sum(abs(pred_resp$mu - pred_resp_loaded$mu))
 sum(abs(pred_resp$var - pred_resp_loaded$var))
 
-#--------------------Two crossed random effects and a random slope----------------
+#--------------------Two crossed random effects and random slopes----------------
 gp_model <- fitGPModel(group_data = cbind(group,group_crossed), group_rand_coef_data = x,
                        ind_effect_group_rand_coef = 1, likelihood = likelihood,
                        y = y_crossed_random_slope, X = X, params = list(std_dev = TRUE))
@@ -195,7 +193,7 @@ summary(gp_model)
 # First create nested random effects variable
 group_nested <- get_nested_categories(group, group_inner)
 group_data <- cbind(group, group_nested)
-gp_model <- fitGPModel(group_data = group_data, y = y_nested, 
+gp_model <- fitGPModel(group_data = group_data, y = y_nested, X = X, 
                        likelihood = likelihood, params = list(std_dev = TRUE))
 summary(gp_model)
 
@@ -233,9 +231,9 @@ eval_nll <- function(pars, gp_model, y, X, likelihood) {
 pars <- c(init_cov_pars, rep(0,dim(X)[2]))
 eval_nll(pars = pars, gp_model = gp_model, X = X, y=y, likelihood = likelihood)
 # Do optimization using optim and e.g. Nelder-Mead
-opt <- optim(par = pars, fn = eval_nll, gp_model = gp_mod, y = y, X = X, 
+opt <- optim(par = pars, fn = eval_nll, gp_model = gp_model, y = y, X = X, 
              likelihood = likelihood, method = "Nelder-Mead")
-
+opt
 
 #################################
 # Gaussian processes
@@ -260,7 +258,7 @@ coords <- rbind(coords_train, coords_test)
 ntest <- nx * nx
 n <- ntrain + ntest
 # Simulate spatial Gaussian process
-sigma2_1 <- 1 # marginal variance of GP
+sigma2_1 <- 0.25 # marginal variance of GP
 rho <- 0.1 # range parameter
 D <- as.matrix(dist(coords))
 Sigma <- sigma2_1 * exp(-D/rho) + diag(1E-20,n)
@@ -276,7 +274,7 @@ b_1_test <- b_1[1:ntest+ntrain]
 hist(y_train,breaks=50)# visualize response variable
 # Including linear regression fixed effects
 X <- cbind(rep(1,ntrain),runif(ntrain)-0.5) # design matrix / covariate data for fixed effects
-beta <- c(0,3) # regression coefficients
+beta <- c(0,2) # regression coefficients
 lp <- X %*% beta
 y_lin <- simulate_response_variable(lp=lp, rand_eff=b_1_train, likelihood=likelihood)
 # Spatially varying coefficient (random coefficient) model
@@ -368,13 +366,14 @@ summary(gp_model)
 
 #--------------------Gaussian process model with Vecchia approximation----------------
 gp_model <- fitGPModel(gp_coords = coords_train, cov_function = "exponential", 
-                       gp_approx = "vecchia", num_neighbors = 30, y = y_train,
+                       gp_approx = "vecchia", num_neighbors = 20, y = y_train,
                        likelihood = likelihood)
 summary(gp_model)
 # Prediction: setting 'num_neighbors_pred' to a larger value than 'num_neighbors' for training
 #   can lead to better predictions
-pred_vecchia <- predict(gp_model, gp_coords_pred = coords_test, num_neighbors_pred = 100,
-                predict_var = TRUE, predict_response = FALSE)
+gp_model$set_prediction_data(num_neighbors_pred = 40)
+pred_vecchia <- predict(gp_model, gp_coords_pred = coords_test,
+                        predict_var = TRUE, predict_response = FALSE)
 ggplot(data = data.frame(s_1=coords_test[,1], s_2=coords_test[,2], 
                          b=pred_vecchia$mu), aes(x=s_1,y=s_2,color=b)) +
   geom_point(size=8, shape=15) + scale_color_viridis(option = "B") + 
@@ -420,14 +419,35 @@ summary(gp_model)
 gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
                     likelihood = likelihood)
 if (likelihood == "gaussian") {
-  init_cov_pars <- c(1,1,0.2)
+  cov_pars <- c(1,1,0.2)
 } else {
-  init_cov_pars <- c(1,0.2)
+  cov_pars <- c(1,0.2)
 }
-gp_model$neg_log_likelihood(cov_pars = init_cov_pars, y = y_train)
+if (likelihood == "gamma") {
+  aux_pars <- 1
+} else {
+  aux_pars <- NULL
+}
+gp_model$neg_log_likelihood(cov_pars = cov_pars, y = y_train, aux_pars = aux_pars)
 # Do optimization using optim and e.g. Nelder-Mead
-optim(par = init_cov_pars, fn = gp_model$neg_log_likelihood, y = y_train,
-      method = "Nelder-Mead")
+eval_nll <- function(pars, gp_model, y, X, likelihood) {
+  if (likelihood == "gaussian") {
+    cov_pars <- exp(pars[1:3])
+  } else {
+    cov_pars <- exp(pars[1:2])
+  }
+  if (likelihood == "gamma") {
+    aux_pars <- exp(pars[3])
+  } else {
+    aux_pars <- NULL 
+  }
+  gp_model$neg_log_likelihood(cov_pars=cov_pars, y=y, aux_pars=aux_pars)
+}
+init_pars <- log(c(cov_pars, aux_pars))
+opt <- optim(par = init_pars, fn = eval_nll, y = y_train, gp_model=gp_model, 
+             likelihood = likelihood, method = "Nelder-Mead")
+opt
+exp(opt$par) # estimated parameters
 
 
 #################################
@@ -440,12 +460,12 @@ group <- rep(1,n) # grouping variable
 for(i in 1:m) group[((i-1)*n/m+1):(i*n/m)] <- i
 set.seed(1)
 coords <- cbind(runif(n),runif(n)) # locations (=features) for Gaussian process
-sigma2_1 <- 1^2 # random effect variance
-sigma2_2 <- 1^2 # marginal variance of GP
+sigma2_1 <- 0.25 # random effect variance
+sigma2_2 <- 0.25 # marginal variance of GP
 rho <- 0.1 # range parameter
 b1 <- sqrt(sigma2_1) * rnorm(m) # simulate random effects
 D <- as.matrix(dist(coords))
-Sigma <- sigma2_2*exp(-D/rho)+diag(1E-20,n)
+Sigma <- sigma2_2 * exp(-D/rho)+diag(1E-20,n)
 C <- t(chol(Sigma))
 b_2 <- C %*% rnorm(n) # simulate GP
 rand_eff <- b1[group] + b_2
