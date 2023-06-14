@@ -1,10 +1,10 @@
-f7ef9b8d6d3b5e03bc32864775861b46 *DESCRIPTION
+8f0cb6cfe0d0fe7474e26539d2a27518 *DESCRIPTION
 62aa7e7a29985341875a00e6ac33d872 *LICENSE
 a167eb353c93a35f57b932e2f0b2b267 *NAMESPACE
-ba6136f48ce747b00bef531120cbc01d *R/GPModel.R
+dd5a3365023b6c611ebe773d0045f840 *R/GPModel.R
 3b7b9061f6b11f00c895c95085a9f062 *R/aliases.R
 f85a799975f4a1b3750524eff69b25b0 *R/callback.R
-f90e7d46273c35e766661996b8022090 *R/gpb.Booster.R
+9a115f85d4c83cf69db0bc6beb9e7cdb *R/gpb.Booster.R
 bd94968382935911f9a0c2e9d501a152 *R/gpb.Dataset.R
 8d10e21784da03b0e1867dc11e83c34d *R/gpb.Predictor.R
 becede70f0ac3366e55941f6baf0acf1 *R/gpb.convert_with_rules.R
@@ -12,7 +12,7 @@ becede70f0ac3366e55941f6baf0acf1 *R/gpb.convert_with_rules.R
 28ef5b74c1c649dca30b26922ec34069 *R/gpb.importance.R
 b341202613cf9b89bddcbb6f91a14ce4 *R/gpb.interprete.R
 964247db0d803d339bdc142b218cb492 *R/gpb.model.dt.tree.R
-b99385020c8df2c04e15b3fbfc2e5e4f *R/gpb.plot.importance.R
+f0e97963b464ecc3dd2ccb24638eb6ed *R/gpb.plot.importance.R
 994f0720af2137d6da36dc25067ec6cf *R/gpb.plot.interpretation.R
 234a243716c5c6c5aed1712c75927bb9 *R/gpb.plot.partial.dependence.R
 c2d45ed8fd8846b26e4c4ee27e3c9de3 *R/gpb.train.R
@@ -24,7 +24,7 @@ e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 bb9c52ed31cdf5de00f4a19b1220b771 *README.md
 6071edd604dbeb75308cfbedc7790398 *cleanup
 64d337f86038dffbc64d54f1679346ca *configure
-d10296e8705f10c3f0d29d463320eaad *configure.ac
+0c45a47a9bc801908e5781f368e79e98 *configure.ac
 143395cafb571049ffb58af627304dea *configure.win
 0276a7e04cef5f86e4146107bfb24e98 *data/GPBoost_data.RData
 05e29359ef24243df589703588987c0e *data/agaricus.test.rda
@@ -38,8 +38,8 @@ e561d90ea6523a30987958dd34f5c427 *demo/examples_in_R_package_documentation.R
 0977cf7fd91993308af7e533328920ca *demo/generalized_linear_Gaussian_process_mixed_effects_models.R
 5e25ee2eeedafa9d8f7770839701cc05 *demo/parameter_tuning.R
 50f6a801475c97df6e049e77b2dcfe6d *man/GPBoost_data.Rd
-f1a6354e8909341fe9d258f0b0458fb1 *man/GPModel.Rd
-a65c783a85acb10893ec306739ebd621 *man/GPModel_shared_params.Rd
+2c20298505f0ef5bb0b453b8fa790482 *man/GPModel.Rd
+6e0a1c337a7c9b440f46587cb9274cd8 *man/GPModel_shared_params.Rd
 ea6d9d1e446a8a9cbbf0d768a77afd06 *man/X.Rd
 8c18cf135034c6f9e53709ec4d74d914 *man/X_test.Rd
 d8090c6a1b1411e93a41ee7ed389373b *man/agaricus.test.Rd
@@ -52,7 +52,7 @@ ed23b7220c019f117ce8238b538da152 *man/dimnames.gpb.Dataset.Rd
 24f5f980213ffc9a81c12ef9e8d58afc *man/figures/logo.svg
 e96a428615bba6baf1bb1468ffce366c *man/fit.GPModel.Rd
 bd8ddca56498d314023e2c8554c2b38e *man/fit.Rd
-3e3424e204fd185f4b1d137fd5c29bd0 *man/fitGPModel.Rd
+bebdb259ae92d6ace2207decc08ab555 *man/fitGPModel.Rd
 51aa72c5ac9dde2d10b3cbc76a84362b *man/get_nested_categories.Rd
 41352598c65a0b0bfeca0eb3da7a18e2 *man/getinfo.Rd
 5a03c14f1fb19c00e9fa48452c3ce73e *man/gpb.Dataset.Rd
@@ -70,7 +70,7 @@ ff1766962006dbece3265eff092af222 *man/gpb.importance.Rd
 fbb2120b956f89e43914e80770c69e8e *man/gpb.interprete.Rd
 a99e4718a97f088221901053854fc1fe *man/gpb.load.Rd
 2315bdf584538e572d27ddb5430b9b4a *man/gpb.model.dt.tree.Rd
-92636af0f44614abc7f0ac4d0ae17897 *man/gpb.plot.importance.Rd
+8135326c1843312e716eea3df0da3a8f *man/gpb.plot.importance.Rd
 f33042ec4025c7554e1e3c681009bb65 *man/gpb.plot.interpretation.Rd
 edb50bddf856ec6183d6afaea3137494 *man/gpb.plot.part.dep.interact.Rd
 7fc73ed9404bb98bc07e580fdb81fa64 *man/gpb.plot.partial.dependence.Rd
@@ -81,8 +81,8 @@ edb50bddf856ec6183d6afaea3137494 *man/gpb.plot.part.dep.interact.Rd
 9aee48eb0115024e0182c0763fbb0c47 *man/group_data.Rd
 b87960c6c60b1d8b33a960eab11651fc *man/group_data_test.Rd
 5299b1157bcd238afe6d70c326500f54 *man/loadGPModel.Rd
-9bfc6080c6d3f9c157995a3be2225227 *man/predict.GPModel.Rd
-43a2d307b73e00357b3cc991fddb925f *man/predict.gpb.Booster.Rd
+c87b2e82475d9ddc8453411545cd7fc4 *man/predict.GPModel.Rd
+449e9b27a126327ccd99e524b92b4252 *man/predict.gpb.Booster.Rd
 cb7c9c66130339eccedfd5ff8a1001c5 *man/predict_training_data_random_effects.GPModel.Rd
 31cbff7193f4d6070a1bcb4241b05290 *man/predict_training_data_random_effects.Rd
 b0f2348f1d362d0f09441f33add86018 *man/readRDS.gpb.Booster.Rd
@@ -111,7 +111,7 @@ f42607079255a49b9a12138b3c5a0168 *src/boosting/gbdt_prediction.cpp
 28289e265a0aa91230d1fdac36fbeef2 *src/boosting/prediction_early_stop.cpp
 b4b2e39f3165eff2c0417c5773b6a20f *src/boosting/rf.hpp
 60188a6652d8a2cb4ec95293aefc8075 *src/boosting/score_updater.hpp
-5ba446285dc8ac159e5df5e5420fe54c *src/c_api.cpp
+f206b953c08c52c037e72d553a6fb513 *src/c_api.cpp
 9c537acd0b36927b927fd092d5c8f59e *src/cs_dfs.c
 e4776c218f0fb4bcf19c6cde58c68646 *src/cs_reach.c
 55f05717ac67102790249158cb806cfa *src/cs_spsolve.c
@@ -437,7 +437,7 @@ dbf69b400e4ceff9cc16cedf1adc5fcf *src/include/GPBoost/Vecchia_utils.h
 a4595a98979181e659bf96cabfbd0b0f *src/include/GPBoost/likelihoods.h
 fa0fefff9324df0b32fcb186745ca405 *src/include/GPBoost/re_comp.h
 ef648b6649d61cc87600b552e60df16f *src/include/GPBoost/re_model.h
-0e7138ff7e068715807897d4c7978292 *src/include/GPBoost/re_model_template.h
+f83aef4e6536bf8fe967da286e7da28e *src/include/GPBoost/re_model_template.h
 cd0b6a513a8d94042914def9b538dd7c *src/include/GPBoost/sparse_matrix_utils.h
 888fb1efda7b93ff04ab93ba3a906d1a *src/include/GPBoost/type_defs.h
 5477914a4492127814ed029a184ec247 *src/include/GPBoost/utils.h
@@ -631,7 +631,7 @@ c8606cbab7c133c043c2bdb7b357361d *src/treelearner/voting_parallel_tree_learner.c
 195e19b954192d89db593f2443827a0b *tests/testthat.R
 bfca405a41bb24d9b3f1b8215add64de *tests/testthat/test_GPModel_combined_GP_random_effects.R
 8d473e7c364187e3d942a488d956ae41 *tests/testthat/test_GPModel_gaussian_process.R
-ef6a7ff1f13ff6ff6db33d638f3a39e7 *tests/testthat/test_GPModel_grouped_random_effects.R
+94baa3b59b20a3cd2ef8eb2d5568ab69 *tests/testthat/test_GPModel_grouped_random_effects.R
 9bf1ee54a9d538bbc3e8116f9da928fe *tests/testthat/test_GPModel_non_Gaussian_data.R
 3039b22e97c5ebd1314fe4364f61a759 *tests/testthat/test_Grabit.R
 e19a1685f7c548b990379f658d9065d8 *tests/testthat/test_Predictor.R
