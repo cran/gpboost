@@ -691,9 +691,9 @@ namespace GPBoost {
 				optimizer_coef_ = optimizer_cov_pars_;
 			}
 			bool terminate_optim = false;
-			learning_rate_decreased_first_time_ = false;
-			learning_rate_increased_after_descrease_ = false;
-			learning_rate_decreased_after_increase_ = false;
+			//learning_rate_decreased_first_time_ = false;
+			//learning_rate_increased_after_descrease_ = false;
+			//learning_rate_decreased_after_increase_ = false;
 			num_ll_evaluations_ = 0;
 			num_it = max_iter_;
 			bool profile_out_marginal_variance = gauss_likelihood_ &&
@@ -1104,7 +1104,7 @@ namespace GPBoost {
 						num_it = it + 1;
 						break;
 					}
-					////increase learning rates again
+					////increase learning rates again (not used)
 					//else if (optimizer_cov_pars_ == "gradient_descent" && (it + 1) >= 10 && learning_rate_decreased_first_time_ &&
 					//	!learning_rate_increased_after_descrease_ && !na_or_inf_occurred) {
 					//	if ((neg_log_likelihood_lag1_ - neg_log_likelihood_) < INCREASE_LR_CHANGE_LL_THRESHOLD_ * std::abs(neg_log_likelihood_lag1_)) {
@@ -1784,46 +1784,66 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 			if (!(gp_coords_data_pred == nullptr && re_group_data_pred == nullptr && re_group_rand_coef_data_pred == nullptr
 				&& cluster_ids_data_pred == nullptr && gp_rand_coef_data_pred == nullptr && covariate_data_pred == nullptr)) {
 				CHECK(num_data_pred > 0);
+				num_data_pred_ = num_data_pred;
 			}
-			if (cluster_ids_data_pred == nullptr) {
-				cluster_ids_data_pred_.clear();
-			}
-			else {
+			if (cluster_ids_data_pred != nullptr) {
 				cluster_ids_data_pred_ = std::vector<data_size_t>(cluster_ids_data_pred, cluster_ids_data_pred + num_data_pred);
 			}
-			if (re_group_data_pred == nullptr) {
-				re_group_levels_pred_.clear();
-			}
-			else {
+			if (re_group_data_pred != nullptr) {
 				//For grouped random effecst: create matrix 're_group_levels_pred' (vector of vectors, dimension: num_group_variables_ x num_data_) with strings of group levels from characters in 'const char* re_group_data_pred'
 				re_group_levels_pred_ = std::vector<std::vector<re_group_t>>(num_group_variables_, std::vector<re_group_t>(num_data_pred));
 				ConvertCharToStringGroupLevels(num_data_pred, num_group_variables_, re_group_data_pred, re_group_levels_pred_);
 			}
-			if (re_group_rand_coef_data_pred == nullptr) {
-				re_group_rand_coef_data_pred_.clear();
-			}
-			else {
+			if (re_group_rand_coef_data_pred != nullptr) {
 				re_group_rand_coef_data_pred_ = std::vector<double>(re_group_rand_coef_data_pred, re_group_rand_coef_data_pred + num_data_pred * num_re_group_rand_coef_);
 			}
-			if (gp_coords_data_pred == nullptr) {
-				gp_coords_data_pred_.clear();
-			}
-			else {
+			if (gp_coords_data_pred != nullptr) {
 				gp_coords_data_pred_ = std::vector<double>(gp_coords_data_pred, gp_coords_data_pred + num_data_pred * dim_gp_coords_);
 			}
-			if (gp_rand_coef_data_pred == nullptr) {
-				gp_rand_coef_data_pred_.clear();
-			}
-			else {
+			if (gp_rand_coef_data_pred != nullptr) {
 				gp_rand_coef_data_pred_ = std::vector<double>(gp_rand_coef_data_pred, gp_rand_coef_data_pred + num_data_pred * num_gp_rand_coef_);
 			}
-			if (covariate_data_pred == nullptr) {
-				covariate_data_pred_.clear();
-			}
-			else {
+			if (covariate_data_pred != nullptr) {
 				covariate_data_pred_ = std::vector<double>(covariate_data_pred, covariate_data_pred + num_data_pred * num_coef_);
 			}
-			num_data_pred_ = num_data_pred;
+			//if (cluster_ids_data_pred == nullptr) {
+			//	cluster_ids_data_pred_.clear();
+			//}
+			//else {
+			//	cluster_ids_data_pred_ = std::vector<data_size_t>(cluster_ids_data_pred, cluster_ids_data_pred + num_data_pred);
+			//}
+			//if (re_group_data_pred == nullptr) {
+			//	re_group_levels_pred_.clear();
+			//}
+			//else {
+			//	//For grouped random effecst: create matrix 're_group_levels_pred' (vector of vectors, dimension: num_group_variables_ x num_data_) with strings of group levels from characters in 'const char* re_group_data_pred'
+			//	re_group_levels_pred_ = std::vector<std::vector<re_group_t>>(num_group_variables_, std::vector<re_group_t>(num_data_pred));
+			//	ConvertCharToStringGroupLevels(num_data_pred, num_group_variables_, re_group_data_pred, re_group_levels_pred_);
+			//}
+			//if (re_group_rand_coef_data_pred == nullptr) {
+			//	re_group_rand_coef_data_pred_.clear();
+			//}
+			//else {
+			//	re_group_rand_coef_data_pred_ = std::vector<double>(re_group_rand_coef_data_pred, re_group_rand_coef_data_pred + num_data_pred * num_re_group_rand_coef_);
+			//}
+			//if (gp_coords_data_pred == nullptr) {
+			//	gp_coords_data_pred_.clear();
+			//}
+			//else {
+			//	gp_coords_data_pred_ = std::vector<double>(gp_coords_data_pred, gp_coords_data_pred + num_data_pred * dim_gp_coords_);
+			//}
+			//if (gp_rand_coef_data_pred == nullptr) {
+			//	gp_rand_coef_data_pred_.clear();
+			//}
+			//else {
+			//	gp_rand_coef_data_pred_ = std::vector<double>(gp_rand_coef_data_pred, gp_rand_coef_data_pred + num_data_pred * num_gp_rand_coef_);
+			//}
+			//if (covariate_data_pred == nullptr) {
+			//	covariate_data_pred_.clear();
+			//}
+			//else {
+			//	covariate_data_pred_ = std::vector<double>(covariate_data_pred, covariate_data_pred + num_data_pred * num_coef_);
+			//}
 			if (gp_approx_ == "vecchia") {
 				if (vecchia_pred_type != nullptr) {
 					SetVecchiaPredType(vecchia_pred_type);
@@ -2937,6 +2957,43 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 			}
 		}//end NewtonUpdateLeafValues
 
+		/*!
+		* \brief Apply a momentum step
+		* \param it Iteration number
+		* \param pars Parameters
+		* \param pars_lag1 Parameters from last iteration
+		* \param[out] pars_acc Accelerated parameters
+		* \param nesterov_acc_rate Nesterov acceleration speed
+		* \param nesterov_schedule_version Which version of Nesterov schedule should be used. Default = 0
+		* \param exclude_first_log_scale If true, no momentum is applied to the first value and the momentum step is done on the log-scale for the other values. Default = true
+		* \param momentum_offset Number of iterations for which no mometum is applied in the beginning
+		* \param log_scale If true, the momentum step is done on the log-scale
+		*/
+		static void ApplyMomentumStep(int it,
+			vec_t& pars,
+			vec_t& pars_lag1,
+			vec_t& pars_acc,
+			double nesterov_acc_rate,
+			int nesterov_schedule_version,
+			bool exclude_first_log_scale,
+			int momentum_offset,
+			bool log_scale) {
+			double mu = NesterovSchedule(it, nesterov_schedule_version, nesterov_acc_rate, momentum_offset);
+			int num_par = (int)pars.size();
+			if (exclude_first_log_scale) {
+				pars_acc[0] = pars[0];
+				pars_acc.segment(1, num_par - 1) = ((mu + 1.) * (pars.segment(1, num_par - 1).array().log()) - mu * (pars_lag1.segment(1, num_par - 1).array().log())).exp().matrix();//Momentum is added on the log scale
+			}
+			else {
+				if (log_scale) {
+					pars_acc = ((mu + 1.) * (pars.array().log()) - mu * (pars_lag1.array().log())).exp().matrix();
+				}
+				else {
+					pars_acc = (mu + 1) * pars - mu * pars_lag1;
+				}
+			}
+		}// end ApplyMomentumStep
+
 	private:
 
 		// RESPONSE DATA
@@ -3099,10 +3156,14 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 		int momentum_offset_ = 2;
 		/*! \brief Select Nesterov acceleration schedule 0 or 1 */
 		int nesterov_schedule_version_ = 0;
-		/*! \brief Maximal value of gradient updates on log-scale for covariance parameters */
+		/*! \brief Maximal relative change for covariance parameters in one iteration */
 		int MAX_REL_CHANGE_GRADIENT_UPDATE_ = 100; // allow maximally a change by a factor of 'MAX_REL_CHANGE_GRADIENT_UPDATE_' in one iteration
 		/*! \brief Maximal value of gradient updates on log-scale for covariance parameters */
 		double MAX_GRADIENT_UPDATE_LOG_SCALE_ = std::log((double)MAX_REL_CHANGE_GRADIENT_UPDATE_);
+		/*! \brief Maximal relative change for for auxiliary parameters in one iteration */
+		int MAX_REL_CHANGE_GRADIENT_UPDATE_AUX_PARS_ = 100;
+		/*! \brief Maximal value of gradient updates on log-scale for auxiliary parameters */
+		double MAX_GRADIENT_UPDATE_LOG_SCALE_AUX_PARS_ = std::log((double)MAX_REL_CHANGE_GRADIENT_UPDATE_AUX_PARS_);
 		/*! \brief Optimizer for linear regression coefficients (The default = "wls" is changed to "gradient_descent" for non-Gaussian likelihoods upon initialization). See the constructor REModelTemplate() for the default values which depend on whether the likelihood is Gaussian or not */
 		string_t optimizer_coef_;
 		/*! \brief List of supported optimizers for regression coefficients for Gaussian likelihoods */
@@ -3133,16 +3194,17 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 		bool estimate_aux_pars_ = false;
 		/*! \brief True if the function 'SetOptimConfig' has been called */
 		bool set_optim_config_has_been_called_ = false;
-		/*! \brief True if the learning rates have been descreased (only for gradient_descent) */
-		bool learning_rate_decreased_first_time_ = false;
-		/*! \brief True if the learning rates have been increased after they have been descreased (only for gradient_descent) */
-		bool learning_rate_increased_after_descrease_ = false;
-		/*! \brief True if the learning rates have been descreased again after they have been increased (only for gradient_descent) */
-		bool learning_rate_decreased_after_increase_ = false;
-		/*! \brief Threshold value, for relative change in the log-likelihood, below which learning rates are increased again for gradient descent */
-		double INCREASE_LR_CHANGE_LL_THRESHOLD_ = 1e-3;
 		/*! \brief Number of likelihood evaluations during optimization */
 		int num_ll_evaluations_ = 0;
+		// The following variables are not used anymore (increasing learning rate again does not seem beneficial)
+		///*! \brief True if the learning rates have been descreased (only for gradient_descent) */
+		//bool learning_rate_decreased_first_time_ = false;
+		///*! \brief True if the learning rates have been increased after they have been descreased (only for gradient_descent) */
+		//bool learning_rate_increased_after_descrease_ = false;
+		///*! \brief True if the learning rates have been descreased again after they have been increased (only for gradient_descent) */
+		//bool learning_rate_decreased_after_increase_ = false;
+		///*! \brief Threshold value, for relative change in the log-likelihood, below which learning rates are increased again for gradient descent */
+		//double INCREASE_LR_CHANGE_LL_THRESHOLD_ = 1e-3;
 
 		// MATRIX INVERSION PROPERTIES
 		/*! \brief Matrix inversion method */
@@ -3297,7 +3359,7 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 		RNG_t rng_;
 
 		/*! \brief Nesterov schedule */
-		double NesterovSchedule(int iter,
+		static double NesterovSchedule(int iter,
 			int momentum_schedule_version,
 			double nesterov_acc_rate, 
 			int momentum_offset) {
@@ -3313,10 +3375,10 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 				}
 				else {
 					Log::REFatal("NesterovSchedule: version = %d is not supported ", momentum_schedule_version);
-					return(0.);
 				}
 			}
-		}
+			return(0.);
+		}//end NesterovSchedule
 
 		/*! \brief mutex for threading safe call */
 		std::mutex mutex_;
@@ -4533,11 +4595,11 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 						max_abs_nat_grad_aux_par = std::abs(nat_grad[num_cov_par_ + ip]);
 					}
 				}
-				if (lr_aux_pars_ * max_abs_nat_grad_aux_par > MAX_GRADIENT_UPDATE_LOG_SCALE_) {
-					lr_aux_pars_ = MAX_GRADIENT_UPDATE_LOG_SCALE_ / max_abs_nat_grad_aux_par;
+				if (lr_aux_pars_ * max_abs_nat_grad_aux_par > MAX_GRADIENT_UPDATE_LOG_SCALE_AUX_PARS_) {
+					lr_aux_pars_ = MAX_GRADIENT_UPDATE_LOG_SCALE_AUX_PARS_ / max_abs_nat_grad_aux_par;
 					Log::REDebug("GPModel auxiliary parameter estimation: The learning rate has been decreased in iteration number %d since "
 						"the gradient update on the log-scale would have been too large (change by more than a factor %d). New learning rate = %g", 
-						it + 1, MAX_REL_CHANGE_GRADIENT_UPDATE_, lr_aux_pars_);
+						it + 1, MAX_REL_CHANGE_GRADIENT_UPDATE_AUX_PARS_, lr_aux_pars_);
 				}
 			}
 		}//end AvoidTooLargeLearningRatesCovAuxPars
@@ -5171,10 +5233,10 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 				else {
 					// Safeguard against too large steps by halving the learning rate
 					halving_done = true;
-					learning_rate_decreased_first_time_ = true;
-					if (learning_rate_increased_after_descrease_) {
-						learning_rate_decreased_after_increase_ = true;
-					}
+					//learning_rate_decreased_first_time_ = true;
+					//if (learning_rate_increased_after_descrease_) {
+					//	learning_rate_decreased_after_increase_ = true;
+					//}
 					lr_coef *= LR_SHRINKAGE_FACTOR_;
 					acc_rate_coef *= 0.5;
 					if (!gauss_likelihood_) {
@@ -5715,43 +5777,6 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 				}//end not gp_approx_ == "vecchia"
 			}
 		}//end CalcYTPsiIInvY
-
-		/*!
-		* \brief Apply a momentum step
-		* \param it Iteration number
-		* \param pars Parameters
-		* \param pars_lag1 Parameters from last iteration
-		* \param[out] pars_acc Accelerated parameters
-		* \param nesterov_acc_rate Nesterov acceleration speed
-		* \param nesterov_schedule_version Which version of Nesterov schedule should be used. Default = 0
-		* \param exclude_first_log_scale If true, no momentum is applied to the first value and the momentum step is done on the log-scale for the other values. Default = true
-		* \param momentum_offset Number of iterations for which no mometum is applied in the beginning
-		* \param log_scale If true, the momentum step is done on the log-scale
-		*/
-		void ApplyMomentumStep(int it, 
-			vec_t& pars, 
-			vec_t& pars_lag1, 
-			vec_t& pars_acc, 
-			double nesterov_acc_rate,
-			int nesterov_schedule_version, 
-			bool exclude_first_log_scale, 
-			int momentum_offset, 
-			bool log_scale) {
-			double mu = NesterovSchedule(it, nesterov_schedule_version, nesterov_acc_rate, momentum_offset);
-			int num_par = (int)pars.size();
-			if (exclude_first_log_scale) {
-				pars_acc[0] = pars[0];
-				pars_acc.segment(1, num_par - 1) = ((mu + 1.) * (pars.segment(1, num_par - 1).array().log()) - mu * (pars_lag1.segment(1, num_par - 1).array().log())).exp().matrix();//Momentum is added on the log scale
-			}
-			else {
-				if (log_scale) {
-					pars_acc = ((mu + 1.) * (pars.array().log()) - mu * (pars_lag1.array().log())).exp().matrix();
-				}
-				else {
-					pars_acc = (mu + 1) * pars - mu * pars_lag1;
-				}
-			}
-		}
 
 		/*!
 		* \brief Update linear fixed-effect coefficients using generalized least squares (GLS)
