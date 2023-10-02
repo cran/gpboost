@@ -566,26 +566,32 @@ namespace GPBoost {
 
 		if (matrix_format_ == "sp_mat_t") {
 			if (re_model_sp_->gauss_likelihood_) {
-				re_model_sp_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, false, false, false);
+				re_model_sp_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
+					negll, false, false, false);
 			}
 			else {
-				re_model_sp_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
+				re_model_sp_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
+					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
 			}
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			if (re_model_sp_rm_->gauss_likelihood_) {
-				re_model_sp_rm_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, false, false, false);
+				re_model_sp_rm_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
+					negll, false, false, false);
 			}
 			else {
-				re_model_sp_rm_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
+				re_model_sp_rm_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
+					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
 			}
 		}
 		else {
 			if (re_model_den_->gauss_likelihood_) {
-				re_model_den_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, false, false, false);
+				re_model_den_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
+					negll, false, false, false);
 			}
 			else {
-				re_model_den_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
+				re_model_den_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
+					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
 			}
 		}
 		covariance_matrix_has_been_factorized_ = false;
@@ -625,7 +631,7 @@ namespace GPBoost {
 						re_model_sp_->CalcSigmaComps();
 						re_model_sp_->CalcCovMatrixNonGauss();
 					}
-					re_model_sp_->CalcModePostRandEff(fixed_effects);
+					re_model_sp_->CalcModePostRandEffCalcMLL(fixed_effects, true);
 				}//end gauss_likelihood_
 			}//end calc_cov_factor
 			//2. Calculate gradient
@@ -653,7 +659,7 @@ namespace GPBoost {
 						re_model_sp_rm_->CalcSigmaComps();
 						re_model_sp_rm_->CalcCovMatrixNonGauss();
 					}
-					re_model_sp_rm_->CalcModePostRandEff(fixed_effects);
+					re_model_sp_rm_->CalcModePostRandEffCalcMLL(fixed_effects, true);
 				}//end gauss_likelihood_
 			}//end calc_cov_factor
 			//2. Calculate gradient
@@ -681,7 +687,7 @@ namespace GPBoost {
 						re_model_den_->CalcSigmaComps();
 						re_model_den_->CalcCovMatrixNonGauss();
 					}
-					re_model_den_->CalcModePostRandEff(fixed_effects);
+					re_model_den_->CalcModePostRandEffCalcMLL(fixed_effects, true);
 				}//end gauss_likelihood_
 			}//end calc_cov_factor
 			//2. Calculate gradient

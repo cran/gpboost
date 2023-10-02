@@ -588,6 +588,10 @@ namespace GPBoost {
 				seed_rand_vec_trace_ = seed_rand_vec_trace;
 				piv_chol_rank_ = piv_chol_rank;
 				if (cg_preconditioner_type != nullptr) {
+					if (cg_preconditioner_type_ != std::string(cg_preconditioner_type) &&
+						model_has_been_estimated_) {
+						Log::REFatal("Cannot change 'cg_preconditioner_type' after a model has been fitted ");
+					}
 					cg_preconditioner_type_ = std::string(cg_preconditioner_type);
 					CheckPreconditionerType();
 					cg_preconditioner_type_has_been_set_ = true;
@@ -1228,6 +1232,7 @@ namespace GPBoost {
 					//	but this function is called for initialization of the GPBoost algorithm.
 				}
 			}
+			model_has_been_estimated_ = true;
 		}//end OptimLinRegrCoefCovPar
 		
 
@@ -1583,7 +1588,7 @@ namespace GPBoost {
 				else {
 					CalcYAux(1.);//y_aux = Psi^-1 * y
 				}
-				EvalNegLogLikelihood(nullptr, cov_pars.data(), neg_log_likelihood_, true, true, true);
+				EvalNegLogLikelihood(nullptr, cov_pars.data(), nullptr, neg_log_likelihood_, true, true, true);
 			}//end gauss_likelihood_
 			else {//not gauss_likelihood_
 				if (gp_approx_ == "vecchia") {
@@ -1593,9 +1598,8 @@ namespace GPBoost {
 					CalcSigmaComps();
 					CalcCovMatrixNonGauss();
 				}
-				neg_log_likelihood_ = -CalcModePostRandEff(fixed_effects);//calculate mode and approximate marginal likelihood
+				neg_log_likelihood_ = -CalcModePostRandEffCalcMLL(fixed_effects, true);//calculate mode and approximate marginal likelihood
 			}//end not gauss_likelihood_
-			num_ll_evaluations_++;
 		}//end CalcCovFactorOrModeAndNegLL
 
 		/*!
@@ -1626,6 +1630,7 @@ namespace GPBoost {
 		* \brief Calculate the value of the negative log-likelihood
 		* \param y_data Response variable data
 		* \param cov_pars Values for covariance parameters of RE components
+		* \param fixed_effects Externally provided fixed effects component of location parameter
 		* \param[out] negll Negative log-likelihood
 		* \param CalcCovFactor_already_done If true, it is assumed that the covariance matrix has already been factorized
 		* \param CalcYAux_already_done If true, it is assumed that y_aux_=Psi^-1y_ has already been calculated (only relevant if not only_grouped_REs_use_woodbury_identity_)
@@ -1633,13 +1638,27 @@ namespace GPBoost {
 		*/
 		void EvalNegLogLikelihood(const double* y_data,
 			const double* cov_pars,
+			const double* fixed_effects,
 			double& negll,
 			bool CalcCovFactor_already_done,
 			bool CalcYAux_already_done,
 			bool CalcYtilde_already_done) {
 			CHECK(!(CalcYAux_already_done && !CalcCovFactor_already_done));// CalcYAux_already_done && !CalcCovFactor_already_done makes no sense
-			if (y_data != nullptr) {
-				SetY(y_data);
+			if (fixed_effects != nullptr) {
+				if (y_data == nullptr) {
+					Log::REFatal("EvalNegLogLikelihood: 'y_data' cannot nullptr when 'fixed_effects' is provided ");
+				}
+				vec_t y_minus_lp(num_data_);
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < num_data_; ++i) {
+					y_minus_lp[i] = y_data[i] - fixed_effects[i];
+				}
+				SetY(y_minus_lp.data());
+			}
+			else {
+				if (y_data != nullptr) {
+					SetY(y_data);
+				}
 			}
 			if (!CalcCovFactor_already_done) {
 				const vec_t cov_pars_vec = Eigen::Map<const vec_t>(cov_pars, num_cov_par_);
@@ -1750,7 +1769,7 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 						CalcCovMatrixNonGauss();
 					}
 				}//end InitializeModeCovMat
-				negll = -CalcModePostRandEff(fixed_effects);
+				negll = -CalcModePostRandEffCalcMLL(fixed_effects, true);
 			}//end not CalcModePostRandEff_already_done
 		}//end EvalLaplaceApproxNegLogLikelihood
 
@@ -2052,7 +2071,7 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 			}
 			//Factorize covariance matrix and calculate Psi^{-1}y_obs or calculate Laplace approximation (if required)
 			if (pred_for_observed_data) {
-				SetYCalcCovCalcYAux(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects, false);
+				SetYCalcCovCalcYAuxForPred(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects, false);
 			}
 			// Loop over different clusters to calculate predictions
 			for (const auto& cluster_i : unique_clusters_pred) {
@@ -2507,7 +2526,7 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 			if (gauss_likelihood_ && gp_approx_ == "vecchia") {
 				calc_cov_factor = true;//recalculate Vecchia approximation since it might have been done (saved in B_) with a different nugget effect if calc_std_dev == true in CalcStdDevCovPar
 			}
-			SetYCalcCovCalcYAux(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects, true);
+			SetYCalcCovCalcYAuxForPred(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects, true);
 			// Loop over different clusters to calculate predictions
 			for (const auto& cluster_i : unique_clusters_) {
 				if (gauss_likelihood_) {
@@ -3133,9 +3152,9 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 		int max_iter_ = 1000;
 		/*!
 		\brief Convergence tolerance for covariance and linear regression coefficient estimation.
-		The algorithm stops if the relative change in either the (approximate) log-likelihood or the parameters is below this value.
-		For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood.
-		If delta_rel_conv_init_ < 0, internal default values are set in 'OptimConfigSetInitialValues'
+			The algorithm stops if the relative change in either the (approximate) log-likelihood or the parameters is below this value.
+			For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood.
+			If delta_rel_conv_init_ < 0, internal default values are set in 'OptimConfigSetInitialValues'
 		*/
 		double delta_rel_conv_;
 		/*! \brief Initial convergence tolerance (to remember as default values for delta_rel_conv_ are different for 'nelder_mead' vs. other optimizers and the optimization might get restarted) */
@@ -3194,8 +3213,12 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 		bool estimate_aux_pars_ = false;
 		/*! \brief True if the function 'SetOptimConfig' has been called */
 		bool set_optim_config_has_been_called_ = false;
+		/*! \brief If true, the covariance parameters or linear coefficients were updated for the first time with gradient descent*/
+		bool first_update_ = false;
 		/*! \brief Number of likelihood evaluations during optimization */
 		int num_ll_evaluations_ = 0;
+		/*! \brief True, if 'OptimLinRegrCoefCovPar' has been called */
+		bool model_has_been_estimated_ = false;
 		// The following variables are not used anymore (increasing learning rate again does not seem beneficial)
 		///*! \brief True if the learning rates have been descreased (only for gradient_descent) */
 		//bool learning_rate_decreased_first_time_ = false;
@@ -3220,19 +3243,19 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 		/*! \brief Tolerance level for L2 norm of residuals for checking convergence in conjugate gradient algorithm when being used for prediction */
 		double cg_delta_conv_pred_ = 1e-3;
 		/*! \brief Number of samples when simulation is used for calculating predictive variances */
-		double nsim_var_pred_ = 1000;
-		/*! \brief Number of random vectors (e.g. Rademacher) for stochastic approximation of the trace of a matrix */
+		int nsim_var_pred_ = 1000;
+		/*! \brief Number of random vectors (e.g., Rademacher) for stochastic approximation of the trace of a matrix */
 		int num_rand_vec_trace_ = 50;
-		/*! \brief If true, random vectors (e.g. Rademacher) for stochastic approximation of the trace of a matrix are sampled only once at the beginning and then reused in later trace approximations, otherwise they are sampled everytime a trace is calculated */
+		/*! \brief If true, random vectors (e.g., Rademacher) for stochastic approximation of the trace of a matrix are sampled only once at the beginning of Newton's method for finding the mode in the Laplace approximation and are then reused in later trace approximations, otherwise they are sampled every time a trace is calculated */
 		bool reuse_rand_vec_trace_ = true;
-		/*! \brief Seed number to generate random vectors (e.g. Rademacher) */
+		/*! \brief Seed number to generate random vectors (e.g., Rademacher) */
 		int seed_rand_vec_trace_ = 1;
-		/*! \brief Type of preconditoner used for the conjugate gradient algorithm */
+		/*! \brief Type of preconditioner used for conjugate gradient algorithms */
 		string_t cg_preconditioner_type_;
-		/*! \brief List of supported preconditioners for the conjugate gradient algorithm for Gaussian likelihood */
+		/*! \brief List of supported preconditioners for conjugate gradient algorithms for Gaussian likelihood */
 		const std::set<string_t> SUPPORTED_CG_PRECONDITIONER_TYPE_GAUSS_{ "none" };
-		/*! \brief List of supported preconditioners for the conjugate gradient algorithm for non-Gaussian likelihoods */
-		const std::set<string_t> SUPPORTED_CG_PRECONDITIONER_TYPE_NONGAUSS_{ "none", "Sigma_inv_plus_BtWB", "piv_chol_on_Sigma" };
+		/*! \brief List of supported preconditioners for conjugate gradient algorithms for non-Gaussian likelihoods */
+		const std::set<string_t> SUPPORTED_CG_PRECONDITIONER_TYPE_NONGAUSS_{"Sigma_inv_plus_BtWB", "piv_chol_on_Sigma"};
 		/*! \brief true if 'cg_preconditioner_type_' has been set */
 		bool cg_preconditioner_type_has_been_set_ = false;
 		/*! \brief Rank of the pivoted Cholesky decomposition used as preconditioner in conjugate gradient algorithms */
@@ -4072,9 +4095,9 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 			if (!gauss_likelihood_) {
 				for (const auto& cluster_i : unique_clusters_) {
 					likelihood_[cluster_i]->SetMatrixInversionProperties(matrix_inversion_method_,
-						cg_max_num_it_, cg_max_num_it_tridiag_, cg_delta_conv_,
+						cg_max_num_it_, cg_max_num_it_tridiag_, cg_delta_conv_, cg_delta_conv_pred_,
 						num_rand_vec_trace_, reuse_rand_vec_trace_, seed_rand_vec_trace_,
-						cg_preconditioner_type_, piv_chol_rank_, rank_pred_approx_matrix_lanczos_);
+						cg_preconditioner_type_, piv_chol_rank_, rank_pred_approx_matrix_lanczos_, nsim_var_pred_);
 				}
 			}
 		}//end SetMatrixInversionPropertiesLikelihood
@@ -4614,7 +4637,7 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 				for (const auto& cluster_i : unique_clusters_) {
 					likelihood_[cluster_i]->InitializeModeAvec();
 				}
-				CalcModePostRandEff(fixed_effects);
+				CalcModePostRandEffCalcMLL(fixed_effects, false);
 			}
 		}//end RecalculateModeLaplaceApprox
 
@@ -4772,6 +4795,12 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 			int num_grad_cov_par = (int)nat_grad.size();
 			if (estimate_aux_pars_) {
 				num_grad_cov_par -= NumAuxPars();
+			}
+			if (it == 0) {
+				first_update_ = true;
+			}
+			else {
+				first_update_ = false;
 			}
 			for (int ih = 0; ih < MAX_NUMBER_LR_SHRINKAGE_STEPS_; ++ih) {
 				vec_t update(nat_grad.size());
@@ -5209,6 +5238,12 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 			double lr_coef = lr_coef_;
 			bool decrease_found = false;
 			bool halving_done = false;
+			if (it == 0){
+				first_update_ = true;
+			}
+			else {
+				first_update_ = false;
+			}
 			for (int ih = 0; ih < MAX_NUMBER_LR_SHRINKAGE_STEPS_; ++ih) {
 				beta_new = beta - lr_coef * grad;
 				// Apply Nesterov acceleration
@@ -5223,7 +5258,7 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 					EvalNegLogLikelihoodOnlyUpdateFixedEffects(sigma2, neg_log_likelihood_after_lin_coef_update_);
 				}//end if gauss_likelihood_
 				else {//non-Gaussian likelihoods
-					neg_log_likelihood_after_lin_coef_update_ = -CalcModePostRandEff(fixed_effects_vec.data());//calculate mode and approximate marginal likelihood
+					neg_log_likelihood_after_lin_coef_update_ = -CalcModePostRandEffCalcMLL(fixed_effects_vec.data(), true);//calculate mode and approximate marginal likelihood
 				}
 				// Safeguard against too large steps by halving the learning rate when the objective increases
 				if (neg_log_likelihood_after_lin_coef_update_ <= neg_log_likelihood_lag1_) {
@@ -5307,11 +5342,13 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 		}//end CalcCovMatrixNonGauss
 
 		/*!
-		* \brief Calculate the mode of the posterior of the latent random effects for use in the Laplace approximation. This function is only used for non-Gaussian likelihoods
+		* \brief Calculate the mode of the posterior of the latent random effects and the Laplace-approximated marginal log-likelihood. This function is only used for non-Gaussian likelihoods
 		* \param fixed_effects Fixed effects component of location parameter
+		* \param calc_mll If true the marginal log-likelihood is also calculated (only relevant for gp_approx_ == "vecchia" && matrix_inversion_method_ == "iterative")
 		* \return Approximate marginal log-likelihood evaluated at the mode
 		*/
-		double CalcModePostRandEff(const double* fixed_effects) {
+		double CalcModePostRandEffCalcMLL(const double* fixed_effects,
+			bool calc_mll) {
 			double mll = 0.;
 			double mll_cluster_i;
 			const double* fixed_effects_cluster_i_ptr = nullptr;
@@ -5330,12 +5367,21 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 					fixed_effects_cluster_i_ptr = fixed_effects_cluster_i.data();
 				}
 				if (gp_approx_ == "vecchia") {
+					den_mat_t Sigma_L_k;
+					if (matrix_inversion_method_ == "iterative" && cg_preconditioner_type_ == "piv_chol_on_Sigma") {
+						//Do pivoted Cholesky decomposition for Sigma
+						//TODO: only after cov-pars step, not after fixed-effect step
+						PivotedCholsekyFactorizationSigma(re_comps_[cluster_i][ind_intercept_gp_].get(), Sigma_L_k, piv_chol_rank_, num_data_per_cluster_[cluster_i], PIV_CHOL_STOP_TOL);
+					}
 					likelihood_[cluster_i]->FindModePostRandEffCalcMLLVecchia(y_[cluster_i].data(),
 						y_int_[cluster_i].data(),
 						fixed_effects_cluster_i_ptr,
 						num_data_per_cluster_[cluster_i],
 						B_[cluster_i],
 						D_inv_[cluster_i],
+						first_update_,
+						Sigma_L_k,
+						calc_mll,
 						mll_cluster_i);
 				}
 				else if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
@@ -5376,8 +5422,9 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 				}
 				mll += mll_cluster_i;
 			}
+			num_ll_evaluations_++;
 			return(mll);
-		}//CalcModePostRandEff
+		}//CalcModePostRandEffCalcMLL
 
 		/*!
 		* \brief Calculate matrices A and D_inv as well as their derivatives for the Vecchia approximation for one cluster (independent realization of GP)
@@ -5651,6 +5698,7 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 				}
 			}
 			covariance_matrix_has_been_factorized_ = true;
+			num_ll_evaluations_++;
 		}
 
 		/*!
@@ -6216,7 +6264,7 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 		* \param fixed_effects Fixed effects component of location parameter for observed data (only used for non-Gaussian likelihoods)
 		* \param predict_training_data_random_effects If true, the goal is to predict training data random effects
 		 */
-		void SetYCalcCovCalcYAux(const vec_t& cov_pars,
+		void SetYCalcCovCalcYAuxForPred(const vec_t& cov_pars,
 			const vec_t& coef,
 			const double* y_obs,
 			bool calc_cov_factor,
@@ -6292,14 +6340,14 @@ negll = yTPsiInvy_ / 2. / sigma2 + log_det_Psi_ / 2. + num_data_ / 2. * (std::lo
 							CalcSigmaComps();
 							CalcCovMatrixNonGauss();
 						}
-						CalcModePostRandEff(fixed_effects_ptr);
+						CalcModePostRandEffCalcMLL(fixed_effects_ptr, false);
 					}//end not gauss_likelihood_
 				}//end if calc_cov_factor
 				if (gauss_likelihood_) {
 					CalcYAux(1.);//note: in some cases a call to CalcYAux() could be avoided (e.g. no covariates and not GPBoost algorithm)...
 				}
 			}//end not (gp_approx_ == "vecchia" && gauss_likelihood_)
-		}// end SetYCalcCovCalcYAux
+		}// end SetYCalcCovCalcYAuxForPred
 
 		/*!
 		 * \brief Calculate predictions (conditional mean and covariance matrix) for one cluster

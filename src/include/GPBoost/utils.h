@@ -130,7 +130,7 @@ namespace GPBoost {
 		}
 	}//end SampleIntNoReplaceExcludeSomeIndices
 
-		/*!
+	/*!
 	* \brief Sample k integers from 0:(N-1) without replacement
 	*		Source: see https://www.nowherenearithaca.com/2013/05/robert-floyds-tiny-and-beautiful.html and https://stackoverflow.com/questions/28287138/c-randomly-sample-k-numbers-from-range-0n-1-n-k-without-replacement
 	* \param N Total number of integers from which to sample
@@ -152,6 +152,17 @@ namespace GPBoost {
 			}
 		}
 	}//end SampleIntNoReplace
+
+	/*! \brief Convert a dense matrix to a matrix of type T_mat (dense or sparse) */
+	template <class T_mat1, typename std::enable_if <std::is_same<sp_mat_t, T_mat1>::value ||
+		std::is_same<sp_mat_rm_t, T_mat1>::value>::type* = nullptr >
+	inline void ConvertTo_T_mat_FromDense(const den_mat_t M, T_mat1& Mout) {
+		Mout = M.sparseView();
+	};
+	template <class T_mat1, typename std::enable_if< std::is_same<den_mat_t, T_mat1>::value>::type* = nullptr  >
+	inline void ConvertTo_T_mat_FromDense(const den_mat_t M, T_mat1& Mout) {
+		Mout = M;
+	};
 
 }  // namespace GPBoost
 

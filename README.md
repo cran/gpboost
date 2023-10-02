@@ -17,30 +17,13 @@ This is the R package implementation of the GPBoost library. See https://github.
   * [Installation from CRAN](#installation-from-cran)
   * [Installation from source](#installation-from-source)
 * [Testing](#testing)
+* [Preparing a CRAN package](#preparing-a-cran-package)
 
 ## Examples
 
-* [**Detailed R examples**](https://github.com/fabsig/GPBoost/tree/master/R-package/demo):
-  * [GPBoost and LaGaBoost algorithms](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/GPBoost_algorithm.R) for Gaussian data ("regression") and non-Gaussian data ("classification", etc.) combining tree-boosting with Gaussian process and random effects models
+* [**R examples**](https://github.com/fabsig/GPBoost/tree/master/R-package/demo)
+  * [GPBoost / LaGaBoost algorithm](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/GPBoost_algorithm.R) for Gaussian ("regression") and non-Gaussian likelihoods (e.g., "classification", etc.)
   * [Generalized linear Gaussian process and mixed effects models](https://github.com/fabsig/GPBoost/blob/master/R-package/demo/generalized_linear_Gaussian_process_mixed_effects_models.R)
-* Blog posts on how to 
-   * [Combine tree-boosting with Gaussian processes for spatial data](https://towardsdatascience.com/tree-boosting-for-spatial-data-789145d6d97d)
-   * [GPBoost for generalized linear mixed effects models (GLMMs)](https://towardsdatascience.com/generalized-linear-mixed-effects-models-in-r-and-python-with-gpboost-89297622820c) 
-* [Demo](https://htmlpreview.github.io/?https://github.com/fabsig/GPBoost/blob/master/examples/GPBoost_demo.html) on how GPBoost can be used in R and Python
-
-This is also a short example:
-
-```r
-# Combine tree-boosting and grouped random effects model
-library(gpboost)
-data(GPBoost_data, package = "gpboost")
-gp_model <- GPModel(group_data = group_data)
-bst <- gpboost(data = X, label = y, gp_model = gp_model,
-               nrounds = 10, objective = "regression_l2")
-summary(gp_model)
-pred <- predict(bst, data = X_test, group_data_pred = group_data_test)
-pred$response_mean
-```
 
 ## Installation
 
@@ -138,3 +121,31 @@ There is currently no integration service set up that automatically runs unit te
 Sys.setenv(GPBOOST_ALL_TESTS = "GPBOOST_ALL_TESTS")
 ```
 before running the tests in the `R-package/tests/testthat` directory.
+
+## Preparing a CRAN package
+
+This section is primarily for maintainers, but may help users and contributors to understand the structure of the R package. Most of `GPBoost` uses `CMake` to handle tasks like setting compiler and linker flags, including header file locations, and linking to other libraries. Because CRAN packages typically do not assume the presence of `CMake`, the R package uses an alternative method that is in the CRAN-supported toolchain for building R packages with C++ code: `Autoconf`. For more information on this approach, see ["Writing R Extensions"](https://cran.r-project.org/doc/manuals/r-release/R-exts.html#Configure-and-cleanup).
+
+### Build a CRAN Package
+
+From the root of the repository, run the following:
+```shell
+sh build-cran-package.sh
+```
+
+This will create a file `gpboost_${VERSION}.tar.gz`, where `VERSION` is the version of `GPBoost`.
+
+### Installation of a CRAN package
+
+After building the package, you can install it with the following command:
+
+```shell
+R CMD INSTALL gpboost_*.tar.gz
+```
+
+### Testing a CRAN package
+
+After building the package, you can test the CRAN package as follows:
+```shell
+R CMD check --as-cran gpboost_*.tar.gz
+```
