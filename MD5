@@ -1,4 +1,4 @@
-e064b8d5f278a15eccf1b617c00bf2cb *DESCRIPTION
+f9830de132bd94f866e1d12c040abb1f *DESCRIPTION
 62aa7e7a29985341875a00e6ac33d872 *LICENSE
 37012b97c9fe1c7e1b392217d4f5c6f7 *NAMESPACE
 2cd90d3a919a64b9b3b083f11745303e *R/GPModel.R
@@ -23,8 +23,8 @@ e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 21dac1d955139f4c08cbff5d3e033ba3 *R/utils.R
 300550972332bcd0107d0355988a460d *README.md
 6071edd604dbeb75308cfbedc7790398 *cleanup
-e67427e1995fb6b4d29efc2563829e70 *configure
-20cb61cfb7f73ba2300bcab4b5a5cdd0 *configure.ac
+b7ad5ee5480290e5b12cc76e4881e681 *configure
+530c3d2f69169532834e6a8758020712 *configure.ac
 143395cafb571049ffb58af627304dea *configure.win
 0276a7e04cef5f86e4146107bfb24e98 *data/GPBoost_data.RData
 05e29359ef24243df589703588987c0e *data/agaricus.test.rda
@@ -439,7 +439,7 @@ c2c96628d2be989f2809f8d90919c483 *src/include/Eigen/src/plugins/MatrixCwiseUnary
 3294d923d2457243a7b579c651e68b4c *src/include/GPBoost/GP_utils.h
 dbf69b400e4ceff9cc16cedf1adc5fcf *src/include/GPBoost/Vecchia_utils.h
 6aa900b9fdb203d12b47a4da91fe4adb *src/include/GPBoost/cov_fcts.h
-f60e9402b13cf83f9bd566c375fd4e85 *src/include/GPBoost/likelihoods.h
+5f5d9732de862752a8a866936e0540c3 *src/include/GPBoost/likelihoods.h
 95a8d5d8eb149a7fa5b83858c90ef481 *src/include/GPBoost/re_comp.h
 ef648b6649d61cc87600b552e60df16f *src/include/GPBoost/re_model.h
 ac1e416bc341eee0a6c0199e4d995092 *src/include/GPBoost/re_model_template.h
