@@ -26,6 +26,37 @@
 
 #define COL_MAJOR (0)
 
+//#define MAX_LENGTH_ERR_MSG 1024
+//char R_errmsg_buffer[MAX_LENGTH_ERR_MSG];
+//struct LGBM_R_ErrorClass { SEXP cont_token; };
+//void LGBM_R_save_exception_msg(const std::exception& err);
+//void LGBM_R_save_exception_msg(const std::string& err);
+//
+//#define R_API_BEGIN() \
+//  try {
+//#define R_API_END() } \
+//  catch(LGBM_R_ErrorClass &cont) { R_ContinueUnwind(cont.cont_token); } \
+//  catch(std::exception& ex) { LGBM_R_save_exception_msg(ex); } \
+//  catch(std::string& ex) { LGBM_R_save_exception_msg(ex); } \
+//  catch(...) { Rf_error("unknown exception"); } \
+//  Rf_error("%s", R_errmsg_buffer); \
+//  return R_NilValue; /* <- won't be reached */
+//
+//#define CHECK_CALL(x) \
+//  if ((x) != 0) { \
+//    throw std::runtime_error(LGBM_GetLastError()); \
+//  }
+//
+//// These are helper functions to allow doing a stack unwind
+//// after an R allocation error, which would trigger a long jump.
+//void LGBM_R_save_exception_msg(const std::exception& err) {
+//	std::snprintf(R_errmsg_buffer, MAX_LENGTH_ERR_MSG, "%s\n", err.what());
+//}
+//
+//void LGBM_R_save_exception_msg(const std::string& err) {
+//	std::snprintf(R_errmsg_buffer, MAX_LENGTH_ERR_MSG, "%s\n", err.c_str());
+//}
+
 #define R_API_BEGIN() \
   try {
 #define R_API_END() } \
@@ -35,7 +66,7 @@
 
 #define CHECK_CALL(x) \
   if ((x) != 0) { \
-    Rf_error(LGBM_GetLastError()); \
+    Rf_error("%s", LGBM_GetLastError()); \
   }
 
 using LightGBM::Common::Split;

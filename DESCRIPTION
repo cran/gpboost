@@ -2,8 +2,8 @@ Package: gpboost
 Type: Package
 Title: Combining Tree-Boosting with Gaussian Process and Mixed Effects
         Models
-Version: 1.2.6
-Date: 2023-10-24
+Version: 1.2.7
+Date: 2023-11-29
 Authors@R: c(
 	person("Fabio", "Sigrist", email = "fabiosigrist@gmail.com", role = c("aut", "cre")),
     person("Pascal", "Kuendig", role = c("aut")),
@@ -45,7 +45,7 @@ Imports: data.table (>= 1.9.6), graphics, RJSONIO, Matrix (>= 1.1-0),
         methods, utils
 SystemRequirements: C++17
 RoxygenNote: 6.0.1
-Packaged: 2023-10-24 07:39:56 UTC; whsigris
+Packaged: 2023-11-29 15:57:14 UTC; whsigris
 Author: Fabio Sigrist [aut, cre],
   Pascal Kuendig [aut],
   Benoit Jacob [cph],
@@ -74,4 +74,4 @@ Author: Fabio Sigrist [aut, cre],
   Stephen L. Moshier [cph]
 Maintainer: Fabio Sigrist <fabiosigrist@gmail.com>
 Repository: CRAN
-Date/Publication: 2023-10-24 08:10:02 UTC
+Date/Publication: 2023-11-29 16:20:02 UTC
