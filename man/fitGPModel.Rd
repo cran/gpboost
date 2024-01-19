@@ -10,7 +10,8 @@ fitGPModel(likelihood = "gaussian", group_data = NULL,
   gp_rand_coef_data = NULL, cov_function = "exponential",
   cov_fct_shape = 0.5, gp_approx = "none", cov_fct_taper_range = 1,
   cov_fct_taper_shape = 0, num_neighbors = 20L,
-  vecchia_ordering = "random", num_ind_points = 500L,
+  vecchia_ordering = "random", ind_points_selection = "kmeans++",
+  num_ind_points = 500L, cover_tree_radius = 1,
   matrix_inversion_method = "cholesky", seed = 0L, cluster_ids = NULL,
   free_raw_data = FALSE, y, X = NULL, params = list(),
   vecchia_approx = NULL, vecchia_pred_type = NULL,
@@ -23,8 +24,9 @@ Available options:
 \item{ "gaussian" }
 \item{ "bernoulli_probit": binary data with Bernoulli likelihood and a probit link function }
 \item{ "bernoulli_logit": binary data with Bernoulli likelihood and a logit link function }
-\item{ "gamma" }
-\item{ "poisson" }
+\item{ "gamma": gamma distribution with a with log link function }
+\item{ "poisson": Poisson distribution with a with log link function }
+\item{ "negative_binomial": negative binomial distribution with a with log link function }
 }}
 
 \item{group_data}{A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
@@ -56,12 +58,16 @@ Gaussian process random coefficients}
 
 \item{cov_function}{A \code{string} specifying the covariance function for the Gaussian process. 
 Available options:
-"exponential", "gaussian", "matern", "powered_exponential", "wendland"
 \itemize{
-\item{ For "exponential", "gaussian", and "powered_exponential", 
-we use parametrization of Diggle and Ribeiro (2007) }
-\item{ For "matern", we use the parametrization of Rasmussen and Williams (2006) }
-\item{ For "wendland", we use the parametrization of Bevilacqua et al. (2019, AOS) }
+\item{"exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+\item{"gaussian": Gaussian, aka squared expnential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+\item{ "matern": Matern covariance function with the smoothness specified by 
+the \code{cov_fct_shape} parameter (using the parametrization of Rasmussen and Williams, 2006) }
+\item{"powered_exponential": powered exponential covariance function with the exponent specified by 
+the \code{cov_fct_shape} parameter (using the parametrization of Diggle and Ribeiro, 2007) }
+\item{ "wendland": Compactly supported Wendland covariance function (using the parametrization of Bevilacqua et al., 2019, AOS) }
+\item{ "matern_space_time": Spatio-temporal Matern covariance function with different range parameters for space and time. 
+Note that the first column in \code{gp_coords} must correspond to the time dimension }
 }}
 
 \item{cov_fct_shape}{A \code{numeric} specifying the shape parameter of the covariance function 
@@ -72,9 +78,14 @@ This parameter is irrelevant for some covariance functions such as the exponenti
 for Gaussian processes. Available options: 
 \itemize{
 \item{"none": No approximation }
-\item{"vecchia": A Vecchia approximation; see Sigrist (2022, JMLR for more details) }
+\item{"vecchia": A Vecchia approximation; see Sigrist (2022, JMLR) for more details }
 \item{"tapering": The covariance function is multiplied by 
 a compactly supported Wendland correlation function }
+\item{"fitc": Fully Independent Training Conditional approximation aka 
+modified predictive process approximation; see Gyger, Furrer, and Sigrist (2024) for more details }
+\item{"full_scale_tapering": A full scale approximation combining an 
+inducing point / predictive process approximation with tapering on the residual process; 
+see Gyger, Furrer, and Sigrist (2024) for more details }
 }}
 
 \item{cov_fct_taper_range}{A \code{numeric} specifying the range parameter 
@@ -97,10 +108,24 @@ the Vecchia approximation. Available options:
 \itemize{
 \item{"none": the default ordering in the data is used }
 \item{"random": a random ordering }
+\item{"time": ordering accorrding to time (only for space-time models) }
+\item{"time_random_space": ordering according to time and randomly for all 
+spatial points with the same time points (only for space-time models) }
+}}
+
+\item{ind_points_selection}{A \code{string} specifying the method for choosing inducing points
+Available options:
+\itemize{
+\item{"kmeans++: the k-means++ algorithm }
+\item{"cover_tree": the cover tree algorithm }
+\item{"random": random selection from data points }
 }}
 
 \item{num_ind_points}{An \code{integer} specifying the number of inducing 
 points / knots for, e.g., a predictive process approximation}
+
+\item{cover_tree_radius}{A \code{numeric} specifying the radius (= "spatial resolution") 
+for the cover tree algorithm}
 
 \item{matrix_inversion_method}{A \code{string} specifying the method used for inverting covariance matrices. 
 Available options:
@@ -154,7 +179,16 @@ fixed effects linear regression term (if there is one)}
     Initial values for the regression coefficients (if there are any, can be NULL) }
     \item{init_cov_pars: \code{vector} with \code{numeric} elements (default = NULL). 
     Initial values for covariance parameters of Gaussian process and 
-    random effects (can be NULL) }
+    random effects (can be NULL). The order it the same as the order 
+    of the parameters in the summary function: first is the error variance 
+    (only for "gaussian" likelihood), next follow the variances of the 
+    grouped random effects (if there are any, in the order provided in 'group_data'), 
+    and then follow the marginal variance and the range of the Gaussian process. 
+    If there are multiple Gaussian processes, then the variances and ranges follow alternatingly.
+    If 'init_cov_pars = NULL', an internal choice is used that depends on the 
+    likelihood and the random effects type and covariance function. 
+    If you select the option 'trace = TRUE' in the 'params' argument, 
+    you will see the first initial covariance parameters in iteration 0. }
     \item{lr_coef: \code{numeric} (default = 0.1). 
     Learning rate for fixed effect regression coefficients if gradient descent is used }
     \item{lr_cov: \code{numeric} (default = 0.1 for "gradient_descent" and 1. for "fisher_scoring"). 
@@ -181,10 +215,10 @@ fixed effects linear regression term (if there is one)}
     square root of diagonal of a numerically approximated inverse Hessian for non-Gaussian likelihoods) }
     \item{init_aux_pars: \code{vector} with \code{numeric} elements (default = NULL). 
     Initial values for additional parameters for non-Gaussian likelihoods 
-    (e.g., shape parameter of gamma likelihood) }
+    (e.g., shape parameter of a gamma or negative_binomial likelihood) }
     \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
     If TRUE, additional parameters for non-Gaussian likelihoods 
-    are also estimated (e.g., shape parameter of gamma likelihood) }
+    are also estimated (e.g., shape parameter of a gamma or negative_binomial likelihood) }
     \item{cg_max_num_it: \code{integer} (default = 1000). 
     Maximal number of iterations for conjugate gradient algorithms }
     \item{cg_max_num_it_tridiag: \code{integer} (default = 1000). 
@@ -206,16 +240,22 @@ fixed effects linear regression term (if there is one)}
     \item{piv_chol_rank: \code{integer} (default = 50). 
     Rank of the pivoted Cholesky decomposition used as 
     preconditioner in conjugate gradient algorithms }
-    \item{cg_preconditioner_type: \code{string} 
-    (default = "Sigma_inv_plus_BtWB" for non-Gaussian likelihoods and a Vecchia-Laplace approximation). 
+    \item{cg_preconditioner_type: \code{string}.
     Type of preconditioner used for conjugate gradient algorithms.
-    Options for non-Gaussian likelihoods and a Vecchia-Laplace approximation: 
     \itemize{
-      \item{"piv_chol_on_Sigma": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
+      \item Options for non-Gaussian likelihoods and gp_approx = "vecchia": 
+        \itemize{
+          \item{"piv_chol_on_Sigma" (= default): (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
       where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
-      \item{"Sigma_inv_plus_BtWB": (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
+          \item{"Sigma_inv_plus_BtWB": (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
       where B^T * D^-1 * B approx= Sigma^-1 }
-     }
+      }
+      \item Options for likelihood = "gaussian" and gp_approx = "full_scale_tapering": 
+        \itemize{
+          \item{"predictive_process_plus_diagonal" (= default): predictive process preconditiioner }
+          \item{"none": no preconditioner }
+      }
+    }
    }
 }}
 

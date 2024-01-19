@@ -126,11 +126,12 @@ namespace GPBoost {
 		/*!
 		* \brief This is only used for the class RECompGP and not for other derived classes. It is here in order that the base class can have this as a virtual method and no conversion needs to be made in the Vecchia approximation calculation (slightly a hack)
 		*/
-		virtual void CalcSigmaAndSigmaGrad(const den_mat_t& dist,
+		virtual void CalcSigmaAndSigmaGradVecchia(const den_mat_t& dist,
+			const den_mat_t& coords,
+			const den_mat_t& coords_pred,
 			den_mat_t& cov_mat,
-			den_mat_t& cov_grad_1,
-			den_mat_t& cov_grad_2, 
-			bool calc_gradient, 
+			den_mat_t* cov_grad,
+			bool calc_gradient,
 			bool transf_scale,
 			double nugget_var,
 			bool is_symmmetric) const = 0;
@@ -165,7 +166,7 @@ namespace GPBoost {
 		*/
 		void AddPredUncondVar(double* pred_uncond_var,
 			int num_data_pred,
-			const double* const rand_coef_data_pred = nullptr) const {
+			const double* const rand_coef_data_pred) const {
 			if (this->is_rand_coef_) {
 #pragma omp for schedule(static)
 				for (int i = 0; i < num_data_pred; ++i) {
@@ -182,6 +183,15 @@ namespace GPBoost {
 
 		bool IsRandCoef() const {
 			return(is_rand_coef_);
+		}
+
+		const std::vector<double>& RandCoefData() const {
+			CHECK(is_rand_coef_);
+			return(rand_coef_data_);
+		}
+
+		const vec_t& CovPars() const {
+			return(cov_pars_);
 		}
 
 	protected:
@@ -380,7 +390,7 @@ namespace GPBoost {
 		* \param[out] pars Vector of length 1 with variance of the grouped random effect
 		* \param marginal_variance Initial value for marginal variance
 		*/
-		void FindInitCovPar(RNG_t&, 
+		void FindInitCovPar(RNG_t&,
 			vec_t& pars,
 			double marginal_variance) const override {
 			pars[0] = marginal_variance;
@@ -429,7 +439,7 @@ namespace GPBoost {
 		* \return Derivative of covariance matrix Z*Sigma*Z^T with respect to the parameter number ind_par
 		*/
 		std::shared_ptr<T_mat> GetZSigmaZtGrad(int ind_par,
-			bool transf_scale, 
+			bool transf_scale,
 			double) const override {
 			if (this->cov_pars_.size() == 0) {
 				Log::REFatal("Covariance parameters are not specified. Call 'SetCovPars' first.");
@@ -630,15 +640,15 @@ namespace GPBoost {
 		}
 
 		// Ignore this. This is not used for this class (it is only used for the class RECompGP). It is here in order that the base class can have this as a virtual method and no conversion needs to be made in the Vecchia approximation calculation (slightly a hack)
-		void CalcSigmaAndSigmaGrad(const den_mat_t&,
+		void CalcSigmaAndSigmaGradVecchia(const den_mat_t&,
+			const den_mat_t&,
+			const den_mat_t&,
 			den_mat_t&,
-			den_mat_t&,
-			den_mat_t&,
+			den_mat_t*,
 			bool,
 			bool,
 			double,
 			bool) const override {
-
 		}
 
 		data_size_t GetNumUniqueREs() const override {
@@ -657,7 +667,7 @@ namespace GPBoost {
 
 		/*! \brief Constructs the matrix ZZt_ if sparse matrices are used */
 		template <class T3, typename std::enable_if <std::is_same<sp_mat_t, T3>::value ||
-			std::is_same<sp_mat_rm_t, T3>::value>::type * = nullptr >
+			std::is_same<sp_mat_rm_t, T3>::value>::type* = nullptr >
 		void ConstructZZt() {
 			if (this->has_Z_) {
 				ZZt_ = this->Z_ * this->Z_.transpose();
@@ -670,7 +680,7 @@ namespace GPBoost {
 		}
 
 		/*! \brief Constructs the matrix ZZt_ if dense matrices are used */
-		template <class T3, typename std::enable_if <std::is_same<den_mat_t, T3>::value>::type * = nullptr >
+		template <class T3, typename std::enable_if <std::is_same<den_mat_t, T3>::value>::type* = nullptr >
 		void ConstructZZt() {
 			if (this->has_Z_) {
 				ZZt_ = den_mat_t(this->Z_ * this->Z_.transpose());
@@ -689,7 +699,7 @@ namespace GPBoost {
 		* \param[out] Z1Z2T Matrix Z1*Z2^T
 		*/
 		template <class T3, typename std::enable_if <std::is_same<sp_mat_t, T3>::value ||
-			std::is_same<sp_mat_rm_t, T3>::value>::type * = nullptr >
+			std::is_same<sp_mat_rm_t, T3>::value>::type* = nullptr >
 		void CalculateZ1Z2T(sp_mat_t& Z1, sp_mat_t& Z2, T3& Z1Z2T) {
 			Z1Z2T = Z1 * Z2.transpose();
 		}
@@ -700,7 +710,7 @@ namespace GPBoost {
 		* \param Z2 Matrix
 		* \param[out] Z1Z2T Matrix Z1*Z2^T
 		*/
-		template <class T3, typename std::enable_if <std::is_same<den_mat_t, T3>::value>::type * = nullptr >
+		template <class T3, typename std::enable_if <std::is_same<den_mat_t, T3>::value>::type* = nullptr >
 		void CalculateZ1Z2T(sp_mat_t& Z1, sp_mat_t& Z2, T3& Z1Z2T) {
 			Z1Z2T = den_mat_t(Z1 * Z2.transpose());
 		}
@@ -730,9 +740,9 @@ namespace GPBoost {
 		* \param taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param apply_tapering If true, tapering is applied to the covariance function (element-wise multiplication with a compactly supported Wendland correlation function)
 		* \param apply_tapering_manually If true, tapering is applied to the covariance function manually and not directly in 'CalcSigma'
-		* \param save_dist If true, distances are calculated and saved here
+		* \param save_dist If true, distances are calculated and saved here.
+		*					save_dist = false is used for the Vecchia approximation which saves the required distances in the REModel (REModelTemplate)
 		* \param use_Z_for_duplicates If true, an incidendce matrix Z_ is used for duplicate locations
-		*           use_Z_for_duplicates = false is used for the Vecchia approximation which saves the required distances in the REModel (REModelTemplate)
 		* \param save_random_effects_indices_of_data_and_no_Z If true a vector random_effects_indices_of_data_, which relates random effects b to samples Zb, is used (the matrix Z_ is then not constructed)
 		*           save_random_effects_indices_of_data_and_no_Z = true is currently only used when doing calculations on the random effects scale b and not on the "data scale" Zb for non-Gaussian data
 		*			This option can only be selected when save_dist_use_Z_for_duplicates = true
@@ -749,9 +759,6 @@ namespace GPBoost {
 			bool save_random_effects_indices_of_data_and_no_Z) {
 			if (save_random_effects_indices_of_data_and_no_Z && !use_Z_for_duplicates) {
 				Log::REFatal("RECompGP: 'use_Z_for_duplicates' cannot be 'false' when 'save_random_effects_indices_of_data_and_no_Z' is 'true'");
-			}
-			if (use_Z_for_duplicates && !save_dist) {
-				Log::REFatal("RECompGP: 'save_dist' cannot be 'false' when 'use_Z_for_duplicates' is 'true'");
 			}
 			this->num_data_ = (data_size_t)coords.rows();
 			this->is_rand_coef_ = false;
@@ -773,7 +780,7 @@ namespace GPBoost {
 				}
 				std::vector<int> uniques;//unique points
 				std::vector<int> unique_idx;//used for constructing incidence matrix Z_ if there are duplicates
-				DetermineUniqueDuplicateCoords(coords, this->num_data_, uniques, unique_idx);
+				DetermineUniqueDuplicateCoordsFast(coords, this->num_data_, uniques, unique_idx);
 				if ((data_size_t)uniques.size() == this->num_data_) {//no multiple observations at the same locations -> no incidence matrix needed
 					coords_ = coords;
 				}
@@ -802,7 +809,7 @@ namespace GPBoost {
 				coords_ = coords;
 				num_random_effects_ = (data_size_t)coords_.rows();
 			}
-			if (save_dist) {
+			if (save_dist && cov_function_->ShouldSaveDistances()) {
 				//Calculate distances
 				T_mat dist;
 				if (has_compact_cov_fct_) {//compactly suported covariance
@@ -961,6 +968,29 @@ namespace GPBoost {
 		~RECompGP() {
 		}
 
+		/*! \brief Dimension of coordinates */
+		int GetDimCoords() const {
+			CHECK(coord_saved_);
+			return(coords_.cols());
+		}
+
+		/*! \brief Dimension of spatial coordinates in for space-time models*/
+		int GetDimSpace() const {
+			CHECK(coord_saved_);
+			return(cov_function_->GetDimSpace(coords_));
+		}
+
+		/*!
+		* \brief True if distances should be saved (in re_model_template or here) depending on the covariance function. If false, neighbors are selected dynamically based on scaled distances for the Vecchia approximation
+		*/
+		bool ShouldSaveDistances() const {
+			return(cov_function_->ShouldSaveDistances());
+		}
+
+		bool IsSpaceTimeModel() const {
+			return(cov_function_->IsSpaceTimeModel());
+		}
+
 		/*!
 		* \brief Create and adds the matrix Z_
 		*			Note: this is currently only used when changing the likelihood in the re_model
@@ -1042,7 +1072,7 @@ namespace GPBoost {
 			if (!dist_saved_ && !coord_saved_) {
 				Log::REFatal("Cannot determine initial covariance parameters if neither distances nor coordinates are given");
 			}
-			cov_function_->FindInitCovPar<T_mat>(*dist_, coords_, dist_saved_, rng,  pars, marginal_variance);
+			cov_function_->FindInitCovPar<T_mat>(*dist_, coords_, dist_saved_, rng, pars, marginal_variance);
 		}//end FindInitCovPar
 
 		/*!
@@ -1050,7 +1080,7 @@ namespace GPBoost {
 		*/
 		void CalcSigma() override {
 			if (this->cov_pars_.size() == 0) { Log::REFatal("Covariance parameters are not specified. Call 'SetCovPars' first."); }
-			cov_function_->GetCovMat<T_mat>(*dist_, this->cov_pars_, sigma_, sigma_symmetric_);
+			cov_function_->GetCovMat<T_mat>(*dist_, coords_, coords_, this->cov_pars_, sigma_, sigma_symmetric_);
 			sigma_defined_ = true;
 			if (apply_tapering_) {
 				tapering_has_been_applied_ = false;
@@ -1058,6 +1088,35 @@ namespace GPBoost {
 					ApplyTaper();
 				}
 			}
+		}
+
+		/*!
+		* \brief Subtract the predicitive process covariance matrix to get the residual covariance matrix in the full scale approximation with tapering
+		* \param sigma_ip_Ihalf_sigma_cross_cov Matrix (sigma_{IP}^{-0.5}Sigma_{cros_cov}^T
+		*/
+		void SubtractPredProcFromSigmaForResidInFullScale(const den_mat_t& sigma_ip_Ihalf_sigma_cross_cov,
+			const bool only_triangular) {
+			CHECK(sigma_defined_);
+			SubtractInnerProdFromMat<T_mat>(sigma_, sigma_ip_Ihalf_sigma_cross_cov, only_triangular);
+		}
+
+		/*!
+		* \brief Subtract matrix to get the residual covariance matrix in the full scale approximation with tapering
+		* \param M Matrix sigma_cross_cov * sigma_ip^-1 * sigma_cross_cov
+		*/
+		void SubtractMatFromSigmaForResidInFullScale(const den_mat_t& M) {
+			CHECK(sigma_defined_);
+			SubtractMatFromMat<T_mat>(sigma_, M);
+		}
+
+		/*!
+		* \brief Add a constant to the diagonal of the covariamce matrix
+		* \param c Constant which is added
+		*/
+		void AddConstantToDiagonalSigma(const double c) {
+			CHECK(sigma_defined_);
+			CHECK(c >= 0.);
+			sigma_.diagonal().array() += c;
 		}
 
 		/*!
@@ -1077,7 +1136,7 @@ namespace GPBoost {
 		* \param sigma Covariance matrix to which tapering is applied
 		*/
 		void ApplyTaper(const T_mat& dist,
-			T_mat sigma) {
+			T_mat& sigma) {
 			CHECK(apply_tapering_);
 			cov_function_->MultiplyWendlandCorrelationTaper<T_mat>(dist, sigma, false);
 		}
@@ -1110,50 +1169,14 @@ namespace GPBoost {
 				Log::REFatal("The function 'GetZSigmaZtij' is currently not implemented when 'has_Z_' is true.");
 			}
 			if (this->cov_pars_.size() == 0) { Log::REFatal("Covariance parameters are not specified. Call 'SetCovPars' first."); }
+			CHECK(i >= 0);
+			CHECK(j >= 0);
+			CHECK(i < num_random_effects_);
+			CHECK(j < num_random_effects_);
 			double dij = (this->coords_(i, Eigen::all) - this->coords_(j, Eigen::all)).template lpNorm<2>();
 			double covij;
 			cov_function_->GetCovMat(dij, this->cov_pars_, covij);
 			return(covij);
-		}
-
-		/*!
-		* \brief Calculate covariance matrix and gradients with respect to covariance parameters (used for Vecchia approx.)
-		* \param dist Distance matrix
-		* \param[out] cov_mat Covariance matrix Z*Sigma*Z^T
-		* \param[out] cov_grad_1 Gradient of covariance matrix with respect to marginal variance parameter
-		* \param[out] cov_grad_2 Gradient of covariance matrix with respect to range parameter
-		* \param calc_gradient If true, gradients are also calculated, otherwise not
-		* \param transf_scale If true, the derivative are calculated on the transformed scale otherwise on the original scale. Default = true
-		* \param nugget_var Nugget effect variance parameter sigma^2 (used only if transf_scale = false to transform back)
-		* \param is_symmmetric Set to true if dist and cov_mat are symmetric
-		*/
-		void CalcSigmaAndSigmaGrad(const den_mat_t& dist,
-			den_mat_t& cov_mat,
-			den_mat_t& cov_grad_1,
-			den_mat_t& cov_grad_2,
-			bool calc_gradient,
-			bool transf_scale,
-			double nugget_var,
-			bool is_symmmetric) const override {
-			if (this->cov_pars_.size() == 0) { Log::REFatal("Covariance parameters are not specified. Call 'SetCovPars' first."); }
-			cov_function_->GetCovMat<den_mat_t>(dist, this->cov_pars_, cov_mat, is_symmmetric);
-			if (apply_tapering_ && !apply_tapering_manually_) {
-				cov_function_->MultiplyWendlandCorrelationTaper<den_mat_t>(dist, cov_mat, is_symmmetric);
-			}
-			if (calc_gradient) {
-				//gradient wrt to variance parameter
-				cov_grad_1 = cov_mat;
-				if (!transf_scale) {
-					cov_grad_1 /= this->cov_pars_[0];
-				}
-				if (cov_function_->cov_fct_type_ != "wendland") {
-					//gradient wrt to range parameter
-					cov_function_->GetCovMatGradRange<den_mat_t>(dist, cov_mat, this->cov_pars_, cov_grad_2, transf_scale, nugget_var);
-				}
-			}
-			if (!transf_scale) {
-				cov_mat *= nugget_var;//transform back to original scale
-			}
 		}
 
 		/*!
@@ -1166,11 +1189,10 @@ namespace GPBoost {
 		std::shared_ptr<T_mat> GetZSigmaZtGrad(int ind_par,
 			bool transf_scale,
 			double nugget_var) const override {
+			CHECK(ind_par >= 0);
+			CHECK(ind_par < this->num_cov_par_);
 			if (!sigma_defined_) {
 				Log::REFatal("Sigma has not been calculated");
-			}
-			if (ind_par != 0 && ind_par != 1) {
-				Log::REFatal("No covariance parameter for index number %d", ind_par);
 			}
 			if (ind_par == 0) {//variance
 				if (transf_scale) {
@@ -1186,18 +1208,63 @@ namespace GPBoost {
 					}
 				}
 			}
-			else {//inverse range (ind_par == 1)
+			else {//inverse range parameters
 				CHECK(cov_function_->cov_fct_type_ != "wendland");
 				T_mat Z_sigma_grad_Zt;
 				if (this->has_Z_) {
 					T_mat sigma_grad;
-					cov_function_->GetCovMatGradRange<T_mat>(*dist_, sigma_, this->cov_pars_, sigma_grad, transf_scale, nugget_var);
+					cov_function_->GetCovMatGradRange<T_mat>(*dist_, coords_, coords_, sigma_, this->cov_pars_, sigma_grad, transf_scale, nugget_var, ind_par - 1, true);
 					Z_sigma_grad_Zt = this->Z_ * sigma_grad * this->Z_.transpose();
 				}
 				else {
-					cov_function_->GetCovMatGradRange<T_mat>(*dist_, sigma_, this->cov_pars_, Z_sigma_grad_Zt, transf_scale, nugget_var);
+					cov_function_->GetCovMatGradRange<T_mat>(*dist_, coords_, coords_, sigma_, this->cov_pars_, Z_sigma_grad_Zt, transf_scale, nugget_var, ind_par - 1, true);
 				}
 				return(std::make_shared<T_mat>(Z_sigma_grad_Zt));
+			}
+		}//end GetZSigmaZtGrad
+
+		/*!
+		* \brief Calculate covariance matrix and gradients with respect to covariance parameters (used for Vecchia approx.)
+		* \param dist Distance matrix
+		* \param coords Coordinate matrix
+		* \param coords_pred Second set of coordinates for predictions
+		* \param[out] cov_mat Covariance matrix Z*Sigma*Z^T
+		* \param[out] cov_grad Gradient of covariance matrix with respect to parameters (marginal variance parameter, then range parameters)
+		* \param calc_gradient If true, gradients are also calculated, otherwise not
+		* \param transf_scale If true, the derivative are calculated on the transformed scale otherwise on the original scale. Default = true
+		* \param nugget_var Nugget effect variance parameter sigma^2 (used only if transf_scale = false to transform back)
+		* \param is_symmmetric Set to true if dist and cov_mat are symmetric
+		*/
+		void CalcSigmaAndSigmaGradVecchia(const den_mat_t& dist,
+			const den_mat_t& coords,
+			const den_mat_t& coords_pred,
+			den_mat_t& cov_mat,
+			den_mat_t* cov_grad,
+			bool calc_gradient,
+			bool transf_scale,
+			double nugget_var,
+			bool is_symmmetric) const override {
+			if (this->cov_pars_.size() == 0) { Log::REFatal("Covariance parameters are not specified. Call 'SetCovPars' first."); }
+			cov_function_->GetCovMat<den_mat_t>(dist, coords, coords_pred, this->cov_pars_, cov_mat, is_symmmetric);
+			if (apply_tapering_ && !apply_tapering_manually_) {
+				cov_function_->MultiplyWendlandCorrelationTaper<den_mat_t>(dist, cov_mat, is_symmmetric);
+			}
+			if (calc_gradient) {
+				//gradient wrt to variance parameter
+				cov_grad[0] = cov_mat;
+				if (!transf_scale) {
+					cov_grad[0] /= this->cov_pars_[0];
+				}
+				if (cov_function_->cov_fct_type_ != "wendland") {
+					//gradient wrt to range parameters
+					for (int ipar = 1; ipar < this->num_cov_par_; ++ipar) {
+						cov_function_->GetCovMatGradRange<den_mat_t>(dist, coords, coords_pred, cov_mat, this->cov_pars_,
+							cov_grad[ipar], transf_scale, nugget_var, ipar - 1, is_symmmetric);
+					}
+				}
+			}
+			if (!transf_scale) {
+				cov_mat *= nugget_var;//transform back to original scale
 			}
 		}
 
@@ -1238,7 +1305,7 @@ namespace GPBoost {
 			std::vector<int>  unique_idx_pred;//used for constructing incidence matrix Z_ if there are duplicates
 			bool has_duplicates, has_Zstar;
 			if (!has_compact_cov_fct_) {
-				DetermineUniqueDuplicateCoords(coords_pred, num_data_pred, uniques_pred, unique_idx_pred);
+				DetermineUniqueDuplicateCoordsFast(coords_pred, num_data_pred, uniques_pred, unique_idx_pred);
 				has_duplicates = (int)uniques_pred.size() != num_data_pred;
 				has_Zstar = has_duplicates || this->is_rand_coef_;
 			}
@@ -1293,7 +1360,7 @@ namespace GPBoost {
 				T_mat ZstarSigmatildeTZT;
 				if (has_Zstar || this->has_Z_) {
 					T_mat Sigmatilde;
-					cov_function_->GetCovMat<T_mat>(cross_dist, this->cov_pars_, Sigmatilde, false);
+					cov_function_->GetCovMat<T_mat>(cross_dist, coords, coords_pred, this->cov_pars_, Sigmatilde, false);
 					if (apply_tapering_ && !apply_tapering_manually_) {
 						cov_function_->MultiplyWendlandCorrelationTaper<T_mat>(cross_dist, Sigmatilde, false);
 					}
@@ -1308,7 +1375,7 @@ namespace GPBoost {
 					}
 				}//end has_Zstar || this->has_Z_
 				else { //no Zstar and no Z_
-					cov_function_->GetCovMat<T_mat>(cross_dist, this->cov_pars_, ZstarSigmatildeTZT, false);
+					cov_function_->GetCovMat<T_mat>(cross_dist, coords, coords_pred, this->cov_pars_, ZstarSigmatildeTZT, false);
 					if (apply_tapering_ && !apply_tapering_manually_) {
 						cov_function_->MultiplyWendlandCorrelationTaper<T_mat>(cross_dist, ZstarSigmatildeTZT, false);
 					}
@@ -1331,14 +1398,14 @@ namespace GPBoost {
 				T_mat ZstarSigmastarZstarT;
 				if (has_Zstar) {
 					T_mat Sigmastar;
-					cov_function_->GetCovMat<T_mat>(dist, this->cov_pars_, Sigmastar, true);
+					cov_function_->GetCovMat<T_mat>(dist, coords_pred, coords_pred, this->cov_pars_, Sigmastar, true);
 					if (apply_tapering_ && !apply_tapering_manually_) {
 						cov_function_->MultiplyWendlandCorrelationTaper<T_mat>(dist, Sigmastar, true);
 					}
 					ZstarSigmastarZstarT = Zstar * Sigmastar * Zstar.transpose();
 				}
 				else {
-					cov_function_->GetCovMat<T_mat>(dist, this->cov_pars_, ZstarSigmastarZstarT, true);
+					cov_function_->GetCovMat<T_mat>(dist, coords_pred, coords_pred, this->cov_pars_, ZstarSigmastarZstarT, true);
 					if (apply_tapering_ && !apply_tapering_manually_) {
 						cov_function_->MultiplyWendlandCorrelationTaper<T_mat>(dist, ZstarSigmastarZstarT, true);
 					}
@@ -1387,14 +1454,28 @@ namespace GPBoost {
 			return(has_duplicates);
 		}
 
+		const den_mat_t& GetCoords() const {
+			return(coords_);
+		}
+
+		/*!
+		* \brief Get the coordinates for a subset of all coordinates
+		* \param ind Index vector of data points
+		* \param[out] coords_sub Subset of coordinates
+		*/
+		void GetSubSetCoords(std::vector<int> ind, 
+			den_mat_t& coords_sub) const {
+			coords_sub = coords_(ind, Eigen::all);
+		}
+
 	private:
 		/*! \brief Coordinates (=features) */
 		den_mat_t coords_;
-		/*! \brief Coordinates of inducint points */
+		/*! \brief Coordinates of inducing points */
 		den_mat_t coords_ind_point_;
 		/*! \brief Distance matrix (between unique coordinates in coords_) */
 		std::shared_ptr<T_mat> dist_;
-		/*! \brief If true, the distancess among all observations are calculated and saved here (false for Vecchia approximation) */
+		/*! \brief If true, the distances among all observations are calculated and saved here (false for Vecchia approximation) */
 		bool dist_saved_ = true;
 		/*! \brief If true, the coordinates are saved (false for random coefficients GPs) */
 		bool coord_saved_ = true;

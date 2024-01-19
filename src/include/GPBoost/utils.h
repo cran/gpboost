@@ -11,7 +11,7 @@
 
 #include <cmath>
 #include <GPBoost/type_defs.h>
-#include <algorithm>    // std::max
+#include <algorithm>    // std::max, std::sort
 #include <numeric>      // std::iota
 
 namespace GPBoost {
@@ -40,6 +40,12 @@ namespace GPBoost {
 		return std::abs(a - b) < EPSILON_NUMBERS * std::max<T>({ 1.0, std::abs(a), std::abs(b) });
 	}
 
+	/*! \brief Checking whether a number 'a' is smaller than another number 'b' */
+	template <typename T>//T can be double or float
+	inline bool NumberIsSmallerThan(const T a, const T b) {
+		return (b - a)  > EPSILON_NUMBERS * std::max<T>({ 1.0, std::abs(b) });
+	}
+
 	/*! \brief Get number of non-zero entries in a matrix */
 	template <class T_mat1, typename std::enable_if <std::is_same<sp_mat_t, T_mat1>::value ||
 		std::is_same<sp_mat_rm_t, T_mat1>::value>::type* = nullptr >
@@ -64,7 +70,7 @@ namespace GPBoost {
 	/*!
 	* \brief Finds the sorting index of vector v and saves it in idx
 	* \param v Vector with values
-	* \param idx Vector where sorting index is written to
+	* \param idx Vector where sorting index is written to. idx[k] corresponds to the index of the k-smallest element of v, i.e., v[idx[0]] <= v[idx[1]] <= v[idx[2]] <= ... 
 	*/
 	template <typename T>
 	void SortIndeces(const std::vector<T>& v,
@@ -151,7 +157,32 @@ namespace GPBoost {
 				indices.push_back(r);
 			}
 		}
+		std::sort(indices.begin(), indices.end());
 	}//end SampleIntNoReplace
+
+	/*!
+	* \brief Sample k integers from 0:(N-1) without replacement and sort them
+	*		Source: see https://www.nowherenearithaca.com/2013/05/robert-floyds-tiny-and-beautiful.html and https://stackoverflow.com/questions/28287138/c-randomly-sample-k-numbers-from-range-0n-1-n-k-without-replacement
+	* \param N Total number of integers from which to sample
+	* \param k Size of integer set which is drawn
+	* \param gen RNG
+	* \param[out] indices Drawn integers
+	*/
+	inline void SampleIntNoReplaceSort(int N,
+		int k,
+		RNG_t& gen,
+		std::vector<int>& indices) {
+		for (int r = N - k; r < N; ++r) {
+			int v = std::uniform_int_distribution<>(0, r)(gen);
+			if (std::find(indices.begin(), indices.end(), v) == indices.end()) {
+				indices.push_back(v);
+			}
+			else {
+				indices.push_back(r);
+			}
+		}
+		std::sort(indices.begin(), indices.end());
+	}//end SampleIntNoReplaceSort 
 
 	/*! \brief Convert a dense matrix to a matrix of type T_mat (dense or sparse) */
 	template <class T_mat1, typename std::enable_if <std::is_same<sp_mat_t, T_mat1>::value ||

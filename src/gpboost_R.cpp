@@ -26,37 +26,6 @@
 
 #define COL_MAJOR (0)
 
-//#define MAX_LENGTH_ERR_MSG 1024
-//char R_errmsg_buffer[MAX_LENGTH_ERR_MSG];
-//struct LGBM_R_ErrorClass { SEXP cont_token; };
-//void LGBM_R_save_exception_msg(const std::exception& err);
-//void LGBM_R_save_exception_msg(const std::string& err);
-//
-//#define R_API_BEGIN() \
-//  try {
-//#define R_API_END() } \
-//  catch(LGBM_R_ErrorClass &cont) { R_ContinueUnwind(cont.cont_token); } \
-//  catch(std::exception& ex) { LGBM_R_save_exception_msg(ex); } \
-//  catch(std::string& ex) { LGBM_R_save_exception_msg(ex); } \
-//  catch(...) { Rf_error("unknown exception"); } \
-//  Rf_error("%s", R_errmsg_buffer); \
-//  return R_NilValue; /* <- won't be reached */
-//
-//#define CHECK_CALL(x) \
-//  if ((x) != 0) { \
-//    throw std::runtime_error(LGBM_GetLastError()); \
-//  }
-//
-//// These are helper functions to allow doing a stack unwind
-//// after an R allocation error, which would trigger a long jump.
-//void LGBM_R_save_exception_msg(const std::exception& err) {
-//	std::snprintf(R_errmsg_buffer, MAX_LENGTH_ERR_MSG, "%s\n", err.what());
-//}
-//
-//void LGBM_R_save_exception_msg(const std::string& err) {
-//	std::snprintf(R_errmsg_buffer, MAX_LENGTH_ERR_MSG, "%s\n", err.c_str());
-//}
-
 #define R_API_BEGIN() \
   try {
 #define R_API_END() } \
@@ -856,6 +825,8 @@ SEXP GPB_CreateREModel_R(SEXP ndata,
 	SEXP num_neighbors,
 	SEXP vecchia_ordering,
 	SEXP num_ind_points,
+	SEXP cover_tree_radius,
+	SEXP ind_points_selection,
 	SEXP likelihood,
 	SEXP matrix_inversion_method,
 	SEXP seed) {
@@ -873,11 +844,13 @@ SEXP GPB_CreateREModel_R(SEXP ndata,
 	SEXP likelihood_aux = PROTECT(Rf_asChar(likelihood));
 	SEXP gp_approx_aux = PROTECT(Rf_asChar(gp_approx));
 	SEXP matrix_inversion_method_aux = PROTECT(Rf_asChar(matrix_inversion_method));
+	SEXP ind_points_selection_aux = PROTECT(Rf_asChar(ind_points_selection));
 	const char* cov_fct_ptr = (Rf_isNull(cov_fct)) ? nullptr : CHAR(cov_fct_aux);
 	const char* vecchia_ordering_ptr = (Rf_isNull(vecchia_ordering)) ? nullptr : CHAR(vecchia_ordering_aux);
 	const char* likelihood_ptr = (Rf_isNull(likelihood)) ? nullptr : CHAR(likelihood_aux);
 	const char* gp_approx_ptr = (Rf_isNull(gp_approx)) ? nullptr : CHAR(gp_approx_aux);
 	const char* matrix_inversion_method_ptr = (Rf_isNull(matrix_inversion_method)) ? nullptr : CHAR(matrix_inversion_method_aux);
+	const char* ind_points_selection_ptr = (Rf_isNull(ind_points_selection)) ? nullptr : CHAR(ind_points_selection_aux);
 	R_API_BEGIN();
 	CHECK_CALL(GPB_CreateREModel(num_data,
 		cluster_ids,
@@ -900,6 +873,8 @@ SEXP GPB_CreateREModel_R(SEXP ndata,
 		Rf_asInteger(num_neighbors),
 		vecchia_ordering_ptr,
 		Rf_asInteger(num_ind_points),
+		Rf_asReal(cover_tree_radius),
+		ind_points_selection_ptr,
 		likelihood_ptr,
 		matrix_inversion_method_ptr,
 		Rf_asInteger(seed),
@@ -907,7 +882,7 @@ SEXP GPB_CreateREModel_R(SEXP ndata,
 	R_API_END();
 	ret = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
 	R_RegisterCFinalizerEx(ret, _REModelFinalizer, TRUE);
-	UNPROTECT(6);
+	UNPROTECT(7);
 	return ret;
 }
 
@@ -1338,7 +1313,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"LGBM_BoosterSaveModel_R"          , (DL_FUNC)&LGBM_BoosterSaveModel_R          , 4},
   {"LGBM_BoosterSaveModelToString_R"  , (DL_FUNC)&LGBM_BoosterSaveModelToString_R  , 4},
   {"LGBM_BoosterDumpModel_R"          , (DL_FUNC)&LGBM_BoosterDumpModel_R          , 3},
-  {"GPB_CreateREModel_R"              , (DL_FUNC)&GPB_CreateREModel_R              , 24},
+  {"GPB_CreateREModel_R"              , (DL_FUNC)&GPB_CreateREModel_R              , 26},
   {"GPB_REModelFree_R"                , (DL_FUNC)&GPB_REModelFree_R                , 1},
   {"GPB_SetOptimConfig_R"             , (DL_FUNC)&GPB_SetOptimConfig_R             , 28},
   {"GPB_OptimCovPar_R"                , (DL_FUNC)&GPB_OptimCovPar_R                , 3},

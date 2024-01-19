@@ -58,7 +58,21 @@ namespace GPBoost {
 			if (SUPPORTED_COV_TYPES_.find(cov_fct_type) == SUPPORTED_COV_TYPES_.end()) {
 				Log::REFatal("Covariance of type '%s' is not supported ", cov_fct_type.c_str());
 			}
-			num_cov_par_ = 2;
+			if (cov_fct_type == "matern_space_time") {
+				save_distances_ = false;
+			}
+			else {
+				save_distances_ = true;
+			}
+			if (cov_fct_type == "matern_space_time") {
+				num_cov_par_ = 3;
+			}
+			else if (cov_fct_type == "wendland") {
+				num_cov_par_ = 1;
+			}
+			else {
+				num_cov_par_ = 2;
+			}
 			cov_fct_type_ = cov_fct_type;
 			shape_ = shape;
 			if (cov_fct_type == "matern") {
@@ -80,15 +94,29 @@ namespace GPBoost {
 				taper_range_ = taper_range;
 				taper_shape_ = taper_shape;
 				taper_mu_ = taper_mu;
-				if (cov_fct_type == "wendland") {
-					num_cov_par_ = 1;
-				}
 				apply_tapering_ = true;
 			}
 		}
 
 		/*! \brief Destructor */
 		~CovFunction() {
+		}
+
+		bool ShouldSaveDistances() const {
+			return(save_distances_);
+		}
+
+		bool IsSpaceTimeModel() const {
+			return(cov_fct_type_ == "matern_space_time");
+		}
+
+		/*! \brief Dimension of spatial coordinates in for space-time models */
+		int GetDimSpace(const den_mat_t& coords) const {
+			int dim_space = (int)coords.cols();
+			if (cov_fct_type_ == "matern_space_time") {
+				dim_space = (int)coords.cols() - 1;
+			}
+			return(dim_space);
 		}
 
 		/*!
@@ -117,6 +145,20 @@ namespace GPBoost {
 			}
 			else if (cov_fct_type_ == "powered_exponential") {
 				pars_trans[1] = 1. / (std::pow(pars[1], shape_));
+			}
+			else if (cov_fct_type_ == "matern_space_time") {
+				if (TwoNumbersAreEqual<double>(shape_, 0.5)) {
+					pars_trans[1] = 1. / pars[1];
+					pars_trans[2] = 1. / pars[2];
+				}
+				else if (TwoNumbersAreEqual<double>(shape_, 1.5)) {
+					pars_trans[1] = sqrt(3.) / pars[1];
+					pars_trans[2] = sqrt(3.) / pars[2];
+				}
+				else if (TwoNumbersAreEqual<double>(shape_, 2.5)) {
+					pars_trans[1] = sqrt(5.) / pars[1];
+					pars_trans[2] = sqrt(5.) / pars[2];
+				}
 			}
 		}
 
@@ -147,22 +189,54 @@ namespace GPBoost {
 			else if (cov_fct_type_ == "powered_exponential") {
 				pars_orig[1] = 1. / (std::pow(pars[1], 1. / shape_));
 			}
+			else if (cov_fct_type_ == "matern_space_time") {				
+				if (TwoNumbersAreEqual<double>(shape_, 0.5)) {
+					pars_orig[1] = 1. / pars[1];
+					pars_orig[2] = 1. / pars[2];
+				}
+				else if (TwoNumbersAreEqual<double>(shape_, 1.5)) {
+					pars_orig[1] = sqrt(3.) / pars[1];
+					pars_orig[2] = sqrt(3.) / pars[2];
+				}
+				else if (TwoNumbersAreEqual<double>(shape_, 2.5)) {
+					pars_orig[1] = sqrt(5.) / pars[1];
+					pars_orig[2] = sqrt(5.) / pars[2];
+				}
+			}
 		}
 
 		/*!
 		* \brief Calculates covariance matrix
 		* \param dist Distance matrix
+		* \param coords Coordinate matrix
+		* \param coords_pred Second set of coordinates for predictions
 		* \param pars Vector with covariance parameters
 		* \param[out] sigma Covariance matrix
 		* \param is_symmmetric Set to true if dist and sigma are symmetric (e.g., for training data)
 		*/
 		template <class T_mat, typename std::enable_if <std::is_same<den_mat_t, T_mat>::value>::type* = nullptr >
 		void GetCovMat(const T_mat& dist,
+			const den_mat_t& coords,
+			const den_mat_t& coords_pred,
 			const vec_t& pars,
 			T_mat& sigma,
 			bool is_symmmetric) const {
 			CHECK(pars.size() == num_cov_par_);
-			sigma = T_mat(dist.rows(), dist.cols());
+			if (save_distances_) {
+				sigma = T_mat(dist.rows(), dist.cols());
+			}
+			else {
+				if (is_symmmetric) {
+					sigma = T_mat(coords.rows(), coords.rows());
+				}
+				else {
+					sigma = T_mat(coords_pred.rows(), coords.rows());
+				}
+			}
+			int dim_space = (int)coords.cols();
+			if (cov_fct_type_ == "matern_space_time") {
+				dim_space = (int)coords.cols() - 1;
+			}
 			if (cov_fct_type_ == "exponential" ||
 				(cov_fct_type_ == "matern" && TwoNumbersAreEqual<double>(shape_, 0.5))) {
 				if (is_symmmetric) {
@@ -280,15 +354,96 @@ namespace GPBoost {
 				}
 				MultiplyWendlandCorrelationTaper<T_mat>(dist, sigma, is_symmmetric);
 			}//end cov_fct_type_ == "wendland"
+			else if (cov_fct_type_ == "matern_space_time"){
+				den_mat_t coords_scaled(coords.rows(), coords.cols()), coords_pred_scaled;
+				coords_scaled.col(0) = coords.col(0) * pars[1];
+				coords_scaled.rightCols(dim_space) = coords.rightCols(dim_space) * pars[2];
+				if (!is_symmmetric) {
+					coords_pred_scaled = den_mat_t(coords_pred.rows(), coords_pred.cols());
+					coords_pred_scaled.col(0) = coords_pred.col(0) * pars[1];
+					coords_pred_scaled.rightCols(dim_space) = coords_pred.rightCols(dim_space) * pars[2];
+				}
+				if (TwoNumbersAreEqual<double>(shape_, 0.5)) {
+					if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+						for (int i = 0; i < (int)coords.rows(); ++i) {
+							sigma(i, i) = pars[0];
+							for (int j = i + 1; j < (int)coords.rows(); ++j) {
+								double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+								sigma(i, j) = MaternCovarianceShape0_5(dist_ij, pars[0], 1.);
+								sigma(j, i) = sigma(i, j);
+							}
+						}
+					}
+					else {
+#pragma omp parallel for schedule(static)
+						for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+							for (int j = 0; j < (int)coords.rows(); ++j) {
+								double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+								sigma(i, j) = MaternCovarianceShape0_5(dist_ij, pars[0], 1.);
+							}
+						}
+					}
+				}//end TwoNumbersAreEqual<double>(shape_, 0.5)
+			else if (TwoNumbersAreEqual<double>(shape_, 1.5)) {
+					if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+						for (int i = 0; i < (int)coords.rows(); ++i) {
+							sigma(i, i) = pars[0];
+							for (int j = i + 1; j < (int)coords.rows(); ++j) {
+								double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+								sigma(i, j) = MaternCovarianceShape1_5(dist_ij, pars[0], 1.);
+								sigma(j, i) = sigma(i, j);
+							}
+						}
+					}
+					else {
+#pragma omp parallel for schedule(static)
+						for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+							for (int j = 0; j < (int)coords.rows(); ++j) {
+								double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+								sigma(i, j) = MaternCovarianceShape1_5(dist_ij, pars[0], 1.);
+							}
+						}
+					}
+			}//end TwoNumbersAreEqual<double>(shape_, 1.5)
+			else if (TwoNumbersAreEqual<double>(shape_, 2.5)) {
+					if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+						for (int i = 0; i < (int)coords.rows(); ++i) {
+							sigma(i, i) = pars[0];
+							for (int j = i + 1; j < (int)coords.rows(); ++j) {
+								double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+								sigma(i, j) = MaternCovarianceShape2_5(dist_ij, pars[0], 1.);
+								sigma(j, i) = sigma(i, j);
+							}
+						}
+					}
+					else {
+#pragma omp parallel for schedule(static)
+						for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+							for (int j = 0; j < (int)coords.rows(); ++j) {
+								double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+								sigma(i, j) = MaternCovarianceShape2_5(dist_ij, pars[0], 1.);
+							}
+						}
+					}
+				}//end TwoNumbersAreEqual<double>(shape_, 2.5)
+			}//end cov_fct_type_ == "matern_space_time"
 			else {
 				Log::REFatal("Covariance of type '%s' is not supported.", cov_fct_type_.c_str());
 			}
 		}//end GetCovMat (dense)
 		template <class T_mat, typename std::enable_if <std::is_same<sp_mat_t, T_mat>::value || std::is_same<sp_mat_rm_t, T_mat>::value>::type* = nullptr >
 		void GetCovMat(const T_mat& dist,
+			const den_mat_t&,
+			const den_mat_t&,
 			const vec_t& pars,
 			T_mat& sigma,
 			bool is_symmmetric) const {
+			if (cov_fct_type_ == "matern_space_time") {
+				Log::REFatal("GetCovMat is not implemented when cov_fct_type_ == 'matern_space_time'' and sparse matrices are used ");
+			}
 			CHECK(pars.size() == num_cov_par_);
 			sigma = dist;
 			if (cov_fct_type_ == "exponential" ||
@@ -450,6 +605,9 @@ namespace GPBoost {
 		void GetCovMat(const double& dist,
 			const vec_t& pars,
 			double& sigma) const {
+			if (cov_fct_type_ == "matern_space_time") {
+				Log::REFatal("GetCovMat is not implemented for one distance value when cov_fct_type_ == 'matern_space_time'' ");
+			}
 			CHECK(pars.size() == num_cov_par_);
 			if (cov_fct_type_ == "exponential" ||
 				(cov_fct_type_ == "matern" && TwoNumbersAreEqual<double>(shape_, 0.5))) {
@@ -662,35 +820,60 @@ namespace GPBoost {
 		}//end MultiplyWendlandCorrelationTaper (double)
 
 		/*!
-		* \brief Calculates derivatives of the covariance matrix with respect to the inverse range parameter
+		* \brief Calculates derivatives of the covariance matrix with respect to the range parameters
 		* \param dist Distance matrix
+		* \param coords Coordinate matrix
+		* \param coords_pred Second set of coordinates for predictions
 		* \param sigma Covariance matrix
-		* \param pars Vector with covariance parameters
-		* \param[out] sigma_grad Derivative of covariance matrix with respect to the inverse range parameter
-		* \param transf_scale If true, the derivative is taken on the transformed scale otherwise with respect to the original range parameter (the parameters values pars are always given on the transformed scale). Optimiziation is done using transf_scale=true. transf_scale=false is needed, for instance, for calcualting the Fisher information on the original scale.
+		* \param pars Vector with covariance parameters on the transformed scale (no matter whether 'transf_scale' is true or not)
+		* \param[out] sigma_grad Derivative of covariance matrix with respect to the range parameter
+		* \param transf_scale If true, the derivative is taken on the transformed and logarithmic scale otherwise with respect to the original range parameter (the parameters values pars are always given on the transformed scale, but not logarithmized). Optimiziation is done using transf_scale=true. transf_scale=false is needed, for instance, for calcualting the Fisher information on the original scale.
 		* \param marg_var Marginal variance parameters sigma^2 (used only if transf_scale = false to transform back)
+		* \param ind_range Which range parameter (if there are multiple)
+		* \param is_symmmetric Set to true if dist and sigma are symmetric (e.g., for training data)
 		*/
 		template <class T_mat, typename std::enable_if <std::is_same<den_mat_t, T_mat>::value>::type* = nullptr >
 		void GetCovMatGradRange(const T_mat& dist,
+			const den_mat_t& coords,
+			const den_mat_t& coords_pred,
 			const T_mat& sigma,
 			const vec_t& pars,
 			T_mat& sigma_grad,
 			bool transf_scale,
-			double marg_var) const {
+			double marg_var,
+			int ind_range,
+			bool is_symmmetric) const {
 			CHECK(pars.size() == num_cov_par_);
+			if (save_distances_) {
+				CHECK(sigma.cols() == dist.cols());
+				CHECK(sigma.rows() == dist.rows());
+			}
+			else {
+				if (is_symmmetric) {
+					CHECK(sigma.rows() == coords.rows());
+					CHECK(sigma.cols() == coords.rows());
+				}
+				else {
+					CHECK(sigma.rows() == coords_pred.rows());
+					CHECK(sigma.cols() == coords.rows());
+				}
+			}
+			int dim_space = (int)coords.cols();
+			if (cov_fct_type_ == "matern_space_time") {
+				dim_space = (int)coords.cols() - 1;
+			}
 			if (cov_fct_type_ == "exponential" ||
 				(cov_fct_type_ == "matern" && TwoNumbersAreEqual<double>(shape_, 0.5))) {
 				double cm = transf_scale ? (-1. * pars[1]) : (marg_var * pars[1] * pars[1]);
 				sigma_grad = cm * sigma.cwiseProduct(dist);
 			}
 			else if (cov_fct_type_ == "matern" && TwoNumbersAreEqual<double>(shape_, 1.5)) {
-				double cm = transf_scale ? 1. : (-1. * marg_var * pars[1]);
-				sigma_grad = cm * ((pars[0] * pars[1] * dist.array() * ((-pars[1] * dist.array()).exp())).matrix() - pars[1] * sigma.cwiseProduct(dist));
+				double cm = transf_scale ? (-1. * pars[0] * pars[1] * pars[1]) : (marg_var * pars[0] * pars[1] * pars[1] * pars[1]);
+				sigma_grad = cm * (dist.array().square() * ((-pars[1] * dist.array()).exp())).matrix();
 			}
 			else if (cov_fct_type_ == "matern" && TwoNumbersAreEqual<double>(shape_, 2.5)) {
-				double cm = transf_scale ? 1. : (-1. * marg_var * pars[1]);
-				sigma_grad = cm * ((pars[0] * (pars[1] * dist.array() + (2. / 3.) * pars[1] * pars[1] * dist.array().square()) *
-					((-pars[1] * dist.array()).exp())).matrix() - pars[1] * sigma.cwiseProduct(dist));
+				double cm = transf_scale ? (-1. * pars[0] * pars[1] * pars[1]) : (marg_var * pars[0] * pars[1] * pars[1] * pars[1]);
+				sigma_grad = cm * 1. / 3. * (dist.array().square() * (1. + pars[1] * dist.array()) * ((-pars[1] * dist.array()).exp())).matrix();
 			}
 			else if (cov_fct_type_ == "gaussian") {
 				double cm = transf_scale ? (-1. * pars[1]) : (2. * marg_var * std::pow(pars[1], 3. / 2.));
@@ -700,18 +883,221 @@ namespace GPBoost {
 				double cm = transf_scale ? (-1. * pars[1]) : (shape_ * marg_var * std::pow(pars[1], (shape_ + 1.) / shape_));
 				sigma_grad = cm * sigma.cwiseProduct(dist.array().pow(shape_).matrix());
 			}
+			else if (cov_fct_type_ == "matern_space_time") {
+				sigma_grad = T_mat(sigma.rows(), sigma.cols());
+				CHECK(ind_range >= 0 && ind_range <= 1);
+				den_mat_t coords_scaled(coords.rows(), coords.cols()), coords_pred_scaled;
+				coords_scaled.col(0) = coords.col(0) * pars[1];
+				coords_scaled.rightCols(dim_space) = coords.rightCols(dim_space) * pars[2];
+				if (!is_symmmetric) {
+					coords_pred_scaled = den_mat_t(coords_pred.rows(), coords_pred.cols());
+					coords_pred_scaled.col(0) = coords_pred.col(0) * pars[1];
+					coords_pred_scaled.rightCols(dim_space) = coords_pred.rightCols(dim_space) * pars[2];
+				}
+				if (TwoNumbersAreEqual<double>(shape_, 0.5)) {
+					if (ind_range == 0) {
+						double cm = transf_scale ? -1. : (marg_var * pars[1]);
+						if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords.rows(); ++i) {
+								sigma_grad(i, i) = 0.;
+								for (int j = i + 1; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_time = (coords_scaled.coeff(i, 0) - coords_scaled.coeff(j, 0));
+									dist_sq_ij_time = dist_sq_ij_time * dist_sq_ij_time;
+									if (dist_sq_ij_time < EPSILON_NUMBERS) {
+										sigma_grad(i, j) = 0.;
+									}
+									else {
+										sigma_grad(i, j) = cm * dist_sq_ij_time / dist_ij * sigma(i, j);
+									}
+									sigma_grad(j, i) = sigma_grad(i, j);
+								}
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+								for (int j = 0; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_time = (coords_pred_scaled.coeff(i, 0) - coords_scaled.coeff(j, 0));
+									dist_sq_ij_time = dist_sq_ij_time * dist_sq_ij_time;
+									if (dist_sq_ij_time < EPSILON_NUMBERS) {
+										sigma_grad(i, j) = 0.;
+									}
+									else {
+										sigma_grad(i, j) = cm * dist_sq_ij_time / dist_ij * sigma(i, j);
+									}
+									
+								}
+							}
+						}
+					}//end ind_range == 0
+					else if (ind_range == 1) {
+						double cm = transf_scale ? -1. : (marg_var * pars[2]);
+						if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords.rows(); ++i) {
+								sigma_grad(i, i) = 0.;
+								for (int j = i + 1; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_space = (coords_scaled.row(i).tail(dim_space) - coords_scaled.row(j).tail(dim_space)).squaredNorm();
+									if (dist_sq_ij_space < EPSILON_NUMBERS) {
+										sigma_grad(i, j) = 0.;
+									}
+									else {
+										sigma_grad(i, j) = cm * dist_sq_ij_space / dist_ij * sigma(i, j);
+									}
+									sigma_grad(j, i) = sigma_grad(i, j);
+								}
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+								for (int j = 0; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_space = (coords_pred_scaled.row(i).tail(dim_space) - coords_scaled.row(j).tail(dim_space)).squaredNorm();
+									if (dist_sq_ij_space < EPSILON_NUMBERS) {
+										sigma_grad(i, j) = 0.;
+									}
+									else {
+										sigma_grad(i, j) = cm * dist_sq_ij_space / dist_ij * sigma(i, j);
+									}
+								}
+							}
+						}
+					}//end ind_range == 1
+				}//end shape_ == 0.5
+				else if (TwoNumbersAreEqual<double>(shape_, 1.5)) {
+					if (ind_range == 0) {
+						double cm = transf_scale ? (-1. * pars[0]) : (marg_var * pars[0] * pars[1]);
+						if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords.rows(); ++i) {
+								sigma_grad(i, i) = 0.;
+								for (int j = i + 1; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_time = (coords_scaled.coeff(i, 0) - coords_scaled.coeff(j, 0));
+									dist_sq_ij_time = dist_sq_ij_time * dist_sq_ij_time;
+									sigma_grad(i, j) = cm * dist_sq_ij_time * std::exp(-dist_ij);
+									sigma_grad(j, i) = sigma_grad(i, j);
+								}
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+								for (int j = 0; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_time = (coords_pred_scaled.coeff(i, 0) - coords_scaled.coeff(j, 0));
+									dist_sq_ij_time = dist_sq_ij_time * dist_sq_ij_time;
+									sigma_grad(i, j) = cm * dist_sq_ij_time * std::exp(-dist_ij);
+								}
+							}
+						}
+					}//end ind_range == 0
+					else if (ind_range == 1) {
+						double cm = transf_scale ? (-1. * pars[0]) : (marg_var * pars[0] * pars[2]);
+						if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords.rows(); ++i) {
+								sigma_grad(i, i) = 0.;
+								for (int j = i + 1; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_space = (coords_scaled.row(i).tail(dim_space) - coords_scaled.row(j).tail(dim_space)).squaredNorm();
+									sigma_grad(i, j) = cm * dist_sq_ij_space * std::exp(-dist_ij);
+									sigma_grad(j, i) = sigma_grad(i, j);
+								}
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+								for (int j = 0; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_space = (coords_pred_scaled.row(i).tail(dim_space) - coords_scaled.row(j).tail(dim_space)).squaredNorm();
+									sigma_grad(i, j) = cm * dist_sq_ij_space * std::exp(-dist_ij);
+								}
+							}
+						}
+					}//end ind_range == 0
+				}//end shape_ == 1.5
+				else if (TwoNumbersAreEqual<double>(shape_, 2.5)) {
+					if (ind_range == 0) {
+						double cm = transf_scale ? (-1. / 3. * pars[0]) : (marg_var / 3. * pars[0] * pars[1]);
+						if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords.rows(); ++i) {
+								sigma_grad(i, i) = 0.;
+								for (int j = i + 1; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_time = (coords_scaled.coeff(i, 0) - coords_scaled.coeff(j, 0));
+									dist_sq_ij_time = dist_sq_ij_time * dist_sq_ij_time;
+									sigma_grad(i, j) = cm * dist_sq_ij_time * (1 + dist_ij) * std::exp(-dist_ij);
+									sigma_grad(j, i) = sigma_grad(i, j);
+								}
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+								for (int j = 0; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_time = (coords_pred_scaled.coeff(i, 0) - coords_scaled.coeff(j, 0));
+									dist_sq_ij_time = dist_sq_ij_time * dist_sq_ij_time;
+									sigma_grad(i, j) = cm * dist_sq_ij_time * (1 + dist_ij) * std::exp(-dist_ij);
+								}
+							}
+						}
+					}//end ind_range == 0
+					else if (ind_range == 1) {
+						double cm = transf_scale ? (-1. / 3. * pars[0]) : (marg_var / 3. * pars[0] * pars[2]);
+						if (is_symmmetric) {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords.rows(); ++i) {
+								sigma_grad(i, i) = 0.;
+								for (int j = i + 1; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_space = (coords_scaled.row(i).tail(dim_space) - coords_scaled.row(j).tail(dim_space)).squaredNorm();
+									sigma_grad(i, j) = cm * dist_sq_ij_space * (1 + dist_ij) * std::exp(-dist_ij);
+									sigma_grad(j, i) = sigma_grad(i, j);
+								}
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < (int)coords_pred.rows(); ++i) {
+								for (int j = 0; j < (int)coords.rows(); ++j) {
+									double dist_ij = (coords_pred_scaled.row(i) - coords_scaled.row(j)).lpNorm<2>();
+									double dist_sq_ij_space = (coords_pred_scaled.row(i).tail(dim_space) - coords_scaled.row(j).tail(dim_space)).squaredNorm();
+									sigma_grad(i, j) = cm * dist_sq_ij_space * (1 + dist_ij) * std::exp(-dist_ij);
+								}
+							}
+						}
+					}//end ind_range == 1
+				}//end shape_ == 2.5
+			}//end matern_space_time
 			else {
 				Log::REFatal("GetCovMatGradRange: Covariance of type '%s' is not supported.", cov_fct_type_.c_str());
 			}
 		}//end GetCovMatGradRange (dense)
 		template <class T_mat, typename std::enable_if <std::is_same<sp_mat_t, T_mat>::value || std::is_same<sp_mat_rm_t, T_mat>::value>::type* = nullptr >
 		void GetCovMatGradRange(const T_mat& dist,
+			const den_mat_t&,
+			const den_mat_t&,
 			const T_mat& sigma,
 			const vec_t& pars,
 			T_mat& sigma_grad,
 			bool transf_scale,
-			double marg_var) const {
+			double marg_var,
+			int,
+			bool) const {
 			CHECK(pars.size() == num_cov_par_);
+			CHECK(sigma.cols() == sigma.rows());
+			if (!save_distances_) {
+				Log::REFatal("GetCovMatGradRange is not implemented when save_distances_ == false (e.g., cov_fct_type_ == 'matern_space_time') and sparse matrices are used ");
+			}
 			if (cov_fct_type_ == "exponential" ||
 				(cov_fct_type_ == "matern" && TwoNumbersAreEqual<double>(shape_, 0.5))) {
 				double cm = transf_scale ? (-1. * pars[1]) : (marg_var * pars[1] * pars[1]);
@@ -765,9 +1151,10 @@ namespace GPBoost {
 			RNG_t& rng,
 			vec_t& pars,
 			double marginal_variance) const {
+			CHECK(pars.size() == num_cov_par_);
 			pars[0] = marginal_variance;// marginal variance
 			if (cov_fct_type_ != "wendland") {
-				// range parameter
+				// Range parameters
 				int MAX_POINTS_INIT_RANGE = 1000;//limit number of samples considered to save computational time
 				int num_coord;
 				if (use_distances) {
@@ -776,6 +1163,7 @@ namespace GPBoost {
 				else {
 					num_coord = (int)coords.rows();
 				}
+				// Calculate average distance
 				int num_data_find_init = (num_coord > MAX_POINTS_INIT_RANGE) ? MAX_POINTS_INIT_RANGE : num_coord;
 				std::vector<int> sample_ind;
 				bool use_subsamples = num_data_find_init < num_coord;
@@ -804,13 +1192,23 @@ namespace GPBoost {
 					}
 				}
 				else {
-					//Calculate distances (of a subsample) in case they have not been calculated (for the Vecchia approximation)
+					// Calculate distances (of a subsample) in case they have not been calculated (e.g., for the Vecchia approximation)
 					den_mat_t dist_from_coord;
 					if (use_subsamples) {
-						CalculateDistances<den_mat_t>(coords(sample_ind, Eigen::all), coords(sample_ind, Eigen::all), true, dist_from_coord);
+						if (cov_fct_type_ == "matern_space_time") {
+							CalculateDistances<den_mat_t>(coords(sample_ind, Eigen::seq(1, Eigen::last)), coords(sample_ind, Eigen::seq(1, Eigen::last)), true, dist_from_coord);
+						}
+						else {
+							CalculateDistances<den_mat_t>(coords(sample_ind, Eigen::all), coords(sample_ind, Eigen::all), true, dist_from_coord);
+						}
 					}
 					else {
-						CalculateDistances<den_mat_t>(coords, coords, true, dist_from_coord);
+						if (cov_fct_type_ == "matern_space_time") {
+							CalculateDistances<den_mat_t>(coords(Eigen::all, Eigen::seq(1, Eigen::last)), coords(Eigen::all, Eigen::seq(1, Eigen::last)), true, dist_from_coord);
+						}
+						else {
+							CalculateDistances<den_mat_t>(coords, coords, true, dist_from_coord);
+						}
 					}
 					for (int i = 0; i < (num_data_find_init - 1); ++i) {
 						for (int j = i + 1; j < num_data_find_init; ++j) {
@@ -819,7 +1217,7 @@ namespace GPBoost {
 					}
 				}
 				mean_dist /= (num_data_find_init * (num_data_find_init - 1) / 2.);
-				//Set the range parameter such that the correlation is down to 0.05 at the mean distance
+				// Set the range parameters such that the correlation is down to 0.05 at the mean distance
 				if (cov_fct_type_ == "exponential" ||
 					(cov_fct_type_ == "matern" && TwoNumbersAreEqual<double>(shape_, 0.5))) {
 					pars[1] = 3. / mean_dist;
@@ -836,10 +1234,38 @@ namespace GPBoost {
 				else if (cov_fct_type_ == "powered_exponential") {
 					pars[1] = 3. / std::pow(mean_dist, shape_);
 				}
+				else if (cov_fct_type_ == "matern_space_time") {
+					double mean_dist_time = 0;
+					if (use_subsamples) {
+						for (int i = 0; i < (num_data_find_init - 1); ++i) {
+							for (int j = i + 1; j < num_data_find_init; ++j) {
+								mean_dist_time += std::abs(coords.coeff(sample_ind[i], 0) - coords.coeff(sample_ind[j], 0));;
+							}
+						}
+					}
+					else {
+						for (int i = 0; i < (num_data_find_init - 1); ++i) {
+							for (int j = i + 1; j < num_data_find_init; ++j) {
+								mean_dist_time += std::abs(coords.coeff(i, 0) - coords.coeff(j, 0));;
+							}
+						}
+					}
+					mean_dist_time /= (num_data_find_init * (num_data_find_init - 1) / 2.);
+					pars[1] = 3. / mean_dist_time;
+					if (TwoNumbersAreEqual<double>(shape_, 0.5)) {
+						pars[2] = 3. / mean_dist;
+					}
+					else if (TwoNumbersAreEqual<double>(shape_, 1.5)) {
+						pars[2] = 4.7 / mean_dist;
+					}
+					else if (TwoNumbersAreEqual<double>(shape_, 2.5)) {
+						pars[2] = 5.9 / mean_dist;
+					}
+				}//end matern_space_time
 				else {
 					Log::REFatal("Finding initial values for covariance parameters for covariance of type '%s' is not supported ", cov_fct_type_.c_str());
 				}
-			}
+			}//end cov_fct_type_ != "wendland"
 		}//end FindInitCovPar
 
 	private:
@@ -855,14 +1281,17 @@ namespace GPBoost {
 		double taper_mu_;
 		/*! \brief If true, tapering is applied to the covariance function(element - wise multiplication with a compactly supported Wendland correlation function) */
 		bool apply_tapering_ = false;
-		/*! \brief Number of covariance parameters*/
+		/*! \brief Number of covariance parameters */
 		int num_cov_par_;
+		/*! \brief If true, distances should be saved depending on the covariance function (in re_comp.h) */
+		bool save_distances_;
 		/*! \brief List of supported covariance functions */
 		const std::set<string_t> SUPPORTED_COV_TYPES_{ "exponential",
 			"gaussian",
 			"powered_exponential",
 			"matern",
-			"wendland" };
+			"wendland",
+			"matern_space_time"};
 
 		/*!
 		* \brief Calculates Wendland correlation function if taper_shape == 0

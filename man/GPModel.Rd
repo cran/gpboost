@@ -10,7 +10,8 @@ GPModel(likelihood = "gaussian", group_data = NULL,
   gp_rand_coef_data = NULL, cov_function = "exponential",
   cov_fct_shape = 0.5, gp_approx = "none", cov_fct_taper_range = 1,
   cov_fct_taper_shape = 0, num_neighbors = 20L,
-  vecchia_ordering = "random", num_ind_points = 500L,
+  vecchia_ordering = "random", ind_points_selection = "kmeans++",
+  num_ind_points = 500L, cover_tree_radius = 1,
   matrix_inversion_method = "cholesky", seed = 0L, cluster_ids = NULL,
   free_raw_data = FALSE, vecchia_approx = NULL, vecchia_pred_type = NULL,
   num_neighbors_pred = NULL)
@@ -22,8 +23,9 @@ Available options:
 \item{ "gaussian" }
 \item{ "bernoulli_probit": binary data with Bernoulli likelihood and a probit link function }
 \item{ "bernoulli_logit": binary data with Bernoulli likelihood and a logit link function }
-\item{ "gamma" }
-\item{ "poisson" }
+\item{ "gamma": gamma distribution with a with log link function }
+\item{ "poisson": Poisson distribution with a with log link function }
+\item{ "negative_binomial": negative binomial distribution with a with log link function }
 }}
 
 \item{group_data}{A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
@@ -55,12 +57,16 @@ Gaussian process random coefficients}
 
 \item{cov_function}{A \code{string} specifying the covariance function for the Gaussian process. 
 Available options:
-"exponential", "gaussian", "matern", "powered_exponential", "wendland"
 \itemize{
-\item{ For "exponential", "gaussian", and "powered_exponential", 
-we use parametrization of Diggle and Ribeiro (2007) }
-\item{ For "matern", we use the parametrization of Rasmussen and Williams (2006) }
-\item{ For "wendland", we use the parametrization of Bevilacqua et al. (2019, AOS) }
+\item{"exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+\item{"gaussian": Gaussian, aka squared expnential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+\item{ "matern": Matern covariance function with the smoothness specified by 
+the \code{cov_fct_shape} parameter (using the parametrization of Rasmussen and Williams, 2006) }
+\item{"powered_exponential": powered exponential covariance function with the exponent specified by 
+the \code{cov_fct_shape} parameter (using the parametrization of Diggle and Ribeiro, 2007) }
+\item{ "wendland": Compactly supported Wendland covariance function (using the parametrization of Bevilacqua et al., 2019, AOS) }
+\item{ "matern_space_time": Spatio-temporal Matern covariance function with different range parameters for space and time. 
+Note that the first column in \code{gp_coords} must correspond to the time dimension }
 }}
 
 \item{cov_fct_shape}{A \code{numeric} specifying the shape parameter of the covariance function 
@@ -71,9 +77,14 @@ This parameter is irrelevant for some covariance functions such as the exponenti
 for Gaussian processes. Available options: 
 \itemize{
 \item{"none": No approximation }
-\item{"vecchia": A Vecchia approximation; see Sigrist (2022, JMLR for more details) }
+\item{"vecchia": A Vecchia approximation; see Sigrist (2022, JMLR) for more details }
 \item{"tapering": The covariance function is multiplied by 
 a compactly supported Wendland correlation function }
+\item{"fitc": Fully Independent Training Conditional approximation aka 
+modified predictive process approximation; see Gyger, Furrer, and Sigrist (2024) for more details }
+\item{"full_scale_tapering": A full scale approximation combining an 
+inducing point / predictive process approximation with tapering on the residual process; 
+see Gyger, Furrer, and Sigrist (2024) for more details }
 }}
 
 \item{cov_fct_taper_range}{A \code{numeric} specifying the range parameter 
@@ -96,10 +107,24 @@ the Vecchia approximation. Available options:
 \itemize{
 \item{"none": the default ordering in the data is used }
 \item{"random": a random ordering }
+\item{"time": ordering accorrding to time (only for space-time models) }
+\item{"time_random_space": ordering according to time and randomly for all 
+spatial points with the same time points (only for space-time models) }
+}}
+
+\item{ind_points_selection}{A \code{string} specifying the method for choosing inducing points
+Available options:
+\itemize{
+\item{"kmeans++: the k-means++ algorithm }
+\item{"cover_tree": the cover tree algorithm }
+\item{"random": random selection from data points }
 }}
 
 \item{num_ind_points}{An \code{integer} specifying the number of inducing 
 points / knots for, e.g., a predictive process approximation}
+
+\item{cover_tree_radius}{A \code{numeric} specifying the radius (= "spatial resolution") 
+for the cover tree algorithm}
 
 \item{matrix_inversion_method}{A \code{string} specifying the method used for inverting covariance matrices. 
 Available options:

@@ -2,7 +2,7 @@
 * This file is part of GPBoost a C++ library for combining
 *	boosting with Gaussian process and mixed effects models
 *
-* Copyright (c) 2022 Pascal Kuendig and Fabio Sigrist. All rights reserved.
+* Copyright (c) 2022 - 2024 Tim Gyger, Pascal Kuendig, and Fabio Sigrist. All rights reserved.
 *
 * Licensed under the Apache License Version 2.0. See LICENSE file in the project root for license information.
 */
@@ -111,6 +111,9 @@ namespace GPBoost {
 		const den_mat_t& Sigma_L_k) {
 
 		p = std::min(p, (int)B_rm.cols());
+
+		CHECK(Sigma_L_k.rows() == B_rm.cols());
+		CHECK(Sigma_L_k.rows() == diag_W.size());
 
 		vec_t r, r_old;
 		vec_t z, z_old;
@@ -411,6 +414,36 @@ namespace GPBoost {
 			"This could happen if the initial learning rate is too large. Otherwise increase 'cg_max_num_it_tridiag'.", p);
 	} // end CGTridiagVecchiaLaplaceSigmaplusWinv
 
+	void simProbeVect(RNG_t& generator, den_mat_t& Z, const bool rademacher) {
+
+		double u;
+
+		if (rademacher) {
+			std::uniform_real_distribution<double> udist(0.0, 1.0);
+
+			for (int i = 0; i < Z.rows(); ++i) {
+				for (int j = 0; j < Z.cols(); j++) {
+					u = udist(generator);
+					if (u > 0.5) {
+						Z(i, j) = 1.;
+					}
+					else {
+						Z(i, j) = -1.;
+					}
+				}
+			}
+		}
+		else {
+			std::normal_distribution<double> ndist(0.0, 1.0);
+
+			for (int i = 0; i < Z.rows(); ++i) {
+				for (int j = 0; j < Z.cols(); j++) {
+					Z(i, j) = ndist(generator);
+				}
+			}
+		}
+	} // end simProbeVect
+
 	void GenRandVecTrace(RNG_t& generator, 
 		den_mat_t& R) {
 		
@@ -419,6 +452,24 @@ namespace GPBoost {
 		for (int i = 0; i < R.rows(); ++i) {
 			for (int j = 0; j < R.cols(); j++) {
 				R(i, j) = ndist(generator);
+			}
+		}
+	}
+
+	void GenRandVecDiag(RNG_t& generator,
+		den_mat_t& R) {
+		double u;
+		std::uniform_real_distribution<double> udist(0.0, 1.0);
+		//Do not parallelize! - Despite seed: no longer deterministic
+		for (int i = 0; i < R.rows(); ++i) {
+			for (int j = 0; j < R.cols(); j++) {
+				u = udist(generator);
+				if (u > 0.5) {
+					R(i, j) = 1.;
+				}
+				else {
+					R(i, j) = -1.;
+				}
 			}
 		}
 	}
@@ -465,5 +516,11 @@ namespace GPBoost {
 		vec_t c_cov = (centered_Z_AI_A_deriv_PI_Z.cwiseProduct(centered_Z_BI_B_deriv_PI_Z)).rowwise().mean();
 		vec_t c_var = (centered_Z_BI_B_deriv_PI_Z.cwiseProduct(centered_Z_BI_B_deriv_PI_Z)).rowwise().mean();
 		c_opt = c_cov.array() / c_var.array();
+#pragma omp parallel for schedule(static)   
+		for (int i = 0; i < c_opt.size(); ++i) {
+			if (c_var.coeffRef(i) == 0) {
+				c_opt[i] = 1;
+			}
+		}
 	} // end CalcOptimalCVectorized
 }

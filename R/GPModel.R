@@ -11,8 +11,9 @@
 #' \item{ "gaussian" }
 #' \item{ "bernoulli_probit": binary data with Bernoulli likelihood and a probit link function }
 #' \item{ "bernoulli_logit": binary data with Bernoulli likelihood and a logit link function }
-#' \item{ "gamma" }
-#' \item{ "poisson" }
+#' \item{ "gamma": gamma distribution with a with log link function }
+#' \item{ "poisson": Poisson distribution with a with log link function }
+#' \item{ "negative_binomial": negative binomial distribution with a with log link function }
 #' }
 #' @param group_data A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
 #' The elements being group levels defining grouped random effects.
@@ -37,12 +38,16 @@
 #' Gaussian process random coefficients
 #' @param cov_function A \code{string} specifying the covariance function for the Gaussian process. 
 #' Available options:
-#' "exponential", "gaussian", "matern", "powered_exponential", "wendland"
 #' \itemize{
-#' \item{ For "exponential", "gaussian", and "powered_exponential", 
-#' we use parametrization of Diggle and Ribeiro (2007) }
-#' \item{ For "matern", we use the parametrization of Rasmussen and Williams (2006) }
-#' \item{ For "wendland", we use the parametrization of Bevilacqua et al. (2019, AOS) }
+#' \item{"exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+#' \item{"gaussian": Gaussian, aka squared expnential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+#' \item{ "matern": Matern covariance function with the smoothness specified by 
+#' the \code{cov_fct_shape} parameter (using the parametrization of Rasmussen and Williams, 2006) }
+#' \item{"powered_exponential": powered exponential covariance function with the exponent specified by 
+#' the \code{cov_fct_shape} parameter (using the parametrization of Diggle and Ribeiro, 2007) }
+#' \item{ "wendland": Compactly supported Wendland covariance function (using the parametrization of Bevilacqua et al., 2019, AOS) }
+#' \item{ "matern_space_time": Spatio-temporal Matern covariance function with different range parameters for space and time. 
+#' Note that the first column in \code{gp_coords} must correspond to the time dimension }
 #' }
 #' @param cov_fct_shape A \code{numeric} specifying the shape parameter of the covariance function 
 #' (=smoothness parameter for Matern covariance)  
@@ -51,9 +56,14 @@
 #' for Gaussian processes. Available options: 
 #' \itemize{
 #' \item{"none": No approximation }
-#' \item{"vecchia": A Vecchia approximation; see Sigrist (2022, JMLR for more details) }
+#' \item{"vecchia": A Vecchia approximation; see Sigrist (2022, JMLR) for more details }
 #' \item{"tapering": The covariance function is multiplied by 
 #' a compactly supported Wendland correlation function }
+#' \item{"fitc": Fully Independent Training Conditional approximation aka 
+#' modified predictive process approximation; see Gyger, Furrer, and Sigrist (2024) for more details }
+#' \item{"full_scale_tapering": A full scale approximation combining an 
+#' inducing point / predictive process approximation with tapering on the residual process; 
+#' see Gyger, Furrer, and Sigrist (2024) for more details }
 #' }
 #' @param cov_fct_taper_range A \code{numeric} specifying the range parameter 
 #' of the Wendland covariance function and Wendland correlation taper function. 
@@ -72,9 +82,21 @@
 #' \itemize{
 #' \item{"none": the default ordering in the data is used }
 #' \item{"random": a random ordering }
+#' \item{"time": ordering accorrding to time (only for space-time models) }
+#' \item{"time_random_space": ordering according to time and randomly for all 
+#' spatial points with the same time points (only for space-time models) }
+#' }
+#' @param ind_points_selection A \code{string} specifying the method for choosing inducing points
+#' Available options:
+#' \itemize{
+#' \item{"kmeans++: the k-means++ algorithm }
+#' \item{"cover_tree": the cover tree algorithm }
+#' \item{"random": random selection from data points }
 #' }
 #' @param num_ind_points An \code{integer} specifying the number of inducing 
 #' points / knots for, e.g., a predictive process approximation
+#' @param cover_tree_radius A \code{numeric} specifying the radius (= "spatial resolution") 
+#' for the cover tree algorithm
 #' @param matrix_inversion_method A \code{string} specifying the method used for inverting covariance matrices. 
 #' Available options:
 #' \itemize{
@@ -147,7 +169,16 @@
 #'                Initial values for the regression coefficients (if there are any, can be NULL) }
 #'                \item{init_cov_pars: \code{vector} with \code{numeric} elements (default = NULL). 
 #'                Initial values for covariance parameters of Gaussian process and 
-#'                random effects (can be NULL) }
+#'                random effects (can be NULL). The order it the same as the order 
+#'                of the parameters in the summary function: first is the error variance 
+#'                (only for "gaussian" likelihood), next follow the variances of the 
+#'                grouped random effects (if there are any, in the order provided in 'group_data'), 
+#'                and then follow the marginal variance and the range of the Gaussian process. 
+#'                If there are multiple Gaussian processes, then the variances and ranges follow alternatingly.
+#'                If 'init_cov_pars = NULL', an internal choice is used that depends on the 
+#'                likelihood and the random effects type and covariance function. 
+#'                If you select the option 'trace = TRUE' in the 'params' argument, 
+#'                you will see the first initial covariance parameters in iteration 0. }
 #'                \item{lr_coef: \code{numeric} (default = 0.1). 
 #'                Learning rate for fixed effect regression coefficients if gradient descent is used }
 #'                \item{lr_cov: \code{numeric} (default = 0.1 for "gradient_descent" and 1. for "fisher_scoring"). 
@@ -174,10 +205,10 @@
 #'                square root of diagonal of a numerically approximated inverse Hessian for non-Gaussian likelihoods) }
 #'                \item{init_aux_pars: \code{vector} with \code{numeric} elements (default = NULL). 
 #'                Initial values for additional parameters for non-Gaussian likelihoods 
-#'                (e.g., shape parameter of gamma likelihood) }
+#'                (e.g., shape parameter of a gamma or negative_binomial likelihood) }
 #'                \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
 #'                If TRUE, additional parameters for non-Gaussian likelihoods 
-#'                are also estimated (e.g., shape parameter of gamma likelihood) }
+#'                are also estimated (e.g., shape parameter of a gamma or negative_binomial likelihood) }
 #'                \item{cg_max_num_it: \code{integer} (default = 1000). 
 #'                Maximal number of iterations for conjugate gradient algorithms }
 #'                \item{cg_max_num_it_tridiag: \code{integer} (default = 1000). 
@@ -199,16 +230,22 @@
 #'                \item{piv_chol_rank: \code{integer} (default = 50). 
 #'                Rank of the pivoted Cholesky decomposition used as 
 #'                preconditioner in conjugate gradient algorithms }
-#'                \item{cg_preconditioner_type: \code{string} 
-#'                (default = "Sigma_inv_plus_BtWB" for non-Gaussian likelihoods and a Vecchia-Laplace approximation). 
+#'                \item{cg_preconditioner_type: \code{string}.
 #'                Type of preconditioner used for conjugate gradient algorithms.
-#'                Options for non-Gaussian likelihoods and a Vecchia-Laplace approximation: 
 #'                \itemize{
-#'                  \item{"piv_chol_on_Sigma": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
+#'                  \item Options for non-Gaussian likelihoods and gp_approx = "vecchia": 
+#'                    \itemize{
+#'                      \item{"piv_chol_on_Sigma" (= default): (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
 #'                  where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
-#'                  \item{"Sigma_inv_plus_BtWB": (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
+#'                      \item{"Sigma_inv_plus_BtWB": (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
 #'                  where B^T * D^-1 * B approx= Sigma^-1 }
-#'                 }
+#'                  }
+#'                  \item Options for likelihood = "gaussian" and gp_approx = "full_scale_tapering": 
+#'                    \itemize{
+#'                      \item{"predictive_process_plus_diagonal" (= default): predictive process preconditiioner }
+#'                      \item{"none": no preconditioner }
+#'                  }
+#'                }
 #'               }
 #'            }
 #' @param fixed_effects A \code{vector} of optional external fixed effects (length = number of data points)
@@ -268,7 +305,9 @@ gpb.GPModel <- R6::R6Class(
                           cov_fct_taper_shape = 0.,
                           num_neighbors = 20L,
                           vecchia_ordering = "random",
+                          ind_points_selection = "kmeans++",
                           num_ind_points = 500L,
+                          cover_tree_radius = 1.,
                           matrix_inversion_method = "cholesky",
                           seed = 0L,
                           cluster_ids = NULL,
@@ -341,6 +380,8 @@ gpb.GPModel <- R6::R6Class(
         num_neighbors = model_list[["num_neighbors"]]
         vecchia_ordering = model_list[["vecchia_ordering"]]
         num_ind_points = model_list[["num_ind_points"]]
+        ind_points_selection = model_list[["ind_points_selection"]]
+        cover_tree_radius = model_list[["cover_tree_radius"]]
         seed = model_list[["seed"]]
         cluster_ids = model_list[["cluster_ids"]]
         likelihood = model_list[["likelihood"]]
@@ -516,10 +557,14 @@ gpb.GPModel <- R6::R6Class(
         private$num_neighbors <- as.integer(num_neighbors)
         private$vecchia_ordering <- as.character(vecchia_ordering)
         private$num_ind_points <- as.integer(num_ind_points)
-        if (private$cov_function == "wendland") {
+        private$cover_tree_radius <- as.numeric(cover_tree_radius)
+        private$ind_points_selection <- as.character(ind_points_selection)
+        if (private$cov_function == "matern_space_time") {
+          private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range_time", "GP_range_space")
+        } else if (private$cov_function == "wendland") {
           private$cov_par_names <- c(private$cov_par_names,"GP_var")
         } else {
-          private$cov_par_names <- c(private$cov_par_names,"GP_var","GP_range")
+          private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range")
         }
         private$re_comp_names <- c(private$re_comp_names,"GP")
         # Set data for GP random coefficients
@@ -543,7 +588,12 @@ gpb.GPModel <- R6::R6Class(
           gp_rand_coef_data <- as.vector(matrix(private$gp_rand_coef_data)) #convert to correct format for sending to C
           for (ii in 1:private$num_gp_rand_coef) {
             if (is.null(colnames(private$gp_rand_coef_data))) {
-              if (private$cov_function == "wendland") {
+              if (private$cov_function == "matern_space_time") {
+                private$cov_par_names <- c(private$cov_par_names,
+                                           paste0("GP_rand_coef_nb_", ii,"_var"),
+                                           paste0("GP_rand_coef_nb_", ii,"_range_time"),
+                                           paste0("GP_rand_coef_nb_", ii,"_range_space"))
+              } else if (private$cov_function == "wendland") {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_nb_", ii,"_var"))
               } else {
@@ -552,7 +602,12 @@ gpb.GPModel <- R6::R6Class(
                                            paste0("GP_rand_coef_nb_", ii,"_range"))
               }
             } else {
-              if (private$cov_function == "wendland") {
+              if (private$cov_function == "matern_space_time") {
+                private$cov_par_names <- c(private$cov_par_names,
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"),
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range_time"),
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range_space"))
+              } else if (private$cov_function == "wendland") {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"))
               } else {
@@ -618,6 +673,8 @@ gpb.GPModel <- R6::R6Class(
         , private$num_neighbors
         , private$vecchia_ordering
         , private$num_ind_points
+        , private$cover_tree_radius
+        , private$ind_points_selection
         , likelihood
         , private$matrix_inversion_method
         , private$seed
@@ -1716,6 +1773,8 @@ gpb.GPModel <- R6::R6Class(
       model_list[["cov_fct_taper_range"]] <- private$cov_fct_taper_range
       model_list[["cov_fct_taper_shape"]] <- private$cov_fct_taper_shape
       model_list[["num_ind_points"]] <- private$num_ind_points
+      model_list[["cover_tree_radius"]] <- private$cover_tree_radius
+      model_list[["ind_points_selection"]] <- private$ind_points_selection
       model_list[["matrix_inversion_method"]] <- private$matrix_inversion_method
       model_list[["seed"]] <- private$seed
       # Covariate data
@@ -1725,7 +1784,7 @@ gpb.GPModel <- R6::R6Class(
         model_list[["num_coef"]] <- private$num_coef
         model_list[["X"]] <- self$get_covariate_data()
       }
-      # Additional likelihood parameters (e.g., shape parameter for a gamma likelihood)
+      # Additional likelihood parameters (e.g., shape parameter for a gamma or negative_binomial likelihood)
       model_list[["params"]]["init_aux_pars"] <- self$get_aux_pars()
       # Note: for simplicity, this is put into 'init_aux_pars'. When loading the model, 'init_aux_pars' are correctly set
       model_list[["model_fitted"]] <- private$model_fitted
@@ -1862,6 +1921,8 @@ gpb.GPModel <- R6::R6Class(
     nsim_var_pred = -1,
     rank_pred_approx_matrix_lanczos = -1,
     num_ind_points = 500L,
+    cover_tree_radius = 1.,
+    ind_points_selection = "kmeans++",
     matrix_inversion_method = "cholesky",
     seed = 0L,
     cluster_ids = NULL,
@@ -1900,7 +1961,9 @@ gpb.GPModel <- R6::R6Class(
                   estimate_aux_pars = TRUE),
     
     determine_num_cov_pars = function(likelihood) {
-      if (private$cov_function == "wendland") {
+      if (private$cov_function == "matern_space_time") {
+        num_par_per_GP <- 3L
+      } else if (private$cov_function == "wendland") {
         num_par_per_GP <- 1L
       } else {
         num_par_per_GP <- 2L
@@ -2073,7 +2136,9 @@ GPModel <- function(likelihood = "gaussian",
                     cov_fct_taper_shape = 0.,
                     num_neighbors = 20L,
                     vecchia_ordering = "random",
+                    ind_points_selection = "kmeans++",
                     num_ind_points = 500L,
+                    cover_tree_radius = 1.,
                     matrix_inversion_method = "cholesky",
                     seed = 0L,
                     cluster_ids = NULL,
@@ -2097,7 +2162,9 @@ GPModel <- function(likelihood = "gaussian",
                             , cov_fct_taper_shape = cov_fct_taper_shape
                             , num_neighbors = num_neighbors
                             , vecchia_ordering = vecchia_ordering
+                            , ind_points_selection = ind_points_selection
                             , num_ind_points = num_ind_points
+                            , cover_tree_radius = cover_tree_radius
                             , matrix_inversion_method = matrix_inversion_method
                             , seed = seed
                             , cluster_ids = cluster_ids
@@ -2271,7 +2338,9 @@ fitGPModel <- function(likelihood = "gaussian",
                        cov_fct_taper_shape = 0.,
                        num_neighbors = 20L,
                        vecchia_ordering = "random",
+                       ind_points_selection = "kmeans++",
                        num_ind_points = 500L,
+                       cover_tree_radius = 1.,
                        matrix_inversion_method = "cholesky",
                        seed = 0L,
                        cluster_ids = NULL,
@@ -2297,7 +2366,9 @@ fitGPModel <- function(likelihood = "gaussian",
                              , cov_fct_taper_shape = cov_fct_taper_shape
                              , num_neighbors = num_neighbors
                              , vecchia_ordering = vecchia_ordering
+                             , ind_points_selection = ind_points_selection
                              , num_ind_points = num_ind_points
+                             , cover_tree_radius = cover_tree_radius
                              , matrix_inversion_method = matrix_inversion_method
                              , seed = seed
                              , cluster_ids = cluster_ids
@@ -2706,7 +2777,7 @@ set_prediction_data.GPModel <- function(gp_model
 #' @param cov_pars A \code{vector} with \code{numeric} elements. 
 #' Covariance parameters of Gaussian process and  random effects
 #' @param aux_pars A \code{vector} with \code{numeric} elements. 
-#' Additional parameters for non-Gaussian likelihoods (e.g., shape parameter of gamma likelihood)
+#' Additional parameters for non-Gaussian likelihoods (e.g., shape parameter of a gamma or negative_binomial likelihood)
 #' @inheritParams GPModel_shared_params
 #'
 #' @examples
@@ -2738,7 +2809,7 @@ neg_log_likelihood <- function(gp_model
 #' @param cov_pars A \code{vector} with \code{numeric} elements. 
 #' Covariance parameters of Gaussian process and  random effects
 #' @param aux_pars A \code{vector} with \code{numeric} elements. 
-#' Additional parameters for non-Gaussian likelihoods (e.g., shape parameter of gamma likelihood)
+#' Additional parameters for non-Gaussian likelihoods (e.g., shape parameter of a gamma or negative_binomial likelihood)
 #' @inheritParams GPModel_shared_params
 #'
 #' @return A \code{GPModel}
