@@ -15,7 +15,7 @@ fitGPModel(likelihood = "gaussian", group_data = NULL,
   matrix_inversion_method = "cholesky", seed = 0L, cluster_ids = NULL,
   free_raw_data = FALSE, y, X = NULL, params = list(),
   vecchia_approx = NULL, vecchia_pred_type = NULL,
-  num_neighbors_pred = NULL)
+  num_neighbors_pred = NULL, fixed_effects = NULL)
 }
 \arguments{
 \item{likelihood}{A \code{string} specifying the likelihood function (distribution) of the response variable. 
@@ -27,6 +27,7 @@ Available options:
 \item{ "gamma": gamma distribution with a with log link function }
 \item{ "poisson": Poisson distribution with a with log link function }
 \item{ "negative_binomial": negative binomial distribution with a with log link function }
+\item{ Note: other likelihoods could be implemented upon request }
 }}
 
 \item{group_data}{A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
@@ -131,8 +132,14 @@ for the cover tree algorithm}
 Available options:
 \itemize{
 \item{"cholesky": Cholesky factorization }
-\item{"iterative": iterative methods. Only supported for non-Gaussian likelihoods
-with a Vecchia-Laplace approximation. This a combination of conjugate gradient, Lanczos algorithm, and other methods }
+\item{"iterative": iterative methods. A combination of conjugate gradient, Lanczos algorithm, and other methods. 
+
+This is currently only supported for the following cases: 
+\itemize{
+\item{likelihood != "gaussian" and gp_approx == "vecchia" (non-Gaussian likelihoods with a Vecchia-Laplace approximation) }
+\item{likelihood == "gaussian" and gp_approx == "full_scale_tapering" (Gaussian likelihood with a full-scale tapering approximation) }
+}
+}
 }}
 
 \item{seed}{An \code{integer} specifying the seed used for model creation 
@@ -152,25 +159,25 @@ fixed effects linear regression term (if there is one)}
 
 \item{params}{A \code{list} with parameters for the estimation / optimization
  \itemize{
-    \item{optimizer_cov: \code{string} (default = "gradient_descent"). 
+    \item{optimizer_cov: \code{string} (default = "lbfgs" for linear mixed effects models and "gradient_descent" for the GPBoost algorithm). 
     Optimizer used for estimating covariance parameters. 
-    Options: "gradient_descent", "fisher_scoring", "nelder_mead", "bfgs", "adam".
+    Options: "gradient_descent", "lbfgs", "fisher_scoring", "nelder_mead", "adam".
     If there are additional auxiliary parameters for non-Gaussian likelihoods, 
     'optimizer_cov' is also used for those }
     \item{optimizer_coef: \code{string} (default = "wls" for Gaussian likelihoods and "gradient_descent" for other likelihoods). 
     Optimizer used for estimating linear regression coefficients, if there are any 
     (for the GPBoost algorithm there are usually none). 
-    Options: "gradient_descent", "wls", "nelder_mead", "bfgs", "adam". Gradient descent steps are done simultaneously 
+    Options: "gradient_descent", "lbfgs", "wls", "nelder_mead", "adam". Gradient descent steps are done simultaneously 
     with gradient descent steps for the covariance parameters. 
     "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
-    If 'optimizer_cov' is set to "nelder_mead", "bfgs", or "adam", 
+    If 'optimizer_cov' is set to "nelder_mead", "lbfgs", or "adam", 
     'optimizer_coef' is automatically also set to the same value.}
     \item{maxit: \code{integer} (default = 1000). 
     Maximal number of iterations for optimization algorithm }
     \item{delta_rel_conv: \code{numeric} (default = 1E-6 except for "nelder_mead" for which the default is 1E-8). 
     Convergence tolerance. The algorithm stops if the relative change 
     in either the (approximate) log-likelihood or the parameters is below this value. 
-    For "bfgs" and "adam", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
+    For "adam", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
     If < 0, internal default values are used }
     \item{convergence_criterion: \code{string} (default = "relative_change_in_log_likelihood"). 
     The convergence criterion used for terminating the optimization algorithm.
@@ -230,10 +237,9 @@ fixed effects linear regression term (if there is one)}
     \item{num_rand_vec_trace: \code{integer} (default = 50). 
     Number of random vectors (e.g., Rademacher) for stochastic approximation of the trace of a matrix }
     \item{reuse_rand_vec_trace: \code{boolean} (default = TRUE). 
-    If true, random vectors (e.g., Rademacher) for stochastic approximation 
-    of the trace of a matrix are sampled only once at the beginning of
-    Newton's method for finding the mode in the Laplace approximation
-    and are then reused in later trace approximations.
+    If true, random vectors (e.g., Rademacher) for stochastic approximations 
+    of the trace of a matrix are sampled only once at the beginning of 
+    the parameter estimation and reused in later trace approximations.
     Otherwise they are sampled every time a trace is calculated }
     \item{seed_rand_vec_trace: \code{integer} (default = 1). 
     Seed number to generate random vectors (e.g., Rademacher) }
@@ -266,6 +272,10 @@ This is discontinued here. Use the function 'set_prediction_data' to specify thi
 
 \item{num_neighbors_pred}{an \code{integer} specifying the number of neighbors for making predictions.
 This is discontinued here. Use the function 'set_prediction_data' to specify this}
+
+\item{fixed_effects}{A \code{numeric} \code{vector} with 
+additional fixed effects that are added to the linear predictor (= offset). 
+The length of this vector needs to equal the number of training data points.}
 }
 \value{
 A fitted \code{GPModel}

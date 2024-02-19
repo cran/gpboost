@@ -102,6 +102,7 @@ namespace GPBoost {
 			else if (likelihood_type_ == "gaussian") {
 				aux_pars_ = { 1. };//1 / sqrt(variance)
 				names_aux_pars_ = { "inverse_std_dev" };
+				num_aux_pars_ = 0;
 			} 
 			chol_fact_pattern_analyzed_ = false;
 			has_a_vec_ = has_a_vec;
@@ -191,6 +192,13 @@ namespace GPBoost {
 		}
 
 		/*!
+		* \brief Set chol_fact_pattern_analyzed_ to false
+		*/
+		void SetCholFactPatternAnalyzedFalse() {
+			chol_fact_pattern_analyzed_ = false;
+		}
+
+		/*!
 		* \brief Returns the type of the response variable (label). Either "double" or "int"
 		*/
 		string_t label_type() const {
@@ -262,17 +270,27 @@ namespace GPBoost {
 		* \brief Determine initial value for intercept (=constant)
 		* \param y_data Response variable data
 		* \param num_data Number of data points
-		* param rand_eff_var Variance of random effects
+		* \param rand_eff_var Variance of random effects
+		* \param fixed_effects Additional fixed effects that are added to the linear predictor (= offset)
 		*/
 		double FindInitialIntercept(const double* y_data,
 			const data_size_t num_data,
-			double rand_eff_var) const {
+			double rand_eff_var,
+			const double* fixed_effects) const {
 			CHECK(rand_eff_var > 0.);
 			double init_intercept = 0.;
 			if (likelihood_type_ == "gaussian") {
+				if (fixed_effects == nullptr) {
 #pragma omp parallel for schedule(static) reduction(+:init_intercept)
-				for (data_size_t i = 0; i < num_data; ++i) {
-					init_intercept += y_data[i];
+					for (data_size_t i = 0; i < num_data; ++i) {
+						init_intercept += y_data[i];
+					}
+				}
+				else {
+#pragma omp parallel for schedule(static) reduction(+:init_intercept)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						init_intercept += y_data[i] - fixed_effects[i];
+					}
 				}
 				init_intercept /= num_data;
 			}
@@ -313,17 +331,19 @@ namespace GPBoost {
 		* \param y_data Response variable data
 		* \param num_data Number of data points
 		* \param rand_eff_var Variance of random effects
+		* \param fixed_effects Additional fixed effects that are added to the linear predictor (= offset)
 		*/
 		bool ShouldHaveIntercept(const double* y_data,
 			const data_size_t num_data,
-			double rand_eff_var) const {
+			double rand_eff_var,
+			const double* fixed_effects) const {
 			bool ret_val = false;
 			if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || 
 				likelihood_type_ == "negative_binomial") {
 				ret_val = true;
 			}
 			else {
-				double beta_zero = FindInitialIntercept(y_data, num_data, rand_eff_var);
+				double beta_zero = FindInitialIntercept(y_data, num_data, rand_eff_var, fixed_effects);
 				if (std::abs(beta_zero) > 0.1) {
 					ret_val = true;
 				}
@@ -379,6 +399,65 @@ namespace GPBoost {
 			}
 			return(aux_pars_.data());
 		}//end FindInitialAuxPars
+
+		/*!
+		* \brief Determine constants C_mu and C_sigma2 used for checking whether step sizes for linear regression coefficients are clearly too large
+		* \param y_data Response variable data
+		* \param num_data Number of data points
+		* \param fixed_effects Additional fixed effects that are added to the linear predictor (= offset)
+		* \param[out] C_mu
+		* \param[out] C_sigma2
+		*/
+		void FindConstantsCapTooLargeLearningRateCoef(const double* y_data,
+			const data_size_t num_data,
+			const double* fixed_effects,
+			double& C_mu,
+			double& C_sigma2) const {
+			if (likelihood_type_ == "gaussian") {
+				double mean = 0., sec_mom = 0;
+				if (fixed_effects == nullptr) {
+#pragma omp parallel for schedule(static) reduction(+:mean, sec_mom)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						mean += y_data[i];
+						sec_mom += y_data[i] * y_data[i];
+					}
+				}
+				else {
+#pragma omp parallel for schedule(static) reduction(+:mean, sec_mom)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						mean += y_data[i] - fixed_effects[i];
+						sec_mom += (y_data[i] - fixed_effects[i]) * (y_data[i] - fixed_effects[i]);
+					}
+				}
+				mean /= num_data;
+				sec_mom /= num_data;
+				C_mu = std::abs(mean);
+				C_sigma2 = sec_mom - mean * mean;
+			}
+			else if (likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "bernoulli_logit") {
+				C_mu = 1.;
+				C_sigma2 = 1.;
+			}
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
+				likelihood_type_ == "negative_binomial") {
+				double mean = 0., sec_mom = 0;
+#pragma omp parallel for schedule(static) reduction(+:mean, sec_mom)
+				for (data_size_t i = 0; i < num_data; ++i) {
+					mean += y_data[i];
+					sec_mom += y_data[i] * y_data[i];
+				}
+				mean /= num_data;
+				sec_mom /= num_data;
+				C_mu = std::abs(SafeLog(mean));
+				C_sigma2 = std::abs(SafeLog(sec_mom - mean * mean));
+			}
+			else {
+				Log::REFatal("FindConstantsCapTooLargeLearningRateCoef: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
+			}
+			if (C_mu < 1.) {
+				C_mu = 1.;
+			}
+		}//end FindConstantsCapTooLargeLearningRateCoef
 
 		/*!
 		* \brief Returns the number of additional parameters
@@ -3802,7 +3881,7 @@ namespace GPBoost {
 		RNG_t cg_generator_;
 		/*! If the seed of the random number generator cg_generator_ is set, cg_generator_seeded_ is set to true*/
 		bool cg_generator_seeded_ = false;
-		/*! If reuse_rand_vec_trace_ is true and rand_vec_trace_I_ has been generated for the first time, then saved_rand_vec_trace_ is set to true*/
+		/*! If reuse_rand_vec_trace_ is true and rand_vec_trace_I_ has been generated for the first time, then saved_rand_vec_trace_ is set to true */
 		bool saved_rand_vec_trace_ = false;
 		/*! Matrix of random vectors (r_1, r_2, r_3, ...) with Cov(r_i) = I, r_i is of dimension num_data, and t = num_rand_vec_trace_ */
 		den_mat_t rand_vec_trace_I_;

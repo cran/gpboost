@@ -343,9 +343,10 @@ namespace GPBoost {
 
 	void REModel::OptimCovPar(const double* y_data,
 		const double* fixed_effects,
-		bool called_in_GPBoost_algorithm) {
+		bool called_in_GPBoost_algorithm,
+		bool reuse_learning_rates_from_previous_call) {
 		if (y_data != nullptr) {
-			InitializeCovParsIfNotDefined(y_data);
+			InitializeCovParsIfNotDefined(y_data, fixed_effects);
 			// Note: y_data can be null_ptr for non-Gaussian data. For non-Gaussian data, the function 'InitializeCovParsIfNotDefined' is called in 'SetY'
 		}
 		CHECK(cov_pars_initialized_);
@@ -371,7 +372,8 @@ namespace GPBoost {
 				calc_std_dev_,
 				fixed_effects,
 				true,
-				called_in_GPBoost_algorithm);
+				called_in_GPBoost_algorithm,
+				reuse_learning_rates_from_previous_call);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->OptimLinRegrCoefCovPar(y_data,
@@ -387,7 +389,8 @@ namespace GPBoost {
 				calc_std_dev_,
 				fixed_effects,
 				true,
-				called_in_GPBoost_algorithm);
+				called_in_GPBoost_algorithm,
+				reuse_learning_rates_from_previous_call);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(y_data,
@@ -403,17 +406,19 @@ namespace GPBoost {
 				calc_std_dev_,
 				fixed_effects,
 				true,
-				called_in_GPBoost_algorithm);
+				called_in_GPBoost_algorithm,
+				reuse_learning_rates_from_previous_call);
 		}
 		has_covariates_ = false;
 		covariance_matrix_has_been_factorized_ = true;
 		model_has_been_estimated_ = true;
-	}
+	}//end OptimCovPar
 
 	void REModel::OptimLinRegrCoefCovPar(const double* y_data,
 		const double* covariate_data,
-		int num_covariates) {
-		InitializeCovParsIfNotDefined(y_data);
+		int num_covariates,
+		const double* fixed_effects) {
+		InitializeCovParsIfNotDefined(y_data, fixed_effects);
 		double* coef_ptr;;
 		if (init_coef_given_) {
 			coef_ptr = coef_.data();
@@ -446,8 +451,9 @@ namespace GPBoost {
 				std_dev_cov_par,
 				std_dev_coef,
 				calc_std_dev_,
-				nullptr,
+				fixed_effects,
 				true,
+				false,
 				false);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
@@ -462,8 +468,9 @@ namespace GPBoost {
 				std_dev_cov_par,
 				std_dev_coef,
 				calc_std_dev_,
-				nullptr,
+				fixed_effects,
 				true,
+				false,
 				false);
 		}
 		else {
@@ -478,15 +485,16 @@ namespace GPBoost {
 				std_dev_cov_par,
 				std_dev_coef,
 				calc_std_dev_,
-				nullptr,
+				fixed_effects,
 				true,
+				false,
 				false);
 		}
 		has_covariates_ = true;
 		coef_given_or_estimated_ = true;
 		covariance_matrix_has_been_factorized_ = true;
 		model_has_been_estimated_ = true;
-	}
+	}//end OptimLinRegrCoefCovPar
 
 	void REModel::FindInitialValueBoosting(double* init_score) {
 		CHECK(cov_pars_initialized_);
@@ -507,7 +515,8 @@ namespace GPBoost {
 				false,
 				nullptr,
 				false,//learn_covariance_parameters=false
-				true);
+				true,
+				false);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->OptimLinRegrCoefCovPar(nullptr,
@@ -523,7 +532,8 @@ namespace GPBoost {
 				false,
 				nullptr,
 				false,//learn_covariance_parameters=false
-				true);
+				true,
+				false);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(nullptr,
@@ -539,9 +549,10 @@ namespace GPBoost {
 				false,
 				nullptr,
 				false,//learn_covariance_parameters=false
-				true);
+				true,
+				false);
 		}
-	}
+	}//end FindInitialValueBoosting
 
 	void REModel::EvalNegLogLikelihood(const double* y_data,
 		double* cov_pars,
@@ -552,7 +563,7 @@ namespace GPBoost {
 		vec_t cov_pars_trafo;
 		if (cov_pars == nullptr) {
 			if (y_data != nullptr) {
-				InitializeCovParsIfNotDefined(y_data);
+				InitializeCovParsIfNotDefined(y_data, fixed_effects);
 				// Note: y_data can be null_ptr for non-Gaussian data. For non-Gaussian data, the function 'InitializeCovParsIfNotDefined' is called in 'SetY'
 			}
 			CHECK(cov_pars_initialized_);
@@ -575,31 +586,31 @@ namespace GPBoost {
 		if (matrix_format_ == "sp_mat_t") {
 			if (re_model_sp_->gauss_likelihood_) {
 				re_model_sp_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
-					negll, false, false, false);
+					negll, false, false, false, true);
 			}
 			else {
 				re_model_sp_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
-					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
+					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done, true);
 			}
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			if (re_model_sp_rm_->gauss_likelihood_) {
 				re_model_sp_rm_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
-					negll, false, false, false);
+					negll, false, false, false, true);
 			}
 			else {
 				re_model_sp_rm_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
-					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
+					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done, true);
 			}
 		}
 		else {
 			if (re_model_den_->gauss_likelihood_) {
 				re_model_den_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
-					negll, false, false, false);
+					negll, false, false, false, true);
 			}
 			else {
 				re_model_den_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
-					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
+					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done, true);
 			}
 		}
 		covariance_matrix_has_been_factorized_ = false;
@@ -621,7 +632,7 @@ namespace GPBoost {
 
 	void REModel::CalcGradient(double* y, const double* fixed_effects, bool calc_cov_factor) {
 		if (y != nullptr) {
-			InitializeCovParsIfNotDefined(y);
+			InitializeCovParsIfNotDefined(y, fixed_effects);
 		}
 		CHECK(cov_pars_initialized_);
 		if (matrix_format_ == "sp_mat_t") {
@@ -1088,7 +1099,8 @@ namespace GPBoost {
 		}
 	}
 
-	void REModel::InitializeCovParsIfNotDefined(const double* y_data) {
+	void REModel::InitializeCovParsIfNotDefined(const double* y_data,
+		const double* fixed_effects) {
 		if (!cov_pars_initialized_) {
 			if (init_cov_pars_provided_) {
 				cov_pars_ = init_cov_pars_;
@@ -1096,13 +1108,13 @@ namespace GPBoost {
 			else {
 				cov_pars_ = vec_t(num_cov_pars_);
 				if (matrix_format_ == "sp_mat_t") {
-					re_model_sp_->FindInitCovPar(y_data, cov_pars_.data());
+					re_model_sp_->FindInitCovPar(y_data, fixed_effects, cov_pars_.data());
 				}
 				else if (matrix_format_ == "sp_mat_rm_t") {
-					re_model_sp_rm_->FindInitCovPar(y_data, cov_pars_.data());
+					re_model_sp_rm_->FindInitCovPar(y_data, fixed_effects, cov_pars_.data());
 				}
 				else {
-					re_model_den_->FindInitCovPar(y_data, cov_pars_.data());
+					re_model_den_->FindInitCovPar(y_data, fixed_effects, cov_pars_.data());
 				}
 				covariance_matrix_has_been_factorized_ = false;
 				init_cov_pars_ = cov_pars_;

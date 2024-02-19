@@ -2,8 +2,8 @@ Package: gpboost
 Type: Package
 Title: Combining Tree-Boosting with Gaussian Process and Mixed Effects
         Models
-Version: 1.2.8
-Date: 2024-01-18
+Version: 1.2.9
+Date: 2024-02-19
 Authors@R: c(
 	person("Fabio", "Sigrist", email = "fabiosigrist@gmail.com", role = c("aut", "cre")),
     person("Tim", "Gyger", role = c("aut")),
@@ -31,7 +31,11 @@ Authors@R: c(
     person("Victor", "Zverovich", role = c("cph")),
     person("IBM Corporation", role = c("ctb")),
 	person("Keith O'Hara", role = c("cph")),
-	person("Stephen L. Moshier", role = c("cph"))
+	person("Stephen L. Moshier", role = c("cph")),
+    person("Jorge Nocedal", role = c("cph")),
+    person("Naoaki Okazaki", role = c("cph")),
+    person("Yixuan Qiu", role = c("cph")),
+    person("Dirk Toewe", role = c("cph"))
     )
 Description: An R package that allows for combining tree-boosting with Gaussian process and mixed effects models. It also allows for independently doing tree-boosting as well as inference and prediction for Gaussian process and mixed effects models. See <https://github.com/fabsig/GPBoost> for more information on the software and Sigrist (2022, JMLR) <https://www.jmlr.org/papers/v23/20-322.html> and Sigrist (2023, TPAMI) <doi:10.1109/TPAMI.2022.3168152> for more information on the methodology.
 Encoding: UTF-8
@@ -46,7 +50,7 @@ Imports: data.table (>= 1.9.6), graphics, RJSONIO, Matrix (>= 1.1-0),
         methods, utils
 SystemRequirements: C++17
 RoxygenNote: 6.0.1
-Packaged: 2024-01-18 12:54:18 UTC; whsigris
+Packaged: 2024-02-19 15:49:44 UTC; whsigris
 Author: Fabio Sigrist [aut, cre],
   Tim Gyger [aut],
   Pascal Kuendig [aut],
@@ -73,7 +77,11 @@ Author: Fabio Sigrist [aut, cre],
   Victor Zverovich [cph],
   IBM Corporation [ctb],
   Keith O'Hara [cph],
-  Stephen L. Moshier [cph]
+  Stephen L. Moshier [cph],
+  Jorge Nocedal [cph],
+  Naoaki Okazaki [cph],
+  Yixuan Qiu [cph],
+  Dirk Toewe [cph]
 Maintainer: Fabio Sigrist <fabiosigrist@gmail.com>
 Repository: CRAN
-Date/Publication: 2024-01-19 00:10:02 UTC
+Date/Publication: 2024-02-19 16:30:02 UTC

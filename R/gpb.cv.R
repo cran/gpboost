@@ -87,6 +87,7 @@ gpb.cv <- function(params = list()
                    , use_gp_model_for_validation = TRUE
                    , fit_GP_cov_pars_OOS = FALSE
                    , train_gp_model_cov_pars = TRUE
+                   , reuse_learning_rates_gp_model = FALSE
                    , folds = NULL
                    , nfold = 4L
                    , label = NULL
@@ -135,6 +136,7 @@ gpb.cv <- function(params = list()
   
   params$use_gp_model_for_validation <- use_gp_model_for_validation
   params$train_gp_model_cov_pars <- train_gp_model_cov_pars
+  params$reuse_learning_rates_gp_model <- reuse_learning_rates_gp_model
   
   # set some parameters, resolving the way they were passed in with other parameters
   # in `params`.
@@ -556,14 +558,21 @@ gpb.cv <- function(params = list()
     }
     
     # Update one boosting iteration
-    msg <- lapply(cv_booster$boosters, function(fd) {
-      fd$booster$update(fobj = fobj)
-      out <- list()
-      for (eval_function in eval_functions) {
-        out <- append(out, fd$booster$eval_valid(feval = eval_function))
-      }
-      return(out)
-    })
+    tryCatch({
+      msg <- lapply(cv_booster$boosters, function(fd) {
+        fd$booster$update(fobj = fobj)
+        out <- list()
+        for (eval_function in eval_functions) {
+          out <- append(out, fd$booster$eval_valid(feval = eval_function))
+        }
+        return(out)
+      })
+    },
+    error = function(err) { 
+      message(paste0("Error in boosting iteration ", i,":"))
+      message(err)
+      env$met_early_stop <- TRUE
+    })# end tryCatch
     
     # Prepare collection of evaluation results
     merged_msg <- gpb.merge.cv.result(
@@ -974,6 +983,7 @@ gpb.grid.search.tune.parameters <- function(param_grid
                                             , gp_model = NULL
                                             , use_gp_model_for_validation = TRUE
                                             , train_gp_model_cov_pars = TRUE
+                                            , reuse_learning_rates_gp_model = FALSE
                                             , folds = NULL
                                             , nfold = 4L
                                             , label = NULL
@@ -1061,51 +1071,41 @@ gpb.grid.search.tune.parameters <- function(param_grid
                      " of ", length(try_param_combs), ": ", param_comb_str))
     }
     current_score_is_better <- FALSE
-    tryCatch(
-      {
-        cvbst <- gpb.cv(params = params
-                        , data = data
-                        , nrounds = nrounds
-                        , gp_model = gp_model
-                        , use_gp_model_for_validation = use_gp_model_for_validation
-                        , train_gp_model_cov_pars = train_gp_model_cov_pars
-                        , folds = folds
-                        , nfold = nfold
-                        , label = label
-                        , weight = weight
-                        , obj = obj
-                        , eval = eval
-                        , verbose = verbose_cv
-                        , record = TRUE
-                        , eval_freq = 1L
-                        , showsd = FALSE
-                        , stratified = stratified
-                        , init_model = init_model
-                        , colnames = colnames
-                        , categorical_feature = categorical_feature
-                        , early_stopping_rounds = early_stopping_rounds
-                        , callbacks = callbacks
-                        , delete_boosters_folds = TRUE
-                        , ...
-        )
-        if (higher_better) {
-          if (cvbst$best_score > best_score) {
-            current_score_is_better <- TRUE
-          }
-        } else {
-          if (cvbst$best_score < best_score) {
-            current_score_is_better <- TRUE
-          }
-        }
-      },
-      error = function(msg) {
-        if (verbose_eval < 1L) {
-          message(paste0("Error for parameter combination ", counter_num_comb, 
-                         " of ", length(try_param_combs), ": ", param_comb_str,
-                         ". Error message: "))
-        }
-        message(msg)
-      })# end tryCatch
+    cvbst <- gpb.cv(params = params
+                    , data = data
+                    , nrounds = nrounds
+                    , gp_model = gp_model
+                    , use_gp_model_for_validation = use_gp_model_for_validation
+                    , train_gp_model_cov_pars = train_gp_model_cov_pars
+                    , reuse_learning_rates_gp_model = reuse_learning_rates_gp_model
+                    , folds = folds
+                    , nfold = nfold
+                    , label = label
+                    , weight = weight
+                    , obj = obj
+                    , eval = eval
+                    , verbose = verbose_cv
+                    , record = TRUE
+                    , eval_freq = 1L
+                    , showsd = FALSE
+                    , stratified = stratified
+                    , init_model = init_model
+                    , colnames = colnames
+                    , categorical_feature = categorical_feature
+                    , early_stopping_rounds = early_stopping_rounds
+                    , callbacks = callbacks
+                    , delete_boosters_folds = TRUE
+                    , ...
+    )
+    if (higher_better) {
+      if (cvbst$best_score > best_score) {
+        current_score_is_better <- TRUE
+      }
+    } else {
+      if (cvbst$best_score < best_score) {
+        current_score_is_better <- TRUE
+      }
+    }
     if (current_score_is_better) {
       best_score <- cvbst$best_score
       best_iter <- cvbst$best_iter
