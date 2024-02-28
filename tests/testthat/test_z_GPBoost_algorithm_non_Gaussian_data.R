@@ -338,11 +338,11 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       #   3. Prediction
       pred <- predict(bst, data = X_test, group_data_pred = group_data_test,
                       predict_var = TRUE, pred_latent = TRUE)
-      expect_lt(sum(abs(head(pred$fixed_effect, n=4)-c(0.4455938, -0.2227164, 0.8109617, 0.6144774))),TOLERANCE)
-      expect_lt(sum(abs(tail(pred$random_effect_mean)-c(-1.050472, -1.025383, -1.187068,
+      expect_lt(sum(abs(head(pred$fixed_effect, n=4)-c(0.4456027, -0.2227075, 0.8109699, 0.6144861))),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$random_effect_mean)-c(-1.050475, -1.025386, -1.187071,
                                                         rep(0,n_new)))),TOLERANCE)
-      expect_lt(sum(abs(tail(pred$random_effect_cov)-c(0.1165838, 0.1175573, 0.1174311,
-                                                       rep(0.7282491,n_new)))),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$random_effect_cov)-c(0.1165832, 0.1175566, 0.1174304,
+                                                       rep(0.7282295,n_new)))),TOLERANCE)
       
       # Training using Nelder-Mead
       gp_model <- GPModel(group_data = group_data_train, likelihood = "bernoulli_probit")
@@ -535,6 +535,90 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                       eval = bin_cust_error, metric = "bin_cust_error")
       expect_equal(cvbst$best_iter, 7)
       expect_lt(abs(cvbst$best_score-0.364), TOLERANCE)
+      
+    })
+    
+    test_that("GPBoost algorithm: large data and 'reuse_learning_rates_gp_model' and 'line_search_step_length' options", {
+      
+      n <- 1e4
+      X_train <- matrix(sim_rand_unif(n=2*n, init_c=0.9135), ncol=2)
+      # Simulate grouped random effects
+      sigma2_1 <- 0.6 # variance of first random effect 
+      sigma2 <- 0.1^2 # error variance
+      m <- n / 100 # number of categories / levels for grouping variable
+      group <- rep(1,n) # grouping variable
+      for(i in 1:m) group[((i-1)*n/m+1):(i*n/m)] <- i
+      b1 <- sqrt(sigma2_1) * qnorm(sim_rand_unif(n=length(unique(group)), init_c=0.3462))
+      eps <- b1[group]
+      lp <- X_train %*% c(1,1)
+      lp <- lp - mean(lp)
+      probs <- pnorm(lp + eps)
+      y <- as.numeric(sim_rand_unif(n=n, init_c=0.5574) < probs)
+      params <- list(learning_rate = 0.1, max_depth = 6,
+                     min_data_in_leaf = 5, seed = 1)
+      set.seed(1)
+      dtrain <- gpb.Dataset(data = X_train, label = y)
+      folds <- list()
+      for(i in 1:4) folds[[i]] <- as.integer(1:(n/4) + (n/4) * (i-1))
+      
+      # Create random effects model and train GPBoost model
+      gp_model <- GPModel(group_data = group, likelihood = "binary_logit")
+      set_optim_params(gp_model, params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpboost(data = X_train, label = y, gp_model = gp_model,
+                     nrounds = 10, params = params, verbose = 0, 
+                     reuse_learning_rates_gp_model = TRUE,
+                     line_search_step_length = FALSE)
+      nll <- 5644.699232
+      expect_lt(abs((gp_model$get_current_neg_log_likelihood()-nll))/abs(nll),TOLERANCE)
+      # With the option line_search_step_length
+      gp_model <- GPModel(group_data = group, likelihood = "binary_logit")
+      set_optim_params(gp_model, params=DEFAULT_OPTIM_PARAMS)
+      bst <- gpboost(data = X_train, label = y, gp_model = gp_model,
+                     nrounds = 10, params = params, verbose = 0,
+                     reuse_learning_rates_gp_model = TRUE,
+                     line_search_step_length = TRUE)
+      nll <- 5317.368493
+      expect_lt(abs((gp_model$get_current_neg_log_likelihood()-nll))/abs(nll),TOLERANCE)
+      
+      # CV
+      gp_model <- GPModel(group_data = group, likelihood = "binary_logit")
+      set_optim_params(gp_model, params=DEFAULT_OPTIM_PARAMS)
+      score <- 0.683929491027179
+      cvbst <- gpb.cv(params = params, data = dtrain, gp_model = gp_model,
+                      nrounds = 20, nfold = 4, eval = "binary_logloss", early_stopping_rounds = 5,
+                      use_gp_model_for_validation = TRUE, folds = folds, verbose = 0,
+                      reuse_learning_rates_gp_model = TRUE, line_search_step_length = FALSE)
+      expect_lt(abs(cvbst$best_score-score), TOLERANCE)
+      cvbst <- gpb.cv(params = params, data = dtrain, gp_model = gp_model,
+                      nrounds = 20, nfold = 4, eval = "binary_logloss", early_stopping_rounds = 5,
+                      use_gp_model_for_validation = TRUE, folds = folds, verbose = 0,
+                      reuse_learning_rates_gp_model = TRUE,
+                      line_search_step_length = TRUE)
+      score <- 0.672572152021631
+      expect_lt(abs(cvbst$best_score-score), TOLERANCE)
+      
+      # Check whether the option "reuse_learning_rates_gp_model" is used or not
+      gp_model <- GPModel(group_data = group, likelihood = "binary_logit")
+      params_loc <- DEFAULT_OPTIM_PARAMS
+      params_loc$trace = TRUE
+      set_optim_params(gp_model, params=params_loc)
+      output <- capture.output( bst <- gpboost(data = X_train, label = y, gp_model = gp_model,
+                                               nrounds = 2, params = params, verbose = 0, 
+                                               reuse_learning_rates_gp_model = FALSE,
+                                               line_search_step_length = TRUE) )
+      str <- output[length(output)-10]
+      nb_ll_eval <- as.numeric(substr(str, nchar(str)-3, nchar(str)-2))
+      expect_equal(nb_ll_eval, 10)
+      # same thing with reuse_learning_rates_gp_model = TRUE
+      gp_model <- GPModel(group_data = group, likelihood = "binary_logit")
+      set_optim_params(gp_model, params=params_loc)
+      output <- capture.output( bst <- gpboost(data = X_train, label = y, gp_model = gp_model,
+                                               nrounds = 2, params = params, verbose = 0, 
+                                               reuse_learning_rates_gp_model = TRUE,
+                                               line_search_step_length = TRUE) )
+      str <- output[length(output)-9]
+      nb_ll_eval <- as.numeric(substr(str, nchar(str)-2, nchar(str)-2))
+      expect_equal(nb_ll_eval, 4)
       
     })
     
