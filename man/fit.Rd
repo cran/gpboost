@@ -4,7 +4,7 @@
 \alias{fit}
 \title{Generic 'fit' method for a \code{GPModel}}
 \usage{
-fit(gp_model, y, X, params, fixed_effects = NULL)
+fit(gp_model, y, X, params, offset = NULL, fixed_effects = NULL)
 }
 \arguments{
 \item{gp_model}{a \code{GPModel}}
@@ -108,11 +108,11 @@ fixed effects linear regression term (if there is one)}
     \itemize{
       \item Options for non-Gaussian likelihoods and gp_approx = "vecchia": 
         \itemize{
-          \item{"piv_chol_on_Sigma" (= default): (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
-      where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
-          \item{"Sigma_inv_plus_BtWB": (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
+          \item{"Sigma_inv_plus_BtWB" (= default): (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
       where B^T * D^-1 * B approx= Sigma^-1 }
       }
+          \item{"piv_chol_on_Sigma": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
+      where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
       \item Options for likelihood = "gaussian" and gp_approx = "full_scale_tapering": 
         \itemize{
           \item{"predictive_process_plus_diagonal" (= default): predictive process preconditiioner }
@@ -122,9 +122,11 @@ fixed effects linear regression term (if there is one)}
    }
 }}
 
-\item{fixed_effects}{A \code{numeric} \code{vector} with 
-additional fixed effects that are added to the linear predictor (= offset). 
+\item{offset}{A \code{numeric} \code{vector} with 
+additional fixed effects contributions that are added to the linear predictor (= offset). 
 The length of this vector needs to equal the number of training data points.}
+
+\item{fixed_effects}{This is discontinued. Use the renamed equivalent argument \code{offset} instead}
 }
 \description{
 Generic 'fit' method for a \code{GPModel}
