@@ -1,4 +1,5 @@
 // Copyright (C) 2016-2023 Yixuan Qiu <yixuan.qiu@cos.name>
+// Modified work Copyright (c) 2024 Fabio Sigrist. All rights reserved.
 // Under MIT license
 
 #ifndef LBFGSPP_LINE_SEARCH_BACKTRACKING_H
@@ -70,11 +71,21 @@ public:
             // x_{k+1} = x_k + step * d_k
             x.noalias() = xp + step * drt;
             // Evaluate this candidate
-            fx = f(x, grad);
+            fx = f(x, grad, true, false);  // ChangedForGPBoost
+
+            //Log::REInfo("LineSearch: iter = %d, fx = %g, step = %g, fx_init = %g", iter, fx, step, fx_init);  // for debugging
 
             if (fx > fx_init + step * test_decr || (fx != fx))
             {
-                width = dec;
+                // ChangedForGPBoost
+                if ((fx - fx_init) > 2. * std::max(abs(fx_init), Scalar(1)))
+                {
+                    width = dec / 16.;  // make step size much smaller for very large increases to avoid too many backtracking steps
+                }
+                else
+                {
+                    width = dec;
+                }
             }
             else
             {
@@ -115,8 +126,20 @@ public:
             step *= width;
         }
 
+        // ChangedForGPBoost
         if (iter >= param.max_linesearch)
+        {
+            x.noalias() = xp;
+            fx = fx_init;
+            step = 0.;
             Log::REDebug("GPModel lbfgs: the line search routine reached the maximum number of iterations");
+        }
+        else if (iter > 0)
+        {
+            Log::REDebug("LineSearch for 'lbfgs' finished after %d iterations, step length = %g", iter, step);
+        }
+        f(x, grad, false, true);//calculate gradient
+         
     }
 };
 

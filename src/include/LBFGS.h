@@ -1,5 +1,5 @@
 // Copyright (C) 2016-2023 Yixuan Qiu <yixuan.qiu@cos.name>
-//  Modified work Copyright (c) 2024 Fabio Sigrist. All rights reserved.
+// Modified work Copyright (c) 2024 Fabio Sigrist. All rights reserved.
 // Under MIT license
 
 #ifndef LBFGSPP_LBFGS_H
@@ -89,7 +89,30 @@ public:
         const int fpast = m_param.past;
 
         // Evaluate function and compute gradient
-        fx = f(x, m_grad);
+        fx = f(x, m_grad, true, true);// ChangedForGPBoost
+
+        std::string init_coef_str = "";
+        if (f.HasCovariates())
+        {
+            init_coef_str = " and 'init_coef'";
+        }
+        std::string problem_str = "none";
+        if (std::isnan(fx))
+        {
+            problem_str = "NaN";
+        }
+        else if (std::isinf(fx))
+        {
+            problem_str = "Inf";
+        }
+        if (problem_str != "none")
+        {
+            Log::REFatal((problem_str + " occurred in initial approximate negative marginal log-likelihood. "
+                "Possible solutions: try other initial values ('init_cov_pars'" + init_coef_str + ") "
+                "or other tuning parameters in case you apply the GPBoost algorithm (e.g., learning_rate)").c_str());
+        }
+        Log::REDebug("Initial approximate negative marginal log-likelihood: %g", fx);
+
         m_gnorm = m_grad.norm();
         if (fpast > 0)
             m_fx[0] = fx;
@@ -106,7 +129,7 @@ public:
         // Initial direction
         m_drt.noalias() = -m_grad;
         // Initial step size
-        Scalar step = Scalar(1) / m_drt.norm();
+        Scalar step = Scalar(m_param.initial_step_factor) / m_drt.norm();  // ChangedForGPBoost
 
         // Tolerance for s'y >= eps * (y'y)
         constexpr Scalar eps = std::numeric_limits<Scalar>::epsilon();
@@ -152,6 +175,7 @@ public:
             if (fpast > 0)
             {
                 const Scalar fxd = m_fx[k % fpast];
+
                 // ChangedForGPBoost
                 if (k >= fpast && (fxd - fx) <= m_param.delta * std::max(abs(fxd), Scalar(1)))
                     return k;
@@ -183,7 +207,7 @@ public:
             if (f.LearnCovarianceParameters() && f.ShouldRedetermineNearestNeighborsVecchia())
             {
                 f.RedetermineNearestNeighborsVecchia();  // called only in certain iterations if gp_approx == "vecchia" and neighbors are selected based on correlations and not distances
-                fx = f(x, m_grad, false);
+                fx = f(x, m_grad, true, false);
                 m_bfgs.apply_Hv(m_grad, -Scalar(1), m_drt);
                 if (fpast > 0)
                 {
