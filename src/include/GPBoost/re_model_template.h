@@ -6565,6 +6565,7 @@ namespace GPBoost {
 				// factorize matrix used in Woodbury identity
 				std::shared_ptr<den_mat_t> cross_cov = re_comps_cross_cov_[cluster_i][0]->GetZSigmaZt();
 				den_mat_t sigma_ip_stable = *(re_comps_ip_[cluster_i][0]->GetZSigmaZt());
+				sigma_ip_stable.diagonal().array() += EPSILON_ADD_COVARIANCE_STABLE;
 				den_mat_t sigma_woodbury;// sigma_woodbury = sigma_ip + cross_cov^T * sigma_resid^-1 * cross_cov or for Preconditioner sigma_ip + cross_cov^T * D^-1 * cross_cov
 				if (matrix_inversion_method_ == "iterative") {
 					if (gp_approx_ == "fitc") {
@@ -6576,7 +6577,7 @@ namespace GPBoost {
 							diagonal_approx_preconditioner_[cluster_i] = (*sigma_resid).diagonal();
 							diagonal_approx_inv_preconditioner_[cluster_i] = diagonal_approx_preconditioner_[cluster_i].cwiseInverse();
 							sigma_woodbury = (*cross_cov).transpose() * (diagonal_approx_inv_preconditioner_[cluster_i].asDiagonal() * (*cross_cov));
-							sigma_woodbury += *(re_comps_ip_[cluster_i][0]->GetZSigmaZt());
+							sigma_woodbury += sigma_ip_stable;
 							chol_fact_woodbury_preconditioner_[cluster_i].compute(sigma_woodbury);
 						}
 						else if (cg_preconditioner_type_ != "none") {

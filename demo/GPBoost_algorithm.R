@@ -129,9 +129,9 @@ plot(b1, pred$random_effect_mean, xlab="truth", ylab="predicted",
 
 #--------------------Choosing tuning parameters----------------
 param_grid <- list("learning_rate" = c(1,0.1,0.01), 
-                  "min_data_in_leaf" = c(10,100,1000),
-                  "max_depth" = c(1,2,3,5,10),
-                  "lambda_l2" = c(0,1,10))
+                   "min_data_in_leaf" = c(10,100,1000),
+                   "max_depth" = c(1,2,3,5,10),
+                   "lambda_l2" = c(0,1,10))
 other_params <- list(num_leaves = 2^10)
 # Note: here we try different values for 'max_depth' and thus set 'num_leaves' to a large value.
 #       An alternative strategy is to impose no limit on 'max_depth', 
@@ -258,6 +258,16 @@ shap.plot.summary.wrap1(bst, X = X)
 shap_long <- shap.prep(bst, X_train = X)
 shap.plot.dependence(data_long = shap_long, x = "Covariate_1",
                      color_feature = "Covariate_2", smooth = FALSE)
+# SHAP interaction values
+source("https://raw.githubusercontent.com/fabsig/GPBoost/master/helpers/unify_gpboost_treeshap.R")# Load required function
+library(treeshap)
+library(shapviz)
+unified_bst <- gpboost_unify_treeshap(bst, X)
+interactions_bst <- treeshap::treeshap(unified_bst, X, interactions = T, verbose = 0)
+shap_bst <- shapviz(interactions_bst)
+top4 <- names(head(sv_importance(shap_bst, kind = "no"), 4))
+sv_interaction(shap_bst[1:1000, top4])
+sv_dependence(shap_bst, v = "Covariate_1", color_var = top4, interactions = TRUE)
 
 #--------------------Saving a booster with a gp_model and loading it from a file----------------
 # Train model and make predictions
