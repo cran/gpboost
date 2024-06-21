@@ -855,7 +855,7 @@ namespace LightGBM {
 		bool reg_sqrt = false;
 
 		// check = >0.0
-		// desc = used only in ``huber`` and ``quantile`` ``regression`` applications
+		// desc = used only in ``huber`` and ``quantile`` ``regression`` applications (this is not supported for the GPBoost algorithm)
 		// desc = parameter for `Huber loss <https://en.wikipedia.org/wiki/Huber_loss>`__ and `Quantile regression <https://en.wikipedia.org/wiki/Quantile_regression>`__
 		double alpha = 0.9;
 

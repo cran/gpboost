@@ -19,6 +19,7 @@
 #include <GPBoost/likelihoods.h>
 #include <GPBoost/utils.h>
 #include <GPBoost/optim_utils.h>
+#include <LBFGSpp/BFGSMat.h>
 //#include <Eigen/src/misc/lapack.h>
 
 #include <memory>
@@ -127,6 +128,10 @@ namespace GPBoost {
 			}
 			else {
 				gp_approx_ = std::string(gp_approx);
+				if (gp_approx_ == "fitc_stable") {//experimental option
+					gp_approx_ = "fitc";
+					fitc_stable_ = true;
+				}
 			}
 			if (SUPPORTED_GP_APPROX_.find(gp_approx_) == SUPPORTED_GP_APPROX_.end()) {
 				Log::REFatal("GP approximation '%s' is currently not supported ", gp_approx_.c_str());
@@ -401,6 +406,10 @@ namespace GPBoost {
 			return(likelihood_[unique_clusters_[0]]->TestNegLogLikelihoodAdaptiveGHQuadrature(y_test, pred_mean, pred_var, num_data));
 		}
 
+		LBFGSpp::BFGSMat<double>& GetMBFGS() {
+			return(m_bfgs_);
+		}
+
 		/*!
 		* \brief Set configuration parameters for the optimizer
 		* \param lr Learning rate for covariance parameters. If lr<= 0, internal default values are used (0.1 for "gradient_descent" and 1. for "fisher_scoring")
@@ -580,6 +589,8 @@ namespace GPBoost {
 			else {
 				has_covariates_ = true;
 			}
+			bool reuse_m_bfgs_from_previous_call = reuse_learning_rates_from_previous_call && called_in_GPBoost_algorithm && learn_covariance_parameters && 
+				cov_pars_have_been_estimated_once_ && cov_pars_have_been_estimated_during_last_call_;
 			OptimParamsSetInitialValues();
 			InitializeOptimSettings(called_in_GPBoost_algorithm, reuse_learning_rates_from_previous_call);
 			// Some checks
@@ -736,6 +747,10 @@ namespace GPBoost {
 			// Assume that this function is only called for initialization of the GPBoost algorithm
 			//	when (i) there is only an intercept (and not other covariates) and (ii) the covariance parameters are not learned
 			const double* fixed_effects_ptr = fixed_effects;
+			if (fixed_effects != nullptr && !called_in_GPBoost_algorithm) {//save offset / fixed_effects for prediction
+				has_fixed_effects_ = true;
+				fixed_effects_ = Eigen::Map<const vec_t>(fixed_effects, num_data_);
+			}
 			// Initialization of covariance parameters related variables as well as additional parameters for likelihood (aux_pars)
 			int num_cov_par_estimate = num_cov_par_;
 			if (estimate_aux_pars_) {
@@ -922,7 +937,7 @@ namespace GPBoost {
 				OptimExternal<T_mat, T_chol>(this, cov_aux_pars, beta_, fixed_effects, max_iter_,
 					delta_rel_conv_, convergence_criterion_, num_it, learn_covariance_parameters,
 					optimizer_cov_pars_, profile_out_marginal_variance_, profile_out_coef_optim_external,
-					neg_log_likelihood_, num_cov_par_, NumAuxPars(), GetAuxPars(), has_covariates_, lr_cov_init_);
+					neg_log_likelihood_, num_cov_par_, NumAuxPars(), GetAuxPars(), has_covariates_, lr_cov_init_, reuse_m_bfgs_from_previous_call);
 				// Check for NA or Inf
 				if (optimizer_cov_pars_ == "bfgs_optim_lib" || optimizer_cov_pars_ == "lbfgs" || optimizer_cov_pars_ == "lbfgs_linesearch_nocedal_wright") {
 					if (learn_covariance_parameters) {
@@ -1226,7 +1241,7 @@ namespace GPBoost {
 				OptimExternal<T_mat, T_chol>(this, cov_aux_pars, beta_, fixed_effects, max_iter_,
 					delta_rel_conv_, convergence_criterion_, num_it,
 					learn_covariance_parameters, "nelder_mead", profile_out_marginal_variance_, false,
-					neg_log_likelihood_, num_cov_par_, NumAuxPars(), GetAuxPars(), has_covariates_, lr_cov_init_);
+					neg_log_likelihood_, num_cov_par_, NumAuxPars(), GetAuxPars(), has_covariates_, lr_cov_init_, reuse_m_bfgs_from_previous_call);
 			}
 			if (num_it == max_iter_) {
 				Log::REDebug("GPModel: no convergence after the maximal number of iterations "
@@ -1299,6 +1314,10 @@ namespace GPBoost {
 			model_has_been_estimated_ = true;
 			if (learn_covariance_parameters) {
 				cov_pars_have_been_estimated_once_ = true;
+				cov_pars_have_been_estimated_during_last_call_ = true;
+			}
+			else {
+				cov_pars_have_been_estimated_during_last_call_ = false;
 			}
 			if (has_covariates_ && !only_intercept_for_GPBoost_algo) {
 				coef_have_been_estimated_once_ = true;
@@ -2037,6 +2056,10 @@ namespace GPBoost {
 						if (matrix_inversion_method_ == "cholesky") {//Cholesky
 							log_det_Psi_ -= 2. * (((den_mat_t)chol_fact_sigma_ip_[cluster_i].matrixL()).diagonal().array().log().sum());
 							log_det_Psi_ += 2. * (((den_mat_t)chol_fact_sigma_woodbury_[cluster_i].matrixL()).diagonal().array().log().sum());
+
+							////alternative way for calculating determinants with Woodbury (does not solve numerical stability issue, 05.06.2024)
+							//log_det_Psi_ += 2. * (((den_mat_t)chol_fact_sigma_woodbury_stable_[cluster_i].matrixL()).diagonal().array().log().sum());
+
 							if (gp_approx_ == "full_scale_tapering") {
 								log_det_Psi_ += 2. * (((T_mat)chol_fact_resid_[cluster_i].matrixL()).diagonal().array().log().sum());
 							}
@@ -2510,7 +2533,14 @@ namespace GPBoost {
 			}
 			//Factorize covariance matrix and calculate Psi^{-1}y_obs or calculate Laplace approximation (if required)
 			if (pred_for_observed_data) {
-				SetYCalcCovCalcYAuxForPred(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects, false);
+				const double* fixed_effects_ptr = nullptr;
+				if (fixed_effects != nullptr) {
+					fixed_effects_ptr = fixed_effects;
+				}
+				else if (has_fixed_effects_) {
+					fixed_effects_ptr = fixed_effects_.data();
+				}
+				SetYCalcCovCalcYAuxForPred(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects_ptr, false);
 			}
 			// Loop over different clusters to calculate predictions
 			for (const auto& cluster_i : unique_clusters_pred) {
@@ -2585,7 +2615,12 @@ namespace GPBoost {
 								re_comps_ip_cluster_i[j]->CalcSigma();
 								re_comps_cross_cov_cluster_i[j]->CalcSigma();
 								den_mat_t sigma_ip_stable = *(re_comps_ip_cluster_i[j]->GetZSigmaZt());
-								sigma_ip_stable.diagonal().array() += EPSILON_ADD_COVARIANCE_STABLE;
+								if (fitc_stable_) {
+									sigma_ip_stable.diagonal().array() *= EPSILON_MULT_DIAG_COVARIANCE_IP_FITC_MORE_STABLE;
+								}
+								else {
+									sigma_ip_stable.diagonal().array() *= EPSILON_MULT_DIAG_COVARIANCE_IP_FITC_STABLE;
+								}
 								chol_den_mat_t chol_fact_sigma_ip;
 								chol_fact_sigma_ip.compute(sigma_ip_stable);
 								den_mat_t cross_cov = *(re_comps_cross_cov_cluster_i[j]->GetZSigmaZt());
@@ -3030,7 +3065,14 @@ namespace GPBoost {
 			if (gauss_likelihood_ && gp_approx_ == "vecchia") {
 				calc_cov_factor = true;//recalculate Vecchia approximation since it might have been done (saved in B_) with a different nugget effect if calc_std_dev == true in CalcStdDevCovPar
 			}
-			SetYCalcCovCalcYAuxForPred(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects, true);
+			const double* fixed_effects_ptr = nullptr;
+			if (fixed_effects != nullptr) {
+				fixed_effects_ptr = fixed_effects;
+			}
+			else if (has_fixed_effects_) {
+				fixed_effects_ptr = fixed_effects_.data();
+			}
+			SetYCalcCovCalcYAuxForPred(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects_ptr, true);
 			// Loop over different clusters to calculate predictions
 			for (const auto& cluster_i : unique_clusters_) {
 				if (gauss_likelihood_) {
@@ -3718,6 +3760,8 @@ namespace GPBoost {
 		string_t gp_approx_ = "none";
 		/*! \brief List of supported optimizers for covariance parameters */
 		const std::set<string_t> SUPPORTED_GP_APPROX_{ "none", "vecchia", "tapering", "fitc", "full_scale_tapering" };
+		/*! \brief Experimental feature for more stable FITC approximation */
+		bool fitc_stable_ = false;//experimental option
 
 		// RANDOM EFFECT / GP COMPONENTS
 		/*! \brief Keys: labels of independent realizations of REs/GPs, values: vectors with individual RE/GP components */
@@ -3780,6 +3824,10 @@ namespace GPBoost {
 		vec_t scale_transf_;
 		/*! \brief Linear regression coefficients */
 		vec_t beta_;
+		/*! \brief If true, there are additional external offsets */
+		bool has_fixed_effects_ = false;
+		/*! \brief Linear regression coefficients */
+		vec_t fixed_effects_;
 
 		/*! \brief Variance of idiosyncratic error term (nugget effect) */
 		double sigma2_ = 1.;//initialize with 1. to avoid valgrind false positives in EvalLLforLBFGSpp() in optim_utils.h
@@ -3902,6 +3950,8 @@ namespace GPBoost {
 		double C_MAX_CHANGE_COEF_ = 10.;
 		/*! \brief True if covariance parameters and potential auxiliary parameters have been etimated before in a previous boosting iteration (applies only to the GPBoost algorithm) */
 		bool cov_pars_have_been_estimated_once_ = false;
+		/*! \brief True if covariance parameters and potential auxiliary parameters have been etimated in the most recent call (applies only to the GPBoost algorithm) */
+		bool cov_pars_have_been_estimated_during_last_call_ = false;
 		/*! \brief True if regression coefficients (actually the learning rate interpreted as a coefficient) have been etimated before in a previous boosting iteration (applies only to the GPBoost algorithm) */
 		bool coef_have_been_estimated_once_ = false;
 		/*! \brief True if 'lr_cov_' and 'lr_aux_pars_ have been doubled in the first optimization iteration (num_iter_ == 0) (applies only to the GPBoost algorithm) */
@@ -3946,6 +3996,8 @@ namespace GPBoost {
 		double INCREASE_LR_CHANGE_LL_THRESHOLD_ = 1e-3;
 		/*! \brief If true, the nugget effect is profiled out for Gaussian likelihoods (=use closed-form expression for error / nugget variance) */
 		bool profile_out_marginal_variance_ = false;
+		/*! \brief Approximation to the Hessian matrix for LBFGS saved here for reuse */
+		LBFGSpp::BFGSMat<double> m_bfgs_;
 
 		// MATRIX INVERSION PROPERTIES
 		/*! \brief Matrix inversion method */
@@ -4107,6 +4159,8 @@ namespace GPBoost {
 		std::map<data_size_t, T_chol> chol_fact_resid_;
 		/*! \brief Key: labels of independent realizations of REs/GPs, values: Cholesky decompositions of matrix sigma_ip + cross_cov^T * sigma_resid^-1 * cross_cov used in Woodbury identity */
 		std::map<data_size_t, chol_den_mat_t> chol_fact_sigma_woodbury_;
+		///*! \brief Key: labels of independent realizations of REs/GPs, values: Cholesky decompositions of matrix I + sigma_ip^(-1/2) * cross_cov^T * sigma_resid^-1 * cross_cov * sigma_ip^(-T/2) used in stable version for determinant in Woodbury identity */
+		//std::map<data_size_t, chol_den_mat_t> chol_fact_sigma_woodbury_stable_;
 		/*! \brief Key: labels of independent realizations of REs/GPs, values: Diagonal of residual covariance matrix (Preconditioner) */
 		std::map<data_size_t, vec_t> diagonal_approx_preconditioner_;
 		/*! \brief Key: labels of independent realizations of REs/GPs, values: Inverse of diagonal of residual covariance matrix (Preconditioner) */
@@ -5350,7 +5404,12 @@ namespace GPBoost {
 						re_comps_ip_[cluster_i][j]->CalcSigma();
 						re_comps_cross_cov_[cluster_i][j]->CalcSigma();
 						den_mat_t sigma_ip_stable = *(re_comps_ip_[cluster_i][j]->GetZSigmaZt());
-						sigma_ip_stable.diagonal().array() += EPSILON_ADD_COVARIANCE_STABLE;
+						if (fitc_stable_) {
+							sigma_ip_stable.diagonal().array() *= EPSILON_MULT_DIAG_COVARIANCE_IP_FITC_MORE_STABLE;
+						}
+						else {
+							sigma_ip_stable.diagonal().array() *= EPSILON_MULT_DIAG_COVARIANCE_IP_FITC_STABLE;
+						}
 						chol_fact_sigma_ip_[cluster_i].compute(sigma_ip_stable);
 						if (gp_approx_ == "fitc") {
 							std::shared_ptr<den_mat_t> cross_cov = re_comps_cross_cov_[cluster_i][0]->GetZSigmaZt();
@@ -5514,7 +5573,7 @@ namespace GPBoost {
 			}
 			if (estimate_aux_pars_) {
 				double max_lr_caux_pars = MaximalLearningRateCovAuxPars(neg_step_dir.segment(num_grad_cov_par, NumAuxPars()));
-				if (lr_cov_ > max_lr_caux_pars) {
+				if (lr_aux_pars_ > max_lr_caux_pars) {
 					lr_aux_pars_ = max_lr_caux_pars;
 					Log::REDebug("GPModel: The learning rate for the auxiliary parameters has been decreased in iteration number %d since "
 						"the gradient update on the log-scale would have been too large (change by more than a factor %d). New learning rate = %g",
@@ -6565,7 +6624,12 @@ namespace GPBoost {
 				// factorize matrix used in Woodbury identity
 				std::shared_ptr<den_mat_t> cross_cov = re_comps_cross_cov_[cluster_i][0]->GetZSigmaZt();
 				den_mat_t sigma_ip_stable = *(re_comps_ip_[cluster_i][0]->GetZSigmaZt());
-				sigma_ip_stable.diagonal().array() += EPSILON_ADD_COVARIANCE_STABLE;
+				if (fitc_stable_) {
+					sigma_ip_stable.diagonal().array() *= EPSILON_MULT_DIAG_COVARIANCE_IP_FITC_MORE_STABLE;
+				}
+				else {
+					sigma_ip_stable.diagonal().array() *= EPSILON_MULT_DIAG_COVARIANCE_IP_FITC_STABLE;
+				}
 				den_mat_t sigma_woodbury;// sigma_woodbury = sigma_ip + cross_cov^T * sigma_resid^-1 * cross_cov or for Preconditioner sigma_ip + cross_cov^T * D^-1 * cross_cov
 				if (matrix_inversion_method_ == "iterative") {
 					if (gp_approx_ == "fitc") {
@@ -6600,6 +6664,16 @@ namespace GPBoost {
 						TriangularSolveGivenCholesky<T_chol, T_mat, den_mat_t, den_mat_t>(chol_fact_resid_[cluster_i], *cross_cov, sigma_resid_Ihalf_cross_cov, false);
 						sigma_woodbury = sigma_resid_Ihalf_cross_cov.transpose() * sigma_resid_Ihalf_cross_cov;
 					}
+
+					////alternative way for calculating determinants with Woodbury (does not solve numerical stability issue, 05.06.2024)
+					//den_mat_t sigma_woodbury_stable = sigma_woodbury;
+					//TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol_fact_sigma_ip_[cluster_i], sigma_woodbury_stable, sigma_woodbury_stable, false);
+					//den_mat_t sigma_woodbury_stable_aux = sigma_woodbury_stable.transpose();
+					//TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol_fact_sigma_ip_[cluster_i], sigma_woodbury_stable_aux, sigma_woodbury_stable_aux, false);
+					//sigma_woodbury_stable = sigma_woodbury_stable_aux.transpose();
+					//sigma_woodbury_stable.diagonal().array() += 1.;
+					//chol_fact_sigma_woodbury_stable_[cluster_i].compute(sigma_woodbury_stable);
+
 					sigma_woodbury += sigma_ip_stable;
 					chol_fact_sigma_woodbury_[cluster_i].compute(sigma_woodbury);
 				}
