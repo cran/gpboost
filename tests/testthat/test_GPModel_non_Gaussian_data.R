@@ -594,13 +594,14 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_lt(sum(abs(as.vector(pred$cov)-expected_cov)),TOLERANCE_MEDIUM)
     params = DEFAULT_OPTIM_PARAMS
     params$optimizer_cov <- "lbfgs"
+    params$optimizer_coef <- "lbfgs"
     capture.output( gp_model <- fitGPModel(group_data = group, likelihood = "poisson",
                                            y = y_o, X = X, params = params, offset = offset), file='NUL')
     pred <- predict(gp_model, group_data_pred = group_test, X_pred = X_test, offset = offset, 
                     predict_cov_mat = TRUE, predict_response = FALSE)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars)),TOLERANCE_LOOSE)
-    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coefs)),0.6)
-    nll_opt_o <- 144626.2921
+    expect_lt(sum(abs(as.vector(gp_model$get_coef())-coefs)),0.1)
+    nll_opt_o <- 144626.2556
     expect_lt(abs(gp_model$get_current_neg_log_likelihood()-nll_opt_o),TOLERANCE_MEDIUM)
     expect_lt(sum(abs(pred$mu-expected_mu)),0.1)
     expect_lt(sum(abs(as.vector(pred$cov)-expected_cov)),TOLERANCE_LOOSE)
@@ -2241,6 +2242,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_lt(sum(abs(as.vector(gp_model$get_coef())-coef)),TOLERANCE_MEDIUM)
     # Also estimate shape parameter
     params_shape$optimizer_cov <- "nelder_mead"
+    params_shape$optimizer_coef <- "nelder_mead"
     capture.output( gp_model <- fitGPModel(group_data = group, likelihood = "gamma",
                                            y = y_lin, X=X, params = params_shape), file='NUL')
     cov_pars <- c(0.5097316)
@@ -2252,6 +2254,7 @@ if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
     expect_equal(gp_model$get_num_optim_iter(), 256)
     # Also estimate shape parameter with gradient descent
     params_shape$optimizer_cov <- "gradient_descent"
+    params_shape$optimizer_coef <- "gradient_descent"
     gp_model <- fitGPModel(group_data = group, likelihood = "gamma",
                            y = y_lin, X=X, params = params_shape)
     cov_pars <- c(0.5143204465 )

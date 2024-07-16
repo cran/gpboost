@@ -512,8 +512,10 @@ namespace GPBoost {
 			lr_coef_after_first_optim_boosting_iteration_ = lr_coef;
 			acc_rate_coef_ = acc_rate_coef;
 			if (optimizer_coef != nullptr) {
-				optimizer_coef_ = std::string(optimizer_coef);
-				coef_optimizer_has_been_set_ = true;
+				if (std::string(optimizer_coef) != "") {
+					optimizer_coef_ = std::string(optimizer_coef);
+					coef_optimizer_has_been_set_ = true;
+				}
 			}
 			num_rand_vec_trace_ = num_rand_vec_trace;
 			seed_rand_vec_trace_ = seed_rand_vec_trace;
@@ -592,20 +594,18 @@ namespace GPBoost {
 			bool reuse_m_bfgs_from_previous_call = reuse_learning_rates_from_previous_call && called_in_GPBoost_algorithm && learn_covariance_parameters && 
 				cov_pars_have_been_estimated_once_ && cov_pars_have_been_estimated_during_last_call_;
 			OptimParamsSetInitialValues();
-			InitializeOptimSettings(called_in_GPBoost_algorithm, reuse_learning_rates_from_previous_call);
+			InitializeOptimSettings(reuse_learning_rates_from_previous_call);
 			// Some checks
 			if (SUPPORTED_OPTIM_COV_PAR_.find(optimizer_cov_pars_) == SUPPORTED_OPTIM_COV_PAR_.end()) {
 				Log::REFatal("Optimizer option '%s' is not supported for covariance parameters ", optimizer_cov_pars_.c_str());
 			}
-			if (!gauss_likelihood_) {
-				if (optimizer_cov_pars_ == "fisher_scoring") {
-					Log::REFatal("Optimizer option '%s' is not supported for covariance parameters for non-Gaussian likelihoods ", optimizer_cov_pars_.c_str());
-				}
+			if (optimizer_cov_pars_ == "fisher_scoring" && !gauss_likelihood_) {
+				Log::REFatal("Optimizer option '%s' is not supported for covariance parameters for non-Gaussian likelihoods ", optimizer_cov_pars_.c_str());
 			}
 			if (optimizer_cov_pars_ == "fisher_scoring" && estimate_aux_pars_) {
 				Log::REFatal("Optimizer option '%s' is not supported when estimating additional auxiliary parameters for non-Gaussian likelihoods ", optimizer_cov_pars_.c_str());
 			}
-			if (covariate_data != nullptr) {
+			if (has_covariates_) {
 				if (gauss_likelihood_) {
 					if (SUPPORTED_OPTIM_COEF_GAUSS_.find(optimizer_coef_) == SUPPORTED_OPTIM_COEF_GAUSS_.end()) {
 						Log::REFatal("Optimizer option '%s' is not supported for linear regression coefficients.", optimizer_coef_.c_str());
@@ -616,6 +616,47 @@ namespace GPBoost {
 						Log::REFatal("Optimizer option '%s' is not supported for linear regression coefficients for non-Gaussian likelihoods ", optimizer_coef_.c_str());
 					}
 				}
+				// check whether optimizer_cov_pars_ and optimizer_coef_ are compatible
+				if (optimizer_coef_ != optimizer_cov_pars_ &&
+					((OPTIM_EXTERNAL_.find(optimizer_cov_pars_) != OPTIM_EXTERNAL_.end() &&
+						!(optimizer_coef_ == "wls" && OPTIM_EXTERNAL_SUPPORT_WLS_.find(optimizer_cov_pars_) != OPTIM_EXTERNAL_SUPPORT_WLS_.end())) ||
+						OPTIM_EXTERNAL_.find(optimizer_coef_) != OPTIM_EXTERNAL_.end())) { // optimizers are not equal and one of them is an external optimizer (except when optimizer_coef_ == "wls" and optimizer_cov_pars_ supports this)
+					if (optimizer_cov_pars_has_been_set_ && coef_optimizer_has_been_set_) {
+						Log::REFatal("Cannot use optimizer_cov = '%s' when optimizer_coef = '%s' ",
+							optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
+					}
+					else if (optimizer_cov_pars_has_been_set_ && !coef_optimizer_has_been_set_) {
+						if ((gauss_likelihood_ && SUPPORTED_OPTIM_COEF_GAUSS_.find(optimizer_cov_pars_) == SUPPORTED_OPTIM_COEF_GAUSS_.end()) ||
+							(!gauss_likelihood_ && SUPPORTED_OPTIM_COEF_NONGAUSS_.find(optimizer_coef_) == SUPPORTED_OPTIM_COEF_NONGAUSS_.end())) {
+							Log::REFatal("Cannot use optimizer_cov = '%s' when optimizer_coef = '%s' ",
+								optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
+						}
+						else {
+							Log::REDebug("'%s' is also used for estimating regression coefficients (optimizer_coef = '%s' is ignored) ",
+								optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
+							optimizer_coef_ = optimizer_cov_pars_;
+						}
+					}
+					else if (!optimizer_cov_pars_has_been_set_ && coef_optimizer_has_been_set_) {
+						if (SUPPORTED_OPTIM_COV_PAR_.find(optimizer_cov_pars_) == SUPPORTED_OPTIM_COV_PAR_.end()) {
+							Log::REFatal("Cannot use optimizer_cov = '%s' when optimizer_coef = '%s' ",
+								optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
+						}
+						else {
+							Log::REWarning("'%s' is also used for estimating covariance parameters (optimizer_cov = '%s' is ignored) ",
+								optimizer_coef_.c_str(), optimizer_cov_pars_.c_str());
+							optimizer_cov_pars_ = optimizer_coef_;
+						}
+					}
+				}
+			}//end has_covariates_
+			// Profiling out sigma (=use closed-form expression for error / nugget variance) is often better (the paremeters usually live on different scales and the nugget needs a smaller learning rate than the others...)
+			profile_out_marginal_variance_ = gauss_likelihood_ &&
+				(optimizer_cov_pars_ == "gradient_descent" || optimizer_cov_pars_ == "nelder_mead" || optimizer_cov_pars_ == "adam" ||
+					optimizer_cov_pars_ == "lbfgs" || optimizer_cov_pars_ == "lbfgs_linesearch_nocedal_wright");
+			bool gradient_contains_error_var = gauss_likelihood_ && !profile_out_marginal_variance_;//If true, the error variance parameter (=nugget effect) is also included in the gradient, otherwise not
+			if (optimizer_cov_pars_ == "lbfgs_not_profile_out_nugget") {
+				optimizer_cov_pars_ = "lbfgs";
 			}
 			// Check response variable data
 			if (y_data != nullptr) {
@@ -640,35 +681,11 @@ namespace GPBoost {
 			num_ll_evaluations_ = 0;
 			num_iter_ = 0;
 			num_it = max_iter_;
-			// Profiling out sigma (=use closed-form expression for error / nugget variance) is better for gradient descent for Gaussian data 
-			//	(the paremeters usually live on different scales and the nugget needs a small learning rate but the others not...)
-			profile_out_marginal_variance_ = gauss_likelihood_ &&
-				(optimizer_cov_pars_ == "gradient_descent" || optimizer_cov_pars_ == "nelder_mead" || optimizer_cov_pars_ == "adam" || 
-					optimizer_cov_pars_ == "lbfgs" || optimizer_cov_pars_ == "lbfgs_linesearch_nocedal_wright");
-			if (optimizer_cov_pars_ == "lbfgs_not_profile_out_nugget") {
-				optimizer_cov_pars_ = "lbfgs";
-			}
-			if (OPTIM_EXTERNAL_.find(optimizer_coef_) != OPTIM_EXTERNAL_.end()) {
-				if (optimizer_coef_ != optimizer_cov_pars_) {
-					Log::REFatal("Cannot use optimizer_cov = '%s' when optimizer_coef = '%s' ",
-						optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
-				}
-			}
-			if (OPTIM_EXTERNAL_.find(optimizer_cov_pars_) != OPTIM_EXTERNAL_.end()) {
-				if (OPTIM_EXTERNAL_SUPPORT_WLS_.find(optimizer_cov_pars_) == OPTIM_EXTERNAL_SUPPORT_WLS_.end()) {
-					if (coef_optimizer_has_been_set_ && optimizer_coef_ != optimizer_cov_pars_) {
-						Log::REWarning("'%s' is also used for estimating regression coefficients (optimizer_coef = '%s' is ignored) ",
-							optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
-					}
-					optimizer_coef_ = optimizer_cov_pars_;
-				}
-			}
-			bool gradient_contains_error_var = gauss_likelihood_ && !profile_out_marginal_variance_;//If true, the error variance parameter (=nugget effect) is also included in the gradient, otherwise not
 			has_intercept_ = false; //If true, the covariates contain an intercept column (only relevant if there are covariates)
 			bool only_intercept_for_GPBoost_algo = false;//True if the covariates contain only an intercept and this function is called from the GPBoost algorithm for finding an initial score 
 			bool find_learning_rate_for_GPBoost_algo = false;//True if this function is called from the GPBoost algorithm for finding an optimal learning rate
 			intercept_col_ = -1;
-			// Check whether one of the columns contains only 1's and if not, make warning
+			// Check whether one of the columns contains only 1's (-> has_intercept_)
 			if (has_covariates_) {
 				num_coef_ = num_covariates;
 				X_ = Eigen::Map<const den_mat_t>(covariate_data, num_data_, num_coef_);
@@ -751,7 +768,7 @@ namespace GPBoost {
 				has_fixed_effects_ = true;
 				fixed_effects_ = Eigen::Map<const vec_t>(fixed_effects, num_data_);
 			}
-			// Initialization of covariance parameters related variables as well as additional parameters for likelihood (aux_pars)
+			// Initialization of covariance parameters
 			int num_cov_par_estimate = num_cov_par_;
 			if (estimate_aux_pars_) {
 				num_cov_par_estimate += NumAuxPars();
@@ -760,29 +777,6 @@ namespace GPBoost {
 			for (int i = 0; i < num_cov_par_; ++i) {
 				cov_aux_pars[i] = init_cov_pars[i];
 			}
-			if (estimate_aux_pars_) {
-				// Find initial values for additional likelihood parameters (aux_pars) if they have not been given
-				if (!(likelihood_[unique_clusters_[0]]->AuxParsHaveBeenSet())) {
-					const double* aux_pars;
-					if (y_data == nullptr) {
-						vec_t y_aux_temp(num_data_);
-						GetY(y_aux_temp.data());
-						aux_pars = likelihood_[unique_clusters_[0]]->FindInitialAuxPars(y_aux_temp.data(), num_data_);
-						y_aux_temp.resize(0);
-					}
-					else {
-						aux_pars = likelihood_[unique_clusters_[0]]->FindInitialAuxPars(y_data, num_data_);
-					}
-					SetAuxPars(aux_pars);
-				}
-				for (int i = 0; i < NumAuxPars(); ++i) {
-					cov_aux_pars[num_cov_par_ + i] = GetAuxPars()[i];
-				}
-			}
-			vec_t cov_aux_pars_lag1 = vec_t(num_cov_par_estimate);
-			vec_t cov_aux_pars_init = cov_aux_pars;
-			vec_t cov_pars_after_grad_aux = cov_aux_pars, cov_aux_pars_after_grad_aux_lag1 = cov_aux_pars;//auxiliary variables used only if use_nesterov_acc == true
-			vec_t cov_aux_pars_before_lr_coef_small, aux_pars_before_lr_cov_small, cov_pars_before_lr_aux_pars_small;//auxiliary variables
 			// Set response variabla data (if needed). Note: for the GPBoost algorithm this is set a prior by calling SetY. For Gaussian data with covariates, this is set later repeatedly.
 			if ((!has_covariates_ || !gauss_likelihood_) && y_data != nullptr) {
 				SetY(y_data);
@@ -879,6 +873,31 @@ namespace GPBoost {
 				}
 				SetY(resid.data());
 			}
+			if (estimate_aux_pars_) {
+				// Find initial values for additional likelihood parameters (aux_pars) if they have not been given
+				if (!(likelihood_[unique_clusters_[0]]->AuxParsHaveBeenSet())) {
+					const double* aux_pars;
+					if (y_data == nullptr) {
+						vec_t y_aux_temp(num_data_);
+						GetY(y_aux_temp.data());
+						aux_pars = likelihood_[unique_clusters_[0]]->FindInitialAuxPars(y_aux_temp.data(), fixed_effects_ptr, num_data_);
+						y_aux_temp.resize(0);
+					}
+					else {
+						aux_pars = likelihood_[unique_clusters_[0]]->FindInitialAuxPars(y_data, fixed_effects_ptr, num_data_);
+					}
+					SetAuxPars(aux_pars);
+				}
+				for (int i = 0; i < NumAuxPars(); ++i) {
+					cov_aux_pars[num_cov_par_ + i] = GetAuxPars()[i];
+				}
+			}//end estimate_aux_pars_
+			// Initialize auxiliary variables for e.g. Nesterov acceleration
+			vec_t cov_aux_pars_lag1 = vec_t(num_cov_par_estimate);
+			vec_t cov_aux_pars_init = cov_aux_pars;
+			vec_t cov_pars_after_grad_aux = cov_aux_pars, cov_aux_pars_after_grad_aux_lag1 = cov_aux_pars;//auxiliary variables used only if use_nesterov_acc == true
+			vec_t cov_aux_pars_before_lr_coef_small, aux_pars_before_lr_cov_small, cov_pars_before_lr_aux_pars_small;//auxiliary variables
+			// Print out initial information
 			if (called_in_GPBoost_algorithm) {
 				Log::REDebug(" ");
 			}
@@ -932,7 +951,7 @@ namespace GPBoost {
 				}
 			}
 			bool na_or_inf_occurred = false;
-			bool profile_out_coef_optim_external = optimizer_coef_ == "wls" && gauss_likelihood_;
+			bool profile_out_coef_optim_external = optimizer_coef_ == "wls" && gauss_likelihood_ && has_covariates_;
 			if (OPTIM_EXTERNAL_.find(optimizer_cov_pars_) != OPTIM_EXTERNAL_.end()) {
 				OptimExternal<T_mat, T_chol>(this, cov_aux_pars, beta_, fixed_effects, max_iter_,
 					delta_rel_conv_, convergence_criterion_, num_it, learn_covariance_parameters,
@@ -961,7 +980,7 @@ namespace GPBoost {
 				bool lr_cov_is_small = false, lr_aux_pars_is_small = false, lr_coef_is_small = false;
 				for (num_iter_ = 0; num_iter_ < max_iter_; ++num_iter_) {
 					if (reset_learning_rate_every_iteration_) {
-						InitializeOptimSettings(called_in_GPBoost_algorithm, reuse_learning_rates_from_previous_call);//reset learning rates to their initial values
+						InitializeOptimSettings(reuse_learning_rates_from_previous_call);//reset learning rates to their initial values
 					}
 					neg_log_likelihood_lag1_ = neg_log_likelihood_;
 					cov_aux_pars_lag1 = cov_aux_pars;
@@ -2576,6 +2595,13 @@ namespace GPBoost {
 								const vec_t pars = cov_pars.segment(ind_par_[j], ind_par_[j + 1] - ind_par_[j]);
 								re_comps_cluster_i[j]->SetCovPars(pars);
 							}
+							std::shared_ptr<RECompGP<T_mat>> re_comp = std::dynamic_pointer_cast<RECompGP<T_mat>>(re_comps_cluster_i[ind_intercept_gp_]);
+							if (!(re_comp->ShouldSaveDistances())) {//determine nearest neighbors when using correlation-based approach
+								UpdateNearestNeighbors(re_comps_cluster_i, nearest_neighbors_cluster_i,
+									entries_init_B_cluster_i, entries_init_B_grad_cluster_i,
+									num_neighbors_, vecchia_neighbor_selection_, rng_, ind_intercept_gp_,
+									has_duplicates_coords_, false, gauss_likelihood_);
+							}
 							// Calculate a Cholesky factor
 							sp_mat_t B_cluster_i;
 							sp_mat_t D_inv_cluster_i;
@@ -3629,7 +3655,8 @@ namespace GPBoost {
 				// redetermine nearest neighbors for models for which neighbors are selected based on correlations / scaled distances
 				UpdateNearestNeighbors(re_comps_[cluster_i], nearest_neighbors_[cluster_i],
 					entries_init_B_[cluster_i], entries_init_B_grad_[cluster_i],
-					num_neighbors_, vecchia_neighbor_selection_, rng_, ind_intercept_gp_);
+					num_neighbors_, vecchia_neighbor_selection_, rng_, ind_intercept_gp_,
+					has_duplicates_coords_, true, gauss_likelihood_);
 				if (!gauss_likelihood_) {
 					likelihood_[cluster_i]->SetCholFactPatternAnalyzedFalse();
 				}
@@ -4723,6 +4750,7 @@ namespace GPBoost {
 		* \param likelihood Likelihood name
 		*/
 		void InitializeLikelihoods(const string_t& likelihood) {
+			string_t approximation_type = "laplace";
 			for (const auto& cluster_i : unique_clusters_) {
 				if (gp_approx_ == "vecchia") {
 					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
@@ -4730,7 +4758,8 @@ namespace GPBoost {
 						re_comps_[cluster_i][ind_intercept_gp_]->GetNumUniqueREs(),
 						false,
 						only_one_GP_calculations_on_RE_scale_,
-						re_comps_[cluster_i][ind_intercept_gp_]->random_effects_indices_of_data_.data()));
+						re_comps_[cluster_i][ind_intercept_gp_]->random_effects_indices_of_data_.data(),
+						approximation_type));
 				}
 				else if (gp_approx_ == "fitc") {
 					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
@@ -4738,7 +4767,8 @@ namespace GPBoost {
 						re_comps_cross_cov_[cluster_i][ind_intercept_gp_]->GetNumUniqueREs(),
 						true,
 						only_one_GP_calculations_on_RE_scale_,
-						re_comps_cross_cov_[cluster_i][ind_intercept_gp_]->random_effects_indices_of_data_.data()));
+						re_comps_cross_cov_[cluster_i][ind_intercept_gp_]->random_effects_indices_of_data_.data(),
+						approximation_type));
 				}
 				else if (only_grouped_REs_use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) {
 					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
@@ -4746,7 +4776,8 @@ namespace GPBoost {
 						cum_num_rand_eff_[cluster_i][num_re_group_total_],
 						false,
 						false,
-						nullptr));
+						nullptr,
+						approximation_type));
 				}
 				else if (only_one_grouped_RE_calculations_on_RE_scale_) {
 					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
@@ -4754,7 +4785,8 @@ namespace GPBoost {
 						re_comps_[cluster_i][0]->GetNumUniqueREs(),
 						false,
 						false,
-						nullptr));
+						nullptr,
+						approximation_type));
 				}
 				else if (only_one_GP_calculations_on_RE_scale_ && gp_approx_ != "vecchia") {
 					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
@@ -4762,7 +4794,8 @@ namespace GPBoost {
 						re_comps_[cluster_i][0]->GetNumUniqueREs(),
 						true,
 						true,
-						re_comps_[cluster_i][0]->random_effects_indices_of_data_.data()));
+						re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(),
+						approximation_type));
 				}
 				else {//!only_one_GP_calculations_on_RE_scale_ && gp_approx_ == "none"
 					likelihood_[cluster_i] = std::unique_ptr<Likelihood<T_mat, T_chol>>(new Likelihood<T_mat, T_chol>(likelihood,
@@ -4770,7 +4803,8 @@ namespace GPBoost {
 						num_data_per_cluster_[cluster_i],
 						true,
 						false,
-						nullptr));
+						nullptr,
+						approximation_type));
 				}
 				if (!gauss_likelihood_) {
 					likelihood_[cluster_i]->InitializeModeAvec();
@@ -4834,14 +4868,6 @@ namespace GPBoost {
 		* \brief Function that set default values for several parameters if they were not initialized
 		*/
 		void InitializeDefaultSettings() {
-			if (!coef_optimizer_has_been_set_) {
-				if (gauss_likelihood_) {
-					optimizer_coef_ = "wls";
-				}
-				else {
-					optimizer_coef_ = "gradient_descent";
-				}
-			}
 			if (!vecchia_pred_type_has_been_set_) {
 				if (gauss_likelihood_) {
 					vecchia_pred_type_ = "order_obs_first_cond_obs_only";
@@ -5482,17 +5508,18 @@ namespace GPBoost {
 
 		/*!
 		* \brief Initialitze learning rates and convergence tolerance
-		* \param called_in_GPBoost_algorithm If true, this function is called in the GPBoost algorithm, otherwise for the estimation of a GLMM
 		* \param reuse_learning_rates_from_previous_call If true, the learning rates for the covariance and potential auxiliary parameters are kept at the values from a previous call and not re-initialized (can only be set to true if called_in_GPBoost_algorithm is true)
 		*/
-		void InitializeOptimSettings(bool called_in_GPBoost_algorithm,
-			bool reuse_learning_rates_from_previous_call) {
+		void InitializeOptimSettings(bool reuse_learning_rates_from_previous_call) {
 			if (!optimizer_cov_pars_has_been_set_) {
-				if (called_in_GPBoost_algorithm) {
-					optimizer_cov_pars_ = "gradient_descent";
+				optimizer_cov_pars_ = "lbfgs";
+			}
+			if (!coef_optimizer_has_been_set_) {
+				if (gauss_likelihood_) {
+					optimizer_coef_ = "wls";
 				}
 				else {
-					optimizer_cov_pars_ = "lbfgs";
+					optimizer_coef_ = "lbfgs";
 				}
 			}
 			if (reuse_learning_rates_from_previous_call && 
@@ -5924,9 +5951,9 @@ namespace GPBoost {
 			int momentum_offset,
 			const double* fixed_effects) {
 			if (use_nesterov_acc && nesterov_schedule_version == 1 && armijo_condition_) {
-				Log::REFatal("Armijo condition backtracking is not implemented when nesterov_schedule_version = 1");
+				Log::REFatal("Armijo condition backtracking is not implemented when nesterov_schedule_version = 1 ");
 			}
-			vec_t cov_pars_new(num_cov_par_);
+			vec_t cov_pars_new(num_cov_par_ + NumAuxPars());
 			if (profile_out_marginal_variance_) {
 				cov_pars_new[0] = cov_pars[0];
 			}
@@ -6047,7 +6074,7 @@ namespace GPBoost {
 						lr_aux_pars_ = lr_aux_pars;
 						Log::REDebug("GPModel covariance and auxiliary parameter estimation: Learning rates have been decreased permanently in iteration number %d "
 							"since with the previous learning rates, there was no decrease in the objective function. "
-							"New learning rates: covariance parameters = %g, auxiliary parameters = %g", it + 1, lr_cov_, lr_aux_pars_);
+							"New learning rates: covariance parameters = %g, auxiliary parameters = %g ", it + 1, lr_cov_, lr_aux_pars_);
 					}
 					else {
 						Log::REDebug("GPModel covariance parameter estimation: The learning rate has been decreased permanently in iteration number %d "
