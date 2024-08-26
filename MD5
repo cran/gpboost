@@ -1,4 +1,4 @@
-474d3a68ed181c237bdaeda52689ab3e *DESCRIPTION
+3c9b460702d6d494eb1040aec09251f8 *DESCRIPTION
 62aa7e7a29985341875a00e6ac33d872 *LICENSE
 2b33a9d52152963c2edfb9ef5e9d7481 *NAMESPACE
 b86dc2ac47a12f1c47f75f2399f379f7 *R/GPModel.R
@@ -24,7 +24,7 @@ e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 05a0e3ce976e36b05d1052d85f528681 *README.md
 6071edd604dbeb75308cfbedc7790398 *cleanup
 b7ad5ee5480290e5b12cc76e4881e681 *configure
-7511b2a87fcb4e2890437fb24b2e3705 *configure.ac
+b6555c1a48cacfeeeb1eae255050d35a *configure.ac
 143395cafb571049ffb58af627304dea *configure.win
 0276a7e04cef5f86e4146107bfb24e98 *data/GPBoost_data.RData
 05e29359ef24243df589703588987c0e *data/agaricus.test.rda
@@ -127,8 +127,8 @@ b4b2e39f3165eff2c0417c5773b6a20f *src/boosting/rf.hpp
 e4776c218f0fb4bcf19c6cde58c68646 *src/cs_reach.c
 55f05717ac67102790249158cb806cfa *src/cs_spsolve.c
 0d3510d75acd19add5878583ee85177f *src/gpboost-win.def
-729fd58b6a0ef49a23b9fe2cf2abb283 *src/gpboost_R.cpp
-c04d2f7a741d87ac7f995edcf32b122e *src/gpboost_R.h
+95a903acb3e43479cd8dd5f66c254239 *src/gpboost_R.cpp
+977c62b2d0cedb7f07033ac7846d212c *src/gpboost_R.h
 95f22b42f7a3267576e3c7f89308fe31 *src/include/Eigen/Cholesky
 cb8a02c4637bb5492154c574654080b4 *src/include/Eigen/Core
 28f447675f4fa22affb6976cdb313c08 *src/include/Eigen/Dense
@@ -450,7 +450,7 @@ f3afae2c3fcf0d79d67a8499bc5beb26 *src/include/GPBoost/cov_fcts.h
 02b2c87f24b88241fa54c106dfb84aad *src/include/GPBoost/optim_utils.h
 b586b0953f5893a804cee953428c85a5 *src/include/GPBoost/re_comp.h
 b6fd26eae96763ee408acecd8701e51e *src/include/GPBoost/re_model.h
-b23b87e9e6db580d9a18d73b0d8a24c9 *src/include/GPBoost/re_model_template.h
+d37520704a892b76fa782f786e4ce4a6 *src/include/GPBoost/re_model_template.h
 d91b3d11885c647b186d8cce58152483 *src/include/GPBoost/sparse_matrix_utils.h
 9e098957d1b24e9d19e4982efdecc451 *src/include/GPBoost/type_defs.h
 6a9f18a5b66c57271d2a6ae05d6b5775 *src/include/GPBoost/utils.h
@@ -506,7 +506,7 @@ c95e246e183aa78653f867eb9544530d *src/include/LightGBM/utils/common.h
 83e91b332165117b44fcbc55df3aeffd *src/include/LightGBM/utils/common_legacy_solaris.h
 3d4726880ab3847c6ea516d4923d30d7 *src/include/LightGBM/utils/file_io.h
 49141d75a49a51c10d4cb889775514d6 *src/include/LightGBM/utils/json11.h
-c4580c3d0071680cc7c772ce1b0b5116 *src/include/LightGBM/utils/log.h
+c37159d2027f8e6ebf8d2334d78df022 *src/include/LightGBM/utils/log.h
 1dc6b34e1ba25ff1de1b183192cf0c35 *src/include/LightGBM/utils/openmp_wrapper.h
 a2fa56019282fa44652b8785d3fa4de0 *src/include/LightGBM/utils/pipeline_reader.h
 da1b9d5faa066fb421b00aa81d326e35 *src/include/LightGBM/utils/random.h
@@ -658,8 +658,8 @@ c8606cbab7c133c043c2bdb7b357361d *src/treelearner/voting_parallel_tree_learner.c
 195e19b954192d89db593f2443827a0b *tests/testthat.R
 ea7c9e97b5c5affb5610eadd355c5ed8 *tests/testthat/test_GPModel_combined_GP_random_effects.R
 96e03011218916bffc7c9d683cf50c95 *tests/testthat/test_GPModel_gaussian_process.R
-d63c7fc0b1a1a4031f060db6d4f267c6 *tests/testthat/test_GPModel_grouped_random_effects.R
-fa29584ac8ed1bb5b5eec1592efcd990 *tests/testthat/test_GPModel_non_Gaussian_data.R
+004e69dbcd0c28ceb092b6ba18de8e7e *tests/testthat/test_GPModel_grouped_random_effects.R
+03a9ce4c74a53fdeafa36d068f8ac360 *tests/testthat/test_GPModel_non_Gaussian_data.R
 6da7162c07a4609b258a4984687f3562 *tests/testthat/test_Grabit.R
 4b5b5ca9b075bfe6e90c37fe21b3338a *tests/testthat/test_Predictor.R
 d9d9f5444500723e3ee26e5cd6e1ede7 *tests/testthat/test_basic.R
@@ -671,5 +671,5 @@ bf2b0576b7e2aebc43f60dd20a8981fb *tests/testthat/test_gpb.Booster.R
 bc5e55168427d50c64f3e6c8d40e2340 *tests/testthat/test_gpb.plot.importance.R
 a09f795b18d8e9afceed5ca36bbb030b *tests/testthat/test_gpb.plot.interpretation.R
 279287fe9e85afe914f5aeabe05e6f9f *tests/testthat/test_parameters.R
-6f0a4651044329fe57e883c407907f73 *tests/testthat/test_z_GPBoost_algorithm.R
-d6729f12a403e8978fa0d67fffaec390 *tests/testthat/test_z_GPBoost_algorithm_non_Gaussian_data.R
+28b055cb9e27ebda0c95b829733da360 *tests/testthat/test_z_GPBoost_algorithm.R
+da4b3b45b517930570a7b0ef6584b1a5 *tests/testthat/test_z_GPBoost_algorithm_non_Gaussian_data.R

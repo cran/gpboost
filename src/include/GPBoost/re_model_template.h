@@ -3479,6 +3479,7 @@ namespace GPBoost {
 				}
 				//TODO: find better initial values depending on the likelihood (e.g., poisson, gamma, etc.)
 			}
+			init_marg_var /= num_comps_total_;
 			if (gp_approx_ == "vecchia") {//Neither distances nor coordinates are saved for random coefficient GPs in the Vecchia approximation -> cannot find initial parameters -> just copy the ones from the intercept GP
 				// find initial values for intercept process
 				int num_par_j = ind_par_[1] - ind_par_[0];
@@ -7606,6 +7607,12 @@ namespace GPBoost {
 				// no need to call CalcCovFactor here for the Vecchia approximation for Gaussian data, this is done in the prediction steps below, 
 				//	but when predicting training data random effects, this is required
 				if (calc_cov_factor) {
+					int num_it_temp = num_iter_;//"hack" to make sure that 'RedetermineNearestNeighborsVecchia' is called (if applicable) even if a model has been estimated already
+					num_iter_ = 0;
+					if (ShouldRedetermineNearestNeighborsVecchia()) {
+						RedetermineNearestNeighborsVecchia();//called only if gp_approx == "vecchia" and neighbors are selected based on correlations and not distances
+					}
+					num_iter_ = num_it_temp;
 					if (gauss_likelihood_) {
 						CalcCovFactor(false, true, 1., false);// Create covariance matrix and factorize it
 					}
