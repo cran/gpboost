@@ -7,15 +7,15 @@
 fitGPModel(likelihood = "gaussian", group_data = NULL,
   group_rand_coef_data = NULL, ind_effect_group_rand_coef = NULL,
   drop_intercept_group_rand_effect = NULL, gp_coords = NULL,
-  gp_rand_coef_data = NULL, cov_function = "exponential",
-  cov_fct_shape = 0.5, gp_approx = "none", cov_fct_taper_range = 1,
-  cov_fct_taper_shape = 0, num_neighbors = 20L,
-  vecchia_ordering = "random", ind_points_selection = "kmeans++",
-  num_ind_points = 500L, cover_tree_radius = 1,
-  matrix_inversion_method = "cholesky", seed = 0L, cluster_ids = NULL,
-  free_raw_data = FALSE, y, X = NULL, params = list(),
-  vecchia_approx = NULL, vecchia_pred_type = NULL,
-  num_neighbors_pred = NULL, offset = NULL, fixed_effects = NULL)
+  gp_rand_coef_data = NULL, cov_function = "matern", cov_fct_shape = 1.5,
+  gp_approx = "none", cov_fct_taper_range = 1, cov_fct_taper_shape = 1,
+  num_neighbors = 20L, vecchia_ordering = "random",
+  ind_points_selection = "kmeans++", num_ind_points = 500L,
+  cover_tree_radius = 1, matrix_inversion_method = "cholesky", seed = 0L,
+  cluster_ids = NULL, free_raw_data = FALSE, y, X = NULL,
+  params = list(), vecchia_approx = NULL, vecchia_pred_type = NULL,
+  num_neighbors_pred = NULL, offset = NULL, fixed_effects = NULL,
+  likelihood_additional_param = 1)
 }
 \arguments{
 \item{likelihood}{A \code{string} specifying the likelihood function (distribution) of the response variable. 
@@ -165,23 +165,22 @@ fixed effects linear regression term (if there is one)}
  \itemize{
     \item{optimizer_cov: \code{string} (default = "lbfgs"). 
     Optimizer used for estimating covariance parameters. 
-    Options: "gradient_descent", "lbfgs", "fisher_scoring", "newton", "nelder_mead", "adam".
+    Options: "gradient_descent", "lbfgs", "fisher_scoring", "newton", "nelder_mead".
     If there are additional auxiliary parameters for non-Gaussian likelihoods, 
     'optimizer_cov' is also used for those }
     \item{optimizer_coef: \code{string} (default = "wls" for Gaussian likelihoods and "lbfgs" for other likelihoods). 
     Optimizer used for estimating linear regression coefficients, if there are any 
     (for the GPBoost algorithm there are usually none). 
-    Options: "gradient_descent", "lbfgs", "wls", "nelder_mead", "adam". Gradient descent steps are done simultaneously 
+    Options: "gradient_descent", "lbfgs", "wls", "nelder_mead". Gradient descent steps are done simultaneously 
     with gradient descent steps for the covariance parameters. 
     "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
-    If 'optimizer_cov' is set to "nelder_mead", "lbfgs", or "adam", 
+    If 'optimizer_cov' is set to "nelder_mead" or "lbfgs", 
     'optimizer_coef' is automatically also set to the same value.}
     \item{maxit: \code{integer} (default = 1000). 
     Maximal number of iterations for optimization algorithm }
     \item{delta_rel_conv: \code{numeric} (default = 1E-6 except for "nelder_mead" for which the default is 1E-8). 
     Convergence tolerance. The algorithm stops if the relative change 
     in either the (approximate) log-likelihood or the parameters is below this value. 
-    For "adam", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
     If < 0, internal default values are used }
     \item{convergence_criterion: \code{string} (default = "relative_change_in_log_likelihood"). 
     The convergence criterion used for terminating the optimization algorithm.
@@ -259,16 +258,16 @@ fixed effects linear regression term (if there is one)}
         \itemize{
           \item{"Sigma_inv_plus_BtWB" (= default): (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
       where B^T * D^-1 * B approx= Sigma^-1 }
-      }
           \item{"piv_chol_on_Sigma": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
       where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
+        }
       \item Options for likelihood = "gaussian" and gp_approx = "full_scale_tapering": 
         \itemize{
           \item{"predictive_process_plus_diagonal" (= default): predictive process preconditiioner }
           \item{"none": no preconditioner }
       }
     }
-   }
+    }
 }}
 
 \item{vecchia_approx}{Discontinued. Use the argument \code{gp_approx} instead}
@@ -284,6 +283,12 @@ additional fixed effects contributions that are added to the linear predictor (=
 The length of this vector needs to equal the number of training data points.}
 
 \item{fixed_effects}{This is discontinued. Use the renamed equivalent argument \code{offset} instead}
+
+\item{likelihood_additional_param}{A \code{numeric} specifying an additional parameter for the \code{likelihood} 
+which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood="t"}). 
+This is not to be confused with any auxiliary parameters that can be estimated and accessed through 
+the function \code{get_aux_pars} after estimation.
+Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.}
 }
 \value{
 A fitted \code{GPModel}
@@ -323,7 +328,7 @@ gp_model <- fitGPModel(group_data = group_data, likelihood="gaussian",
 summary(gp_model)
 
 #--------------------Gaussian process model----------------
-gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
+gp_model <- fitGPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
                        likelihood="gaussian", y = y, X = X1, params = list(std_dev = TRUE))
 summary(gp_model)
 # Make predictions
@@ -333,20 +338,20 @@ pred$mu # Predicted (posterior) mean of GP
 pred$cov # Predicted (posterior) covariance matrix of GP
 
 #--------------------Gaussian process model with Vecchia approximation----------------
-gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
+gp_model <- fitGPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
                        gp_approx = "vecchia", num_neighbors = 20,
                        likelihood="gaussian", y = y)
 summary(gp_model)
 
 #--------------------Gaussian process model with random coefficients----------------
-gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
+gp_model <- fitGPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
                        gp_rand_coef_data = X[,2], y=y,
                        likelihood = "gaussian", params = list(std_dev = TRUE))
 summary(gp_model)
 
 #--------------------Combine Gaussian process with grouped random effects----------------
 gp_model <- fitGPModel(group_data = group_data,
-                       gp_coords = coords, cov_function = "exponential",
+                       gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
                        likelihood = "gaussian", y = y, X = X1, params = list(std_dev = TRUE))
 summary(gp_model)
 }

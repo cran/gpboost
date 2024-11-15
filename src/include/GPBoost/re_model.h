@@ -56,6 +56,7 @@ namespace GPBoost {
 		* \param cover_tree_radius Radius (= "spatial resolution") for the cover tree algorithm
 		* \param ind_points_selection Method for choosing inducing points
 		* \param likelihood Likelihood function for the observed response variable
+		* \param likelihood_additional_param Additional parameter for the likelihood which cannot be estimated (e.g., degrees of freedom for likelihood = "t")
 		* \param matrix_inversion_method Method which is used for matrix inversion
 		* \param seed Seed used for model creation (e.g., random ordering in Vecchia approximation)
 		*/
@@ -83,6 +84,7 @@ namespace GPBoost {
 			double cover_tree_radius,
 			const char* ind_points_selection,
 			const char* likelihood,
+			double likelihood_additional_param,
 			const char* matrix_inversion_method,
 			int seed);
 

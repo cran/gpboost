@@ -116,7 +116,7 @@ namespace GPBoost {
 			h = z + b * h;
 		}
 		Log::REInfo("Conjugate gradient algorithm has not converged after the maximal number of iterations (%i). "
-			"This could happen if the initial learning rate is too large. Otherwise increase 'cg_max_num_it'.", p);
+			"This could happen if the initial learning rate is too large in a line search phase. Otherwise increase 'cg_max_num_it'.", p);
 	} // end CGVecchiaLaplaceVec
 
 	void CGVecchiaLaplaceVecWinvplusSigma(const vec_t& diag_W,
@@ -500,9 +500,8 @@ namespace GPBoost {
 		}
 	} // end simProbeVect
 
-	void GenRandVecTrace(RNG_t& generator, 
+	void GenRandVecNormal(RNG_t& generator,
 		den_mat_t& R) {
-		
 		std::normal_distribution<double> ndist(0.0, 1.0);
 		//Do not parallelize! - Despite seed: no longer deterministic
 		for (int i = 0; i < R.rows(); ++i) {
@@ -512,7 +511,7 @@ namespace GPBoost {
 		}
 	}
 
-	void GenRandVecDiag(RNG_t& generator,
+	void GenRandVecRademacher(RNG_t& generator,
 		den_mat_t& R) {
 		double u;
 		std::uniform_real_distribution<double> udist(0.0, 1.0);

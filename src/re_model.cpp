@@ -42,6 +42,7 @@ namespace GPBoost {
 		double cover_tree_radius,
 		const char* ind_points_selection,
 		const char* likelihood,
+		double likelihood_additional_param,
 		const char* matrix_inversion_method,
 		int seed) {
 		string_t cov_fct_str = "none";
@@ -57,7 +58,8 @@ namespace GPBoost {
 			matrix_inversion_method_str = std::string(matrix_inversion_method);
 		}
 		bool use_sparse_matrices = (num_gp + num_gp_rand_coef) == 0 || (COMPACT_SUPPORT_COVS_.find(cov_fct_str) != COMPACT_SUPPORT_COVS_.end()) || 
-			gp_approx_str == "tapering" || gp_approx_str == "full_scale_tapering" || gp_approx_str == "fitc";
+			gp_approx_str == "tapering" || gp_approx_str == "fitc" || 
+			gp_approx_str == "full_scale_tapering" || gp_approx_str == "full_scale_tapering_pred_var_stochastic_stable" || gp_approx_str == "full_scale_tapering_pred_var_exact_stable" || gp_approx_str == "full_scale_tapering_pred_var_exact";
 		if (use_sparse_matrices) {
 			if (matrix_inversion_method_str == "iterative") {
 				matrix_format_ = "sp_mat_rm_t";
@@ -95,6 +97,7 @@ namespace GPBoost {
 				cover_tree_radius,
 				ind_points_selection,
 				likelihood,
+				likelihood_additional_param,
 				matrix_inversion_method,
 				seed));
 			num_cov_pars_ = re_model_sp_->num_cov_par_;
@@ -125,6 +128,7 @@ namespace GPBoost {
 				cover_tree_radius,
 				ind_points_selection,
 				likelihood,
+				likelihood_additional_param,
 				matrix_inversion_method,
 				seed));
 			num_cov_pars_ = re_model_sp_rm_->num_cov_par_;
@@ -155,6 +159,7 @@ namespace GPBoost {
 				cover_tree_radius,
 				ind_points_selection,
 				likelihood,
+				likelihood_additional_param,
 				matrix_inversion_method,
 				seed));
 			num_cov_pars_ = re_model_den_->num_cov_par_;
@@ -373,7 +378,9 @@ namespace GPBoost {
 				fixed_effects,
 				true,
 				called_in_GPBoost_algorithm,
-				reuse_learning_rates_from_previous_call);
+				reuse_learning_rates_from_previous_call,
+				false,
+				false);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->OptimLinRegrCoefCovPar(y_data,
@@ -390,7 +397,9 @@ namespace GPBoost {
 				fixed_effects,
 				true,
 				called_in_GPBoost_algorithm,
-				reuse_learning_rates_from_previous_call);
+				reuse_learning_rates_from_previous_call,
+				false,
+				false);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(y_data,
@@ -407,7 +416,9 @@ namespace GPBoost {
 				fixed_effects,
 				true,
 				called_in_GPBoost_algorithm,
-				reuse_learning_rates_from_previous_call);
+				reuse_learning_rates_from_previous_call,
+				false,
+				false);
 		}
 		has_covariates_ = false;
 		covariance_matrix_has_been_factorized_ = true;
@@ -454,6 +465,8 @@ namespace GPBoost {
 				fixed_effects,
 				true,
 				false,
+				false,
+				false,
 				false);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
@@ -471,6 +484,8 @@ namespace GPBoost {
 				fixed_effects,
 				true,
 				false,
+				false,
+				false,
 				false);
 		}
 		else {
@@ -487,6 +502,8 @@ namespace GPBoost {
 				calc_std_dev_,
 				fixed_effects,
 				true,
+				false,
+				false,
 				false,
 				false);
 		}
@@ -516,6 +533,8 @@ namespace GPBoost {
 				nullptr,
 				false,//learn_covariance_parameters=false
 				true,
+				false,
+				true,
 				false);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
@@ -533,6 +552,8 @@ namespace GPBoost {
 				nullptr,
 				false,//learn_covariance_parameters=false
 				true,
+				false,
+				true,
 				false);
 		}
 		else {
@@ -549,6 +570,8 @@ namespace GPBoost {
 				false,
 				nullptr,
 				false,//learn_covariance_parameters=false
+				true,
+				false,
 				true,
 				false);
 		}
@@ -574,7 +597,9 @@ namespace GPBoost {
 				score,
 				false,//learn_covariance_parameters=false
 				true,
-				reuse_learning_rates_from_previous_call);
+				reuse_learning_rates_from_previous_call,
+				false,
+				true);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->OptimLinRegrCoefCovPar(nullptr,
@@ -591,7 +616,9 @@ namespace GPBoost {
 				score,
 				false,//learn_covariance_parameters=false
 				true,
-				reuse_learning_rates_from_previous_call);
+				reuse_learning_rates_from_previous_call,
+				false,
+				true);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(nullptr,
@@ -608,7 +635,9 @@ namespace GPBoost {
 				score,
 				false,//learn_covariance_parameters=false
 				true,
-				reuse_learning_rates_from_previous_call);
+				reuse_learning_rates_from_previous_call,
+				false,
+				true);
 		}
 	}//end LineSearchLearningRate
 
@@ -640,7 +669,6 @@ namespace GPBoost {
 				re_model_den_->TransformCovPars(cov_pars_orig, cov_pars_trafo);
 			}
 		}
-
 		if (matrix_format_ == "sp_mat_t") {
 			if (re_model_sp_->gauss_likelihood_) {
 				re_model_sp_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
@@ -698,11 +726,11 @@ namespace GPBoost {
 			if (calc_cov_factor) {
 				re_model_sp_->SetCovParsComps(cov_pars_);
 				if (re_model_sp_->gauss_likelihood_) {//Gaussian data
-					re_model_sp_->CalcCovFactor(false, true, 1., false);
+					re_model_sp_->CalcCovFactor(true, 1.);
 				}
 				else {//not gauss_likelihood_
 					if (re_model_sp_->gp_approx_ == "vecchia") {
-						re_model_sp_->CalcCovFactor(false, true, 1., false);
+						re_model_sp_->CalcCovFactor(true, 1.);
 					}
 					else {
 						re_model_sp_->CalcSigmaComps();
@@ -726,11 +754,11 @@ namespace GPBoost {
 			if (calc_cov_factor) {
 				re_model_sp_rm_->SetCovParsComps(cov_pars_);
 				if (re_model_sp_rm_->gauss_likelihood_) {//Gaussian data
-					re_model_sp_rm_->CalcCovFactor(false, true, 1., false);
+					re_model_sp_rm_->CalcCovFactor(true, 1.);
 				}
 				else {//not gauss_likelihood_
 					if (re_model_sp_rm_->gp_approx_ == "vecchia") {
-						re_model_sp_rm_->CalcCovFactor(false, true, 1., false);
+						re_model_sp_rm_->CalcCovFactor(true, 1.);
 					}
 					else {
 						re_model_sp_rm_->CalcSigmaComps();
@@ -754,11 +782,11 @@ namespace GPBoost {
 			if (calc_cov_factor) {
 				re_model_den_->SetCovParsComps(cov_pars_);
 				if (re_model_den_->gauss_likelihood_) {//Gaussian data
-					re_model_den_->CalcCovFactor(false, true, 1., false);
+					re_model_den_->CalcCovFactor(true, 1.);
 				}
 				else {//not gauss_likelihood_
 					if (re_model_den_->gp_approx_ == "vecchia") {
-						re_model_den_->CalcCovFactor(false, true, 1., false);
+						re_model_den_->CalcCovFactor(true, 1.);
 					}
 					else {
 						re_model_den_->CalcSigmaComps();
@@ -1200,15 +1228,15 @@ namespace GPBoost {
 		const double* aux_pars_temp;
 		if (matrix_format_ == "sp_mat_t") {
 			aux_pars_temp = re_model_sp_->GetAuxPars();
-			re_model_sp_->GetNameFirstAuxPar(name);
+			re_model_sp_->GetNamesAuxPars(name);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			aux_pars_temp = re_model_sp_rm_->GetAuxPars();
-			re_model_sp_rm_->GetNameFirstAuxPar(name);
+			re_model_sp_rm_->GetNamesAuxPars(name);
 		}
 		else {
 			aux_pars_temp = re_model_den_->GetAuxPars();
-			re_model_den_->GetNameFirstAuxPar(name);
+			re_model_den_->GetNamesAuxPars(name);
 		}
 		for (int j = 0; j < NumAuxPars(); ++j) {
 			aux_pars[j] = aux_pars_temp[j];

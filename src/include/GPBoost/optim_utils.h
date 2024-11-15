@@ -140,8 +140,13 @@ namespace GPBoost {
 		else {//!should_print_trace
 			if (should_redetermine_neighbors_vecchia) {
 				re_model_templ_->SetNumIter((int)objfn_data->settings_->opt_iter);
-				if (re_model_templ_->ShouldRedetermineNearestNeighborsVecchia()) {
-					re_model_templ_->RedetermineNearestNeighborsVecchia(); // called only in certain iterations if gp_approx == "vecchia" and neighbors are selected based on correlations and not distances
+				bool force_redermination = false;
+				if ((*gradient)[2] >= 1e30 && (*gradient)[2] <= 1.00000000002e30){//hack to indicate that convergece has been achieved and nearest neighbors in Vecchia approximation should potentially been redetermined
+					force_redermination = true;
+				}
+				if (re_model_templ_->ShouldRedetermineNearestNeighborsVecchia(force_redermination)) {
+					re_model_templ_->RedetermineNearestNeighborsVecchia(force_redermination); // called only in certain iterations if gp_approx == "vecchia" and neighbors are selected based on correlations and not distances
+					neg_log_likelihood = 1.00000000001e30;//hack to tell the optimizers that the neighbors have indeed been redetermined
 				}
 			} //end should_redetermine_neighbors_vecchia
 			if (calc_likelihood) {
@@ -213,7 +218,7 @@ namespace GPBoost {
 		const double* fixed_effects_;//Externally provided fixed effects component of location parameter (only used for non-Gaussian likelihoods)
 		bool learn_cov_aux_pars_;//Indicates whether covariance and auxiliary parameters are optimized or not
 		vec_t cov_pars_;//vector of covariance parameters (only used in case the covariance parameters are not estimated)
-		bool profile_out_marginal_variance_;// If true, the error variance sigma is profiled ou t(= use closed-form expression for error / nugget variance)
+		bool profile_out_marginal_variance_;// If true, the error variance sigma is profiled out (= use closed-form expression for error / nugget variance)
 		bool profile_out_regression_coef_;// If true, the linear regression coefficients are profiled out (= use closed-form WLS expression)
 
 		EvalLLforLBFGSpp(REModelTemplate<T_mat, T_chol>* re_model_templ,
@@ -371,18 +376,34 @@ namespace GPBoost {
 		}
 
 		/*!
+		* \brief Write the current values of profiled-out variables (if there are any such as nugget effects, regression coefficients) to their lag1 variables
+		*/
+		void SetLag1ProfiledOutVariables() {
+			re_model_templ_->SetLag1ProfiledOutVariables(profile_out_marginal_variance_, profile_out_regression_coef_);
+		}
+
+		/*!
+		* \brief Reset the profiled-out variables (if there are any such as nugget effects, regression coefficients) to their lag1 variables
+		*/
+		void ResetProfiledOutVariablesToLag1() {
+			re_model_templ_->ResetProfiledOutVariablesToLag1(profile_out_marginal_variance_, profile_out_regression_coef_);
+		}
+
+		/*!
 		* \brief Indicates whether correlation-based nearest neighbors for Vecchia approximation should be updated
+		* \param force_redermination If true, the neighbors are redetermined if applicaple irrespective of num_iter_
 		* \return True, if nearest neighbors have been redetermined
 		*/
-		bool ShouldRedetermineNearestNeighborsVecchia() {
-			return(re_model_templ_->ShouldRedetermineNearestNeighborsVecchia());
+		bool ShouldRedetermineNearestNeighborsVecchia(bool force_redermination) {
+			return(re_model_templ_->ShouldRedetermineNearestNeighborsVecchia(force_redermination));
 		}
 
 		/*!
 		* \brief Redetermine correlation-based nearest neighbors for Vecchia approximation
+		* \param force_redermination If true, the neighbors are redetermined if applicaple irrespective of num_iter_
 		*/
-		void RedetermineNearestNeighborsVecchia() {
-			re_model_templ_->RedetermineNearestNeighborsVecchia();
+		void RedetermineNearestNeighborsVecchia(bool force_redermination) {
+			re_model_templ_->RedetermineNearestNeighborsVecchia(force_redermination);
 		}
 
 		/*!
@@ -592,14 +613,17 @@ namespace GPBoost {
 		//Do optimization
 		optim::algo_settings_t settings;
 		settings.iter_max = max_iter;
-		OptDataOptimLib<T_mat, T_chol> 	opt_data = OptDataOptimLib<T_mat, T_chol>(re_model_templ, fixed_effects, learn_cov_aux_pars,
+		OptDataOptimLib<T_mat, T_chol> opt_data = OptDataOptimLib<T_mat, T_chol>(re_model_templ, fixed_effects, learn_cov_aux_pars,
 			cov_pars.segment(0, num_cov_par), profile_out_marginal_variance, &settings, optimizer);
 		if (convergence_criterion == "relative_change_in_parameters") {
 			settings.rel_sol_change_tol = delta_rel_conv;
+			settings.rel_objfn_change_tol = 1e-20;
+			settings.grad_err_tol = 1e-20;
 		}
 		else if (convergence_criterion == "relative_change_in_log_likelihood") {
 			settings.rel_objfn_change_tol = delta_rel_conv;
 			settings.grad_err_tol = delta_rel_conv;
+			settings.rel_sol_change_tol = 1e-20;
 		}
 		if (optimizer == "nelder_mead") {
 			optim::nm(pars_init, EvalLLforOptimLib<T_mat, T_chol>, &opt_data, settings);
@@ -615,10 +639,10 @@ namespace GPBoost {
 		else if (optimizer == "lbfgs" || optimizer == "lbfgs_linesearch_nocedal_wright") {
 			LBFGSpp::LBFGSParam<double> param_LBFGSpp;
 			param_LBFGSpp.max_iterations = max_iter;
-			param_LBFGSpp.past = 1;//convergence should be determined by checking the change in the obejctive function and not the norm of the gradient
-			param_LBFGSpp.delta = delta_rel_conv;
-			param_LBFGSpp.epsilon = 1e-10;
-			param_LBFGSpp.epsilon_rel = 1e-10;
+			param_LBFGSpp.past = 1;//convergence should be determined by checking the change in the objective function and not the norm of the gradient
+			param_LBFGSpp.delta = delta_rel_conv;//tolerence for relative change in objective function as convergence chec
+			param_LBFGSpp.epsilon = 1e-20;//tolerance for norm of gradient as convergence check
+			param_LBFGSpp.epsilon_rel = 1e-20;//tolerance for norm of gradient relative to norm of parameters as convergence check
 			param_LBFGSpp.max_linesearch = 20;
 			param_LBFGSpp.m = 6;
 			param_LBFGSpp.initial_step_factor = initial_step_factor;
@@ -639,9 +663,13 @@ namespace GPBoost {
 		//	settings.gd_settings.method = 5;
 		//	optim::gd(pars_init, EvalLLforOptimLib<T_mat, T_chol>, &opt_data, settings);
 		//}
-		if (optimizer != "lbfgs" && optimizer != "lbfgs_linesearch_nocedal_wright") {
+		if (optimizer != "lbfgs" && optimizer != "lbfgs_linesearch_nocedal_wright") {//only for optimizers from OptimLib
 			num_it = (int)settings.opt_iter;
 			neg_log_likelihood = settings.opt_fn_value;
+			if (profile_out_marginal_variance || profile_out_regression_coef) {
+				vec_t grad_dummy = pars_init;
+				EvalLLforOptimLib<T_mat, T_chol>(pars_init, &grad_dummy, &opt_data);//re-evaluate log-likelihood to make sure that the profiled-out variables are correct
+			}
 		}
 		// Transform parameters back for export
 		if (learn_cov_aux_pars) {

@@ -16,6 +16,11 @@
 #' \item{ "negative_binomial": negative binomial distribution with a with log link function }
 #' \item{ Note: other likelihoods could be implemented upon request }
 #' }
+#' @param likelihood_additional_param A \code{numeric} specifying an additional parameter for the \code{likelihood} 
+#' which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood="t"}). 
+#' This is not to be confused with any auxiliary parameters that can be estimated and accessed through 
+#' the function \code{get_aux_pars} after estimation.
+#' Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.
 #' @param group_data A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
 #' The elements being group levels defining grouped random effects.
 #' The elements of 'group_data' can be integer, double, or character.
@@ -155,23 +160,22 @@
 #'             \itemize{
 #'                \item{optimizer_cov: \code{string} (default = "lbfgs"). 
 #'                Optimizer used for estimating covariance parameters. 
-#'                Options: "gradient_descent", "lbfgs", "fisher_scoring", "newton", "nelder_mead", "adam".
+#'                Options: "gradient_descent", "lbfgs", "fisher_scoring", "newton", "nelder_mead".
 #'                If there are additional auxiliary parameters for non-Gaussian likelihoods, 
 #'                'optimizer_cov' is also used for those }
 #'                \item{optimizer_coef: \code{string} (default = "wls" for Gaussian likelihoods and "lbfgs" for other likelihoods). 
 #'                Optimizer used for estimating linear regression coefficients, if there are any 
 #'                (for the GPBoost algorithm there are usually none). 
-#'                Options: "gradient_descent", "lbfgs", "wls", "nelder_mead", "adam". Gradient descent steps are done simultaneously 
+#'                Options: "gradient_descent", "lbfgs", "wls", "nelder_mead". Gradient descent steps are done simultaneously 
 #'                with gradient descent steps for the covariance parameters. 
 #'                "wls" refers to doing coordinate descent for the regression coefficients using weighted least squares.
-#'                If 'optimizer_cov' is set to "nelder_mead", "lbfgs", or "adam", 
+#'                If 'optimizer_cov' is set to "nelder_mead" or "lbfgs", 
 #'                'optimizer_coef' is automatically also set to the same value.}
 #'                \item{maxit: \code{integer} (default = 1000). 
 #'                Maximal number of iterations for optimization algorithm }
 #'                \item{delta_rel_conv: \code{numeric} (default = 1E-6 except for "nelder_mead" for which the default is 1E-8). 
 #'                Convergence tolerance. The algorithm stops if the relative change 
 #'                in either the (approximate) log-likelihood or the parameters is below this value. 
-#'                For "adam", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. 
 #'                If < 0, internal default values are used }
 #'                \item{convergence_criterion: \code{string} (default = "relative_change_in_log_likelihood"). 
 #'                The convergence criterion used for terminating the optimization algorithm.
@@ -249,16 +253,16 @@
 #'                    \itemize{
 #'                      \item{"Sigma_inv_plus_BtWB" (= default): (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
 #'                  where B^T * D^-1 * B approx= Sigma^-1 }
-#'                  }
 #'                      \item{"piv_chol_on_Sigma": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
 #'                  where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
+#'                    }
 #'                  \item Options for likelihood = "gaussian" and gp_approx = "full_scale_tapering": 
 #'                    \itemize{
 #'                      \item{"predictive_process_plus_diagonal" (= default): predictive process preconditiioner }
 #'                      \item{"none": no preconditioner }
 #'                  }
 #'                }
-#'               }
+#'                }
 #'            }
 #' @param offset A \code{numeric} \code{vector} with 
 #' additional fixed effects contributions that are added to the linear predictor (= offset). 
@@ -313,11 +317,11 @@ gpb.GPModel <- R6::R6Class(
                           drop_intercept_group_rand_effect = NULL,
                           gp_coords = NULL,
                           gp_rand_coef_data = NULL,
-                          cov_function = "exponential",
-                          cov_fct_shape = 0.5,
+                          cov_function = "matern",
+                          cov_fct_shape = 1.5,
                           gp_approx = "none",
                           cov_fct_taper_range = 1.,
-                          cov_fct_taper_shape = 0.,
+                          cov_fct_taper_shape = 1.,
                           num_neighbors = 20L,
                           vecchia_ordering = "random",
                           ind_points_selection = "kmeans++",
@@ -331,7 +335,8 @@ gpb.GPModel <- R6::R6Class(
                           model_list = NULL,
                           vecchia_approx = NULL,
                           vecchia_pred_type = NULL,
-                          num_neighbors_pred = NULL) {
+                          num_neighbors_pred = NULL,
+                          likelihood_additional_param = 1.) {
       
       if (!is.null(vecchia_approx)) {
         stop("GPModel: The argument 'vecchia_approx' is discontinued. Use the argument 'gp_approx' instead")
@@ -397,6 +402,7 @@ gpb.GPModel <- R6::R6Class(
         seed = model_list[["seed"]]
         cluster_ids = model_list[["cluster_ids"]]
         likelihood = model_list[["likelihood"]]
+        likelihood_additional_param = model_list[["likelihood_additional_param"]]
         matrix_inversion_method = model_list[["matrix_inversion_method"]]
         # Set additionally required data
         private$model_has_been_loaded_from_saved_file = TRUE
@@ -429,6 +435,7 @@ gpb.GPModel <- R6::R6Class(
       }
       private$matrix_inversion_method <- as.character(matrix_inversion_method)
       private$seed <- as.integer(seed)
+      private$likelihood_additional_param <- as.numeric(likelihood_additional_param)
       # Set data for grouped random effects
       group_data_c_str <- NULL
       if (!is.null(group_data)) {
@@ -582,6 +589,8 @@ gpb.GPModel <- R6::R6Class(
           }
         } else if (private$cov_function == "wendland") {
           private$cov_par_names <- c(private$cov_par_names,"GP_var")
+        } else if (private$cov_function == "matern_estimate_shape") {
+          private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range", "GP_smoothness")
         } else {
           private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range")
         }
@@ -624,6 +633,11 @@ gpb.GPModel <- R6::R6Class(
               } else if (private$cov_function == "wendland") {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_nb_", ii,"_var"))
+              } else if (private$cov_function == "matern_estimate_shape") {
+                private$cov_par_names <- c(private$cov_par_names,
+                                           paste0("GP_rand_coef_nb_", ii,"_var"),
+                                           paste0("GP_rand_coef_nb_", ii,"_range"),
+                                           paste0("GP_rand_coef_nb_", ii,"_smoothness"))
               } else {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_nb_", ii,"_var"),
@@ -647,6 +661,11 @@ gpb.GPModel <- R6::R6Class(
               } else if (private$cov_function == "wendland") {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"))
+              }  else if (private$cov_function == "matern_estimate_shape") {
+                private$cov_par_names <- c(private$cov_par_names,
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"),
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range"),
+                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_smoothness"))
               } else {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"),
@@ -713,6 +732,7 @@ gpb.GPModel <- R6::R6Class(
         , private$cover_tree_radius
         , private$ind_points_selection
         , likelihood
+        , private$likelihood_additional_param
         , private$matrix_inversion_method
         , private$seed
       )
@@ -1076,12 +1096,14 @@ gpb.GPModel <- R6::R6Class(
       num_aux_pars <- self$get_num_aux_pars()
       if (num_aux_pars > 0) {
         aux_pars <- numeric(num_aux_pars)
-        aux_pars_name <- .Call(
+        aux_pars_name_str <- .Call(
           GPB_GetAuxPars_R
           , private$handle
           , aux_pars
         )
-        names(aux_pars) <- rep(aux_pars_name, num_aux_pars)
+        aux_pars_name <- strsplit(aux_pars_name_str, "_SEP_")[[1]]
+        if (length(aux_pars_name) != num_aux_pars) stop("get_aux_pars: wrong length of 'aux_par_name'")
+        names(aux_pars) <- aux_pars_name
       } else {
         aux_pars <- NULL
       }
@@ -1807,6 +1829,7 @@ gpb.GPModel <- R6::R6Class(
       # Parameters
       model_list[["params"]] <- self$get_optim_params()
       model_list[["likelihood"]] <- self$get_likelihood_name()
+      model_list[["likelihood_additional_param"]] <- private$likelihood_additional_param
       model_list[["cov_pars"]] <- self$get_cov_pars()
       # Response data
       if (include_response_data) {
@@ -1948,6 +1971,7 @@ gpb.GPModel <- R6::R6Class(
   
   private = list(
     handle = NULL,
+    likelihood_additional_param = 1.,
     num_data = NULL,
     num_group_re = 0L,
     num_group_rand_coef = 0L,
@@ -1965,11 +1989,11 @@ gpb.GPModel <- R6::R6Class(
     drop_intercept_group_rand_effect = NULL,
     gp_coords = NULL,
     gp_rand_coef_data = NULL,
-    cov_function = "exponential",
-    cov_fct_shape = 0.5,
+    cov_function = "matern",
+    cov_fct_shape = 1.5,
     gp_approx = "none",
     cov_fct_taper_range = 1.,
-    cov_fct_taper_shape = 0.,
+    cov_fct_taper_shape = 1.,
     num_neighbors = 20L,
     vecchia_ordering = "random",
     vecchia_pred_type = NULL,
@@ -2018,7 +2042,7 @@ gpb.GPModel <- R6::R6Class(
                   estimate_aux_pars = TRUE),
     
     determine_num_cov_pars = function(likelihood) {
-      if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time") {
+      if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time" | private$cov_function == "matern_estimate_shape") {
         num_par_per_GP <- 3L
       } else if (private$cov_function == "matern_ard" | private$cov_function == "gaussian_ard" | private$cov_function == "exponential_ard") {
         num_par_per_GP <- 1L + private$dim_coords
@@ -2172,12 +2196,12 @@ gpb.GPModel <- R6::R6Class(
 #' gp_model <- GPModel(group_data = group_data[,1], likelihood="gaussian")
 #' 
 #' #--------------------Gaussian process model----------------
-#' gp_model <- GPModel(gp_coords = coords, cov_function = "exponential",
+#' gp_model <- GPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                     likelihood="gaussian")
 #'
 #' #--------------------Combine Gaussian process with grouped random effects----------------
 #' gp_model <- GPModel(group_data = group_data,
-#'                     gp_coords = coords, cov_function = "exponential",
+#'                     gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                     likelihood="gaussian")
 #' @author Fabio Sigrist
 #' @export
@@ -2188,11 +2212,11 @@ GPModel <- function(likelihood = "gaussian",
                     drop_intercept_group_rand_effect = NULL,
                     gp_coords = NULL,
                     gp_rand_coef_data = NULL,
-                    cov_function = "exponential",
-                    cov_fct_shape = 0.5,
+                    cov_function = "matern",
+                    cov_fct_shape = 1.5,
                     gp_approx = "none",
                     cov_fct_taper_range = 1.,
-                    cov_fct_taper_shape = 0.,
+                    cov_fct_taper_shape = 1.,
                     num_neighbors = 20L,
                     vecchia_ordering = "random",
                     ind_points_selection = "kmeans++",
@@ -2204,7 +2228,8 @@ GPModel <- function(likelihood = "gaussian",
                     free_raw_data = FALSE,
                     vecchia_approx = NULL,
                     vecchia_pred_type = NULL,
-                    num_neighbors_pred = NULL) {
+                    num_neighbors_pred = NULL,
+                    likelihood_additional_param = 1.) {
   
   # Create new GPModel
   invisible(gpb.GPModel$new(likelihood = likelihood
@@ -2230,7 +2255,8 @@ GPModel <- function(likelihood = "gaussian",
                             , free_raw_data = free_raw_data
                             , vecchia_approx = vecchia_approx
                             , vecchia_pred_type = vecchia_pred_type
-                            , num_neighbors_pred = num_neighbors_pred))
+                            , num_neighbors_pred = num_neighbors_pred
+                            , likelihood_additional_param = likelihood_additional_param))
   
 }
 
@@ -2279,7 +2305,7 @@ fit <- function(gp_model, y, X, params, offset = NULL, fixed_effects = NULL) Use
 #' pred$cov # Predicted covariance
 #'  
 #' #--------------------Gaussian process model----------------
-#' gp_model <- GPModel(gp_coords = coords, cov_function = "exponential",
+#' gp_model <- GPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                     likelihood="gaussian")
 #' fit(gp_model, y = y, X = X1, params = list(std_dev = TRUE))
 #' summary(gp_model)
@@ -2354,7 +2380,7 @@ fit.GPModel <- function(gp_model,
 #' summary(gp_model)
 #'
 #' #--------------------Gaussian process model----------------
-#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
+#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                        likelihood="gaussian", y = y, X = X1, params = list(std_dev = TRUE))
 #' summary(gp_model)
 #' # Make predictions
@@ -2364,20 +2390,20 @@ fit.GPModel <- function(gp_model,
 #' pred$cov # Predicted (posterior) covariance matrix of GP
 #'
 #' #--------------------Gaussian process model with Vecchia approximation----------------
-#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
+#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                        gp_approx = "vecchia", num_neighbors = 20,
 #'                        likelihood="gaussian", y = y)
 #' summary(gp_model)
 #'
 #' #--------------------Gaussian process model with random coefficients----------------
-#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
+#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                        gp_rand_coef_data = X[,2], y=y,
 #'                        likelihood = "gaussian", params = list(std_dev = TRUE))
 #' summary(gp_model)
 #'
 #' #--------------------Combine Gaussian process with grouped random effects----------------
 #' gp_model <- fitGPModel(group_data = group_data,
-#'                        gp_coords = coords, cov_function = "exponential",
+#'                        gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                        likelihood = "gaussian", y = y, X = X1, params = list(std_dev = TRUE))
 #' summary(gp_model)
 #' }
@@ -2392,11 +2418,11 @@ fitGPModel <- function(likelihood = "gaussian",
                        drop_intercept_group_rand_effect = NULL,
                        gp_coords = NULL,
                        gp_rand_coef_data = NULL,
-                       cov_function = "exponential",
-                       cov_fct_shape = 0.5,
+                       cov_function = "matern",
+                       cov_fct_shape = 1.5,
                        gp_approx = "none",
                        cov_fct_taper_range = 1.,
-                       cov_fct_taper_shape = 0.,
+                       cov_fct_taper_shape = 1.,
                        num_neighbors = 20L,
                        vecchia_ordering = "random",
                        ind_points_selection = "kmeans++",
@@ -2413,7 +2439,8 @@ fitGPModel <- function(likelihood = "gaussian",
                        vecchia_pred_type = NULL,
                        num_neighbors_pred = NULL,
                        offset = NULL,
-                       fixed_effects = NULL) {
+                       fixed_effects = NULL,
+                       likelihood_additional_param = 1.) {
   #Create model
   gpmodel <- gpb.GPModel$new(likelihood = likelihood
                              , group_data = group_data
@@ -2438,7 +2465,8 @@ fitGPModel <- function(likelihood = "gaussian",
                              , free_raw_data = free_raw_data
                              , vecchia_approx = vecchia_approx
                              , vecchia_pred_type = vecchia_pred_type
-                             , num_neighbors_pred = num_neighbors_pred)
+                             , num_neighbors_pred = num_neighbors_pred
+                             , likelihood_additional_param = likelihood_additional_param)
   # Fit model
   gpmodel$fit(y = y,
               X = X,
@@ -2474,7 +2502,7 @@ fitGPModel <- function(likelihood = "gaussian",
 #'
 #' \donttest{
 #' #--------------------Gaussian process model----------------
-#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
+#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                        likelihood="gaussian", y = y, X = X1, params = list(std_dev = TRUE))
 #' summary(gp_model)
 #' }
@@ -2550,7 +2578,7 @@ summary.GPModel <- function(object, ...){
 #'
 #'
 #' #--------------------Gaussian process model----------------
-#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "exponential",
+#' gp_model <- fitGPModel(gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                        likelihood="gaussian", y = y, X = X1, params = list(std_dev = TRUE))
 #' summary(gp_model)
 #' # Make predictions

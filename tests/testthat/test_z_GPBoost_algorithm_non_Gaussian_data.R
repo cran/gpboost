@@ -900,7 +900,7 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                       predict_var = TRUE, pred_latent = FALSE)
       expect_lt(sum(abs(tail(pred$response_mean,n=4)-c(0.5592939, 0.3226671, 0.2836602, 0.6995181))),TOLERANCE)
       expect_lt(sum(abs(tail(pred$response_var,n=4)-c(0.2464842, 0.2185530, 0.2031971, 0.2101925))),TOLERANCE)
-      
+    
       # Use validation set to determine number of boosting iteration with use_gp_model_for_validation = TRUE
       dtest <- gpb.Dataset.create.valid(dtrain, data = X_test, label = y_test)
       valids <- list(test = dtest)
@@ -921,6 +921,15 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                        use_gp_model_for_validation = TRUE)
       expect_equal(bst$best_iter, 9)
       expect_lt(abs(bst$best_score - 0.5785662),TOLERANCE)
+      
+      # Train tree-boosting model while holding the GPModel fix
+      init_cov_pars = c(2.4,1.1)
+      gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
+                          likelihood = "bernoulli_probit")
+      gp_model$set_optim_params(params = list(init_cov_pars = init_cov_pars))
+      bst <- gpb.train(data = dtrain, gp_model = gp_model, train_gp_model_cov_pars = FALSE,
+                       nrounds = 2, objective = "binary", verbose = 0)
+      expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-init_cov_pars)),TOLERANCE)
       
       # Training with Vecchia approximation
       for(inv_method in c("cholesky", "iterative")){
@@ -952,6 +961,16 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
         expect_lt(sum(abs(tail(pred$random_effect_cov,n=4)-c(0.09503200, 0.10440602, 0.09169082, 0.09131758))),tolerance_loc)
         if(inv_method == "iterative") tolerance_loc <- 0.3
         expect_lt(sum(abs(tail(pred$fixed_effect,n=4)-c(0.4060860, -0.5598213, -0.7936279, 0.5029883))),tolerance_loc)
+        
+        # Train tree-boosting model while holding the GPModel fix
+        capture.output( gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
+                            likelihood = "bernoulli_probit", gp_approx = "vecchia", 
+                            num_neighbors = 30, vecchia_ordering = "none", matrix_inversion_method = inv_method),
+                        file='NUL')
+        gp_model$set_optim_params(params = list(init_cov_pars = init_cov_pars))
+        bst <- gpb.train(data = dtrain, gp_model = gp_model, train_gp_model_cov_pars = FALSE,
+                         nrounds = 2, objective = "binary", verbose = 0)
+        expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-init_cov_pars)),TOLERANCE)
       }
       
       # Training with Wendland covariance
@@ -1157,8 +1176,8 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
                       use_gp_model_for_validation = TRUE,
                       folds = folds,
                       verbose = 0)
-      expcet_iter <- 8
-      expcet_score <- 0.32
+      expcet_iter <- 6
+      expcet_score <- 0.315
       expect_equal(cvbst$best_iter, expcet_iter)
       expect_lt(abs(cvbst$best_score-expcet_score), TOLERANCE)
       # same thing but "wrong" default likelihood in gp_model
@@ -1933,25 +1952,52 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       dtrain <- gpb.Dataset(data = X, label = y)
       params <- list(objective = "binary", verbose = 0)
       param_grid = list("learning_rate" = c(0.5,0.11), "min_data_in_leaf" = c(20),
-                        "max_depth" = c(5), "num_leaves" = 2^17, "max_bin" = c(10,255))
+                        "max_depth" = c(2), "num_leaves" = 2^17, "max_bin" = c(10,255))
       opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = params,
                                                     data = dtrain, gp_model = gp_model, verbose_eval = 1,
                                                     nrounds = 100, early_stopping_rounds = 5,
                                                     eval = "binary_logloss", folds = folds)
-      expect_lt(abs(opt_params$best_score-0.5131497),TOLERANCE)
-      expect_equal(opt_params$best_iter,31)
+      expect_lt(abs(opt_params$best_score-0.51101812),TOLERANCE)
+      expect_equal(opt_params$best_iter,59)
       expect_equal(opt_params$best_params$learning_rate,0.11)
-      expect_equal(opt_params$best_params$max_bin,255)
-      expect_equal(opt_params$best_params$max_depth,5)
+      expect_equal(opt_params$best_params$max_bin,10)
+      expect_equal(opt_params$best_params$max_depth,2)
+      opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = params,
+                                                    data = dtrain, gp_model = gp_model, verbose_eval = 1,
+                                                    nrounds = 100, early_stopping_rounds = 5,
+                                                    metric = "binary_logloss", folds = folds)
+      expect_lt(abs(opt_params$best_score-0.51101812),TOLERANCE)
+      expect_equal(opt_params$best_iter,59)
+      expect_equal(opt_params$best_params$learning_rate,0.11)
+      expect_equal(opt_params$best_params$max_bin,10)
+      expect_equal(opt_params$best_params$max_depth,2)
       opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = params,
                                                     data = dtrain, gp_model = gp_model, verbose_eval = 1,
                                                     nrounds = 100, early_stopping_rounds = 5,
                                                     eval = "test_neg_log_likelihood", folds = folds)
-      expect_lt(abs(opt_params$best_score-0.5131497),TOLERANCE)
-      expect_equal(opt_params$best_iter,31)
+      expect_lt(abs(opt_params$best_score-0.51101812),TOLERANCE)
+      expect_equal(opt_params$best_iter,59)
       expect_equal(opt_params$best_params$learning_rate,0.11)
-      expect_equal(opt_params$best_params$max_bin,255)
-      expect_equal(opt_params$best_params$max_depth,5)
+      expect_equal(opt_params$best_params$max_bin,10)
+      expect_equal(opt_params$best_params$max_depth,2)
+      opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = params,
+                                                    data = dtrain, gp_model = gp_model, verbose_eval = 1,
+                                                    nrounds = 100, early_stopping_rounds = 5,
+                                                    eval = "auc", folds = folds)
+      expect_lt(abs(opt_params$best_score-0.65502697),TOLERANCE)
+      expect_equal(opt_params$best_iter,52)
+      expect_equal(opt_params$best_params$learning_rate,0.11)
+      expect_equal(opt_params$best_params$max_bin,10)
+      expect_equal(opt_params$best_params$max_depth,2)
+      opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = params,
+                                                    data = dtrain, gp_model = gp_model, verbose_eval = 1,
+                                                    nrounds = 100, early_stopping_rounds = 5,
+                                                    metric = "auc", folds = folds)
+      expect_lt(abs(opt_params$best_score-0.65502697),TOLERANCE)
+      expect_equal(opt_params$best_iter,52)
+      expect_equal(opt_params$best_params$learning_rate,0.11)
+      expect_equal(opt_params$best_params$max_bin,10)
+      expect_equal(opt_params$best_params$max_depth,2)
       
       # Gamma distribution
       mu <- exp(f + eps)

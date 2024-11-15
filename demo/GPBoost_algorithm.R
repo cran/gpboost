@@ -127,74 +127,95 @@ legend(legend=c("True F","Pred F"), "bottomright", bty="n", lwd=3, col=c(2,4))
 plot(b1, pred$random_effect_mean, xlab="truth", ylab="predicted",
      main="Comparison of true and predicted random effects")
 
-#--------------------Choosing tuning parameters----------------
-param_grid <- list("learning_rate" = c(1,0.1,0.01), 
-                   "min_data_in_leaf" = c(10,100,1000),
-                   "max_depth" = c(1,2,3,5,10),
-                   "lambda_l2" = c(0,1,10))
-other_params <- list(num_leaves = 2^10)
-# Note: here we try different values for 'max_depth' and thus set 'num_leaves' to a large value.
-#       An alternative strategy is to impose no limit on 'max_depth', 
-#       and try different values for 'num_leaves' as follows:
-# param_grid = list("learning_rate" = c(1,0.1,0.01),
-#                   "min_data_in_leaf" = c(10,100,1000),
-#                   "num_leaves" = 2^(1:10),
-#                   "lambda_l2" = c(0,1,10))
-# other_params <- list(max_depth = -1)
-gp_model <- GPModel(group_data = group, likelihood = likelihood)
-dataset <- gpb.Dataset(data = X, label = y)
-set.seed(1)
-opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = other_params,
-                                              num_try_random = NULL, nfold = 4,
-                                              data = dataset, gp_model = gp_model,
-                                              use_gp_model_for_validation = TRUE, verbose_eval = 1,
-                                              nrounds = 1000, early_stopping_rounds = 10)
-print(paste0("Best parameters: ",
-             paste0(unlist(lapply(seq_along(opt_params$best_params), 
-                                  function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, 
-                                  y=opt_params$best_params, 
-                                  n=names(opt_params$best_params))), collapse=", ")))
-print(paste0("Best number of iterations: ", opt_params$best_iter))
-print(paste0("Best score: ", round(opt_params$best_score, digits=3)))
-# Note: by default, 'test_neg_log_likelihood' is used as 'metric' 
-#       Other evaluation metrics / scoring rules can be chosen using the 
-#       'metric' argument, e.g., metric = "mse" or metric = "binary_logloss"
-#       For more information on available metrics, see 
-#       https://github.com/fabsig/GPBoost/blob/master/docs/Parameters.rst#metric-parameters
-metric = "mse"
+#--------------------Choosing tuning parameters using Bayesian optimization and the 'mlrMBO' R package ----------------
+library(mlrMBO)
+library(DiceKriging)
+library(rgenoud)
+source("https://raw.githubusercontent.com/fabsig/GPBoost/master/helpers/R_package_tune_pars_bayesian_optimization.R")# Load required function
+# Define search space
+# Note: if the best combination found below is close to the bounday for a paramter, you might want to extend the corresponding range
+search_space <- list("learning_rate" = c(0.001, 10), 
+                     "min_data_in_leaf" = c(1, 1000),
+                     "max_depth" = c(-1, -1), # -1 means no depth limit as we tune 'num_leaves'. Can also additionally tune 'max_depth', e.g., "max_depth" = c(-1, 1, 2, 3, 5, 10)
+                     "num_leaves" = c(2, 2^10),
+                     "lambda_l2" = c(0, 100),
+                     "max_bin" = c(63, min(n,10000)),
+                     "line_search_step_length" = c(TRUE, FALSE))
+metric = "mse" # Define metric
 if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
   metric = "binary_logloss"
 }
-set.seed(1)
-opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = other_params,
-                                              num_try_random = NULL, nfold = 4,
+# Note: can also use metric = "test_neg_log_likelihood". For more options, see https://github.com/fabsig/GPBoost/blob/master/docs/Parameters.rst#metric-parameters
+gp_model <- GPModel(group_data = group, likelihood = likelihood)
+data_train <- gpb.Dataset(data = X, label = y)
+# Run parameter optimization using Bayesian optimization and k-fold CV 
+opt_params <- tune.pars.bayesian.optimization(search_space = search_space, n_iter = 100,
                                               data = dataset, gp_model = gp_model,
-                                              use_gp_model_for_validation = TRUE, verbose_eval = 1,
-                                              nrounds = 1000, early_stopping_rounds = 10,
-                                              metric = metric)
+                                              nfold = 5, nrounds = 1000, early_stopping_rounds = 20,
+                                              metric = metric, cv_seed = 4, verbose_eval = 1)
+print(paste0("Best parameters: ", paste0(unlist(lapply(seq_along(opt_params$best_params), 
+                                  function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, y=opt_params$best_params, 
+                                  n=names(opt_params$best_params))), collapse=", ")))
+print(paste0("Best number of iterations: ", opt_params$best_iter))
+print(paste0("Best score: ", round(opt_params$best_score, digits=3)))
 
-# Faster computation for large data:
-#   using manually defined validation data instead of cross-validation
+# Alternatively and faster: using manually defined validation data instead of cross-validation
 valid_tune_idx <- sample.int(length(y), as.integer(0.2*length(y))) # use 20% of the data as validation data
 folds <- list(valid_tune_idx)
-opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = other_params,
-                                              num_try_random = NULL, folds = folds,
+opt_params <- tune.pars.bayesian.optimization(search_space = search_space, n_iter = 100,
                                               data = dataset, gp_model = gp_model,
-                                              use_gp_model_for_validation = TRUE, verbose_eval = 1,
-                                              nrounds = 1000, early_stopping_rounds = 10)
+                                              folds = folds, nrounds = 1000, early_stopping_rounds = 20,
+                                              metric = metric, cv_seed = 4, verbose_eval = 1)
+
+#--------------------Choosing tuning parameters using random grid search----------------
+param_grid <- list("learning_rate" = c(0.001, 0.01, 0.1, 1, 10), 
+                   "min_data_in_leaf" = c(1, 10, 100, 1000),
+                   "max_depth" = c(-1), # -1 means no depth limit as we tune 'num_leaves'. Can also additionally tune 'max_depth', e.g., "max_depth" = c(-1, 1, 2, 3, 5, 10)
+                   "num_leaves" = 2^(1:10),
+                   "lambda_l2" = c(0, 1, 10, 100),
+                   "max_bin" = c(250, 500, 1000, min(n,10000)),
+                   "line_search_step_length" = c(TRUE, FALSE))
+metric = "mse" # Define metric
+if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
+  metric = "binary_logloss"
+}
+# Note: can also use metric = "test_neg_log_likelihood". For more options, see https://github.com/fabsig/GPBoost/blob/master/docs/Parameters.rst#metric-parameters
+gp_model <- GPModel(group_data = group, likelihood = likelihood)
+data_train <- gpb.Dataset(data = X, label = y)
+set.seed(1)
+# Run parameter optimization using random grid search and k-fold CV
+# Note: deterministic grid search can be done by setting 'num_try_random=NULL'
+opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid,
+                                              data = data_train, gp_model = gp_model,
+                                              num_try_random = 100, nfold = 5,
+                                              nrounds = 1000, early_stopping_rounds = 20,
+                                              verbose_eval = 1, metric = metric, cv_seed = 4)
+print(paste0("Best parameters: ", paste0(unlist(lapply(seq_along(opt_params$best_params), 
+                                  function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, y=opt_params$best_params, 
+                                  n=names(opt_params$best_params))), collapse=", ")))
+print(paste0("Best number of iterations: ", opt_params$best_iter))
+print(paste0("Best score: ", round(opt_params$best_score, digits=3)))
+
+# Alternatively and faster: using manually defined validation data instead of cross-validation
+valid_tune_idx <- sample.int(length(y), as.integer(0.2*length(y))) # use 20% of the data as validation data
+folds <- list(valid_tune_idx)
+opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, 
+                                              data = data_train, gp_model = gp_model,
+                                              num_try_random = 5, folds = folds,
+                                              nrounds = 1000, early_stopping_rounds = 20,
+                                              verbose_eval = 1, metric = metric, cv_seed = 4)
 
 #--------------------Cross-validation for determining number of iterations----------------
 gp_model <- GPModel(group_data = group, likelihood = likelihood)
 dataset <- gpb.Dataset(data = X, label = y)
-bst <- gpb.cv(data = dataset, gp_model = gp_model,
-              use_gp_model_for_validation = TRUE, params = params,
-              nrounds = 1000, nfold = 4, early_stopping_rounds = 10)
+bst <- gpb.cv(data = dataset, gp_model = gp_model, params = params,
+              nrounds = 1000, nfold = 5, early_stopping_rounds = 20)
 print(paste0("Optimal number of iterations: ", bst$best_iter))
 
 #--------------------Using a validation set for finding number of iterations----------------
 # Partition data into training and validation data
 set.seed(1)
-train_ind <- sample.int(n,size=as.integer(n*0.7))
+train_ind <- sample.int(n,size=as.integer(n*0.8))
 dtrain <- gpb.Dataset(data = X[train_ind,], label = y[train_ind])
 dvalid <- gpb.Dataset.create.valid(dtrain, data = X[-train_ind,], label = y[-train_ind])
 valids <- list(test = dvalid)
@@ -202,7 +223,7 @@ gp_model <- GPModel(group_data = group[train_ind], likelihood = likelihood)
 gp_model$set_prediction_data(group_data_pred = group[-train_ind])
 bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 1000,
                  params = params, verbose = 1, valids = valids,
-                 early_stopping_rounds = 10, use_gp_model_for_validation = TRUE)
+                 early_stopping_rounds = 20)
 print(paste0("Optimal number of iterations: ", bst$best_iter,
              ", best test error: ", bst$best_score))
 # Plot validation error
@@ -218,7 +239,7 @@ if (likelihood == "gaussian") {
   params_newton$learning_rate <- 0.1
   bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 1000,
                    params = params_newton, verbose = 1, valids = valids,
-                   early_stopping_rounds = 10, use_gp_model_for_validation = TRUE,
+                   early_stopping_rounds = 20,
                    leaves_newton_update = TRUE)
   print(paste0("Optimal number of iterations: ", bst$best_iter,
                ", best test error: ", bst$best_score))
@@ -259,7 +280,7 @@ shap_long <- shap.prep(bst, X_train = X)
 shap.plot.dependence(data_long = shap_long, x = "Covariate_1",
                      color_feature = "Covariate_2", smooth = FALSE)
 # SHAP interaction values
-source("https://raw.githubusercontent.com/fabsig/GPBoost/master/helpers/unify_gpboost_treeshap.R")# Load required function
+source("https://raw.githubusercontent.com/fabsig/GPBoost/master/helpers/R_package_unify_gpboost_treeshap.R")# Load required function
 library(treeshap)
 library(shapviz)
 unified_bst <- gpboost_unify_treeshap(bst, X)
@@ -300,9 +321,8 @@ gp_model <- GPModel(group_data = group, likelihood = likelihood)
 dataset <- gpb.Dataset(X, label = y)
 # Stage 1: run cross-validation to (i) determine to optimal number of iterations
 #           and (ii) to estimate the GPModel on the out-of-sample data
-cvbst <- gpb.cv(data = dataset, gp_model = gp_model,
-                use_gp_model_for_validation = TRUE, params = params,
-                nrounds = 1000, nfold = 4, early_stopping_rounds = 5,
+cvbst <- gpb.cv(data = dataset, gp_model = gp_model, params = params,
+                nrounds = 1000, nfold = 5, early_stopping_rounds = 20,
                 fit_GP_cov_pars_OOS = TRUE, verbose = 0)
 print(paste0("Optimal number of iterations: ", cvbst$best_iter))
 # Fitted model (note: ideally, one would have to find the optimal combination of 
@@ -340,8 +360,8 @@ n <- ntrain + ntest
 # Simulate spatial Gaussian process
 sigma2_1 <- 0.25 # marginal variance of GP
 rho <- 0.1 # range parameter
-D <- as.matrix(dist(coords))
-Sigma <- sigma2_1 * exp(-D/rho) + diag(1E-20,n)
+D_scaled <- sqrt(3) * as.matrix(dist(coords)) / rho
+Sigma <- sigma2_1 * (1 + D_scaled) * exp(-D_scaled) + diag(1E-20,n) # Matern 1.5 covariance
 C <- t(chol(Sigma))
 b_1 <- as.vector(C %*% rnorm(n=n))
 b_1 <- b_1 - mean(b_1)
@@ -368,7 +388,7 @@ if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
 
 #--------------------Training----------------
 # Define Gaussian process model
-gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
+gp_model <- GPModel(gp_coords = coords_train, cov_function = "matern", cov_fct_shape = 1.5,
                     likelihood = likelihood)
 # Create dataset for gpb.train
 dtrain <- gpb.Dataset(data = X_train, label = y_train)
@@ -429,23 +449,10 @@ plot4 <- ggplot(data=data.frame(x=X_test[,1],f=pred$fixed_effect), aes(x=x,y=f))
 grid.arrange(plot1, plot2, plot3, plot4, ncol=2)
 
 #--------------------Choosing tuning parameters----------------
-run_slow_demo <- FALSE # the following takes some time
-if (run_slow_demo) {
-  
-  param_grid = list("learning_rate" = c(1,0.1,0.01), 
-                    "min_data_in_leaf" = c(10,100,1000),
-                    "max_depth" = c(1,2,3,5,10),
-                    "lambda_l2" = c(0,1,10))
-  other_params <- list(num_leaves = 2^10)
-  gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
-                      likelihood = likelihood)
-  dtrain <- gpb.Dataset(data = X_train, label = y_train)
-  set.seed(1)
-  opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = other_params,
-                                                num_try_random = NULL, nfold = 4,
-                                                data = dtrain, gp_model = gp_model,
-                                                use_gp_model_for_validation = TRUE, verbose_eval = 1,
-                                                nrounds = 1000, early_stopping_rounds = 10)
-  
-}
+# Choosing tuning parameters carefully is important.
+# See the above demo code for grouped random effects on how this can be done.
+# You just have to replace the gp_model. E.g.,    
+# gp_model <- GPModel(gp_coords = coords_train, cov_function = "matern", cov_fct_shape = 1.5, likelihood = likelihood)
 
+#--------------------Model interpretation----------------
+# See the above demo code for grouped random effects on how this can be done.
