@@ -14,13 +14,20 @@
 #' \item{ "gamma": gamma distribution with a with log link function }
 #' \item{ "poisson": Poisson distribution with a with log link function }
 #' \item{ "negative_binomial": negative binomial distribution with a with log link function }
+#' \item{ "t": t-distribution (e.g., for robust regression) }
+#' \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
+#' The df can be set via the \code{likelihood_additional_param} parameter }
 #' \item{ Note: other likelihoods could be implemented upon request }
 #' }
 #' @param likelihood_additional_param A \code{numeric} specifying an additional parameter for the \code{likelihood} 
-#' which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood="t"}). 
+#' which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood = "t_fix_df"}). 
 #' This is not to be confused with any auxiliary parameters that can be estimated and accessed through 
 #' the function \code{get_aux_pars} after estimation.
 #' Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.
+#' If \code{likelihood_additional_param = NULL}, the following internal default values are used:
+#' \itemize{
+#' \item{ df = 2 for likelihood = "t_fix_df"}
+#' }
 #' @param group_data A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
 #' The elements being group levels defining grouped random effects.
 #' The elements of 'group_data' can be integer, double, or character.
@@ -74,7 +81,11 @@
 #' \item{"full_scale_tapering": A full scale approximation combining an 
 #' inducing point / predictive process approximation with tapering on the residual process; 
 #' see Gyger, Furrer, and Sigrist (2024) for more details }
+#' \item{"vecchia_latent": similar as "vecchia" but a Vecchia approximation is applied to the latent Gaussian process 
+#' for likelihood == "gaussian". For likelihood != "gaussian", "vecchia" and "vecchia_latent" are equivalent }
 #' }
+#' @param num_parallel_threads An \code{integer} specifying the number of parallel threads for OMP. 
+#' If num_parallel_threads = NULL, all available threads are used
 #' @param cov_fct_taper_range A \code{numeric} specifying the range parameter 
 #' of the Wendland covariance function and Wendland correlation taper function. 
 #' We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -126,16 +137,16 @@
 #' Default value if vecchia_pred_type = NULL: "order_obs_first_cond_obs_only". 
 #' Available options:
 #' \itemize{
-#' \item{"order_obs_first_cond_obs_only": Vecchia approximation for the observable process and observed training data is 
-#' ordered first and the neighbors are only observed training data points }
-#' \item{"order_obs_first_cond_all": Vecchia approximation for the observable process and observed training data is 
-#' ordered first and the neighbors are selected among all points (training + prediction) }
-#' \item{"latent_order_obs_first_cond_obs_only": Vecchia approximation for the latent process and observed data is 
-#' ordered first and neighbors are only observed points}
-#' \item{"latent_order_obs_first_cond_all": Vecchia approximation 
-#' for the latent process and observed data is ordered first and neighbors are selected among all points }
-#' \item{"order_pred_first": Vecchia approximation for the observable process and prediction data is 
-#' ordered first for making predictions. This option is only available for Gaussian likelihoods }
+#'    \item{"order_obs_first_cond_obs_only": Vecchia approximation for the observable process and observed training data is 
+#'    ordered first and the neighbors are only observed training data points }
+#'    \item{"order_obs_first_cond_all": Vecchia approximation for the observable process and observed training data is 
+#'    ordered first and the neighbors are selected among all points (training + prediction) }
+#'    \item{"latent_order_obs_first_cond_obs_only": Vecchia approximation for the latent process and observed data is 
+#'    ordered first and neighbors are only observed points}
+#'    \item{"latent_order_obs_first_cond_all": Vecchia approximation 
+#'    for the latent process and observed data is ordered first and neighbors are selected among all points }
+#'    \item{"order_pred_first": Vecchia approximation for the observable process and prediction data is 
+#'    ordered first for making predictions. This option is only available for Gaussian likelihoods }
 #' }
 #' @param num_neighbors_pred an \code{integer} specifying the number of neighbors for the Vecchia approximation 
 #' for making predictions. Default value if NULL: num_neighbors_pred = 2 * num_neighbors
@@ -249,16 +260,20 @@
 #'                \item{cg_preconditioner_type: \code{string}.
 #'                Type of preconditioner used for conjugate gradient algorithms.
 #'                \itemize{
-#'                  \item Options for non-Gaussian likelihoods and gp_approx = "vecchia": 
+#'                  \item Options for likelihood != "gaussian" and gp_approx == "vecchia" or
+#'                  likelihood == "gaussian" and gp_approx == "vecchia_latent": 
 #'                    \itemize{
-#'                      \item{"Sigma_inv_plus_BtWB" (= default): (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
+#'                      \item{"vadu" (= default): (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
 #'                  where B^T * D^-1 * B approx= Sigma^-1 }
-#'                      \item{"piv_chol_on_Sigma": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
+#'                      \item{"fitc": modified predictive process preconditioner for inverting (B^-1 * D * B^-T + W^-1)}
+#'                      \item{"pivoted_cholesky": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
 #'                  where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
+#'                      \item{"incomplete_cholesky": zero fill-in incomplete (reverse) Cholesky factorization of 
+#'                      (B^T * D^-1 * B + W) using the sparsity pattern of B^T * D^-1 * B approx= Sigma^-1 }
 #'                    }
-#'                  \item Options for likelihood = "gaussian" and gp_approx = "full_scale_tapering": 
+#'                  \item Options for likelihood == "gaussian" and gp_approx == "full_scale_tapering": 
 #'                    \itemize{
-#'                      \item{"predictive_process_plus_diagonal" (= default): predictive process preconditiioner }
+#'                      \item{"fitc" (= default): modified predictive process preconditioner }
 #'                      \item{"none": no preconditioner }
 #'                  }
 #'                }
@@ -320,6 +335,7 @@ gpb.GPModel <- R6::R6Class(
                           cov_function = "matern",
                           cov_fct_shape = 1.5,
                           gp_approx = "none",
+                          num_parallel_threads = NULL,
                           cov_fct_taper_range = 1.,
                           cov_fct_taper_shape = 1.,
                           num_neighbors = 20L,
@@ -330,13 +346,13 @@ gpb.GPModel <- R6::R6Class(
                           matrix_inversion_method = "cholesky",
                           seed = 0L,
                           cluster_ids = NULL,
+                          likelihood_additional_param = NULL,
                           free_raw_data = FALSE,
                           modelfile = NULL,
                           model_list = NULL,
                           vecchia_approx = NULL,
                           vecchia_pred_type = NULL,
-                          num_neighbors_pred = NULL,
-                          likelihood_additional_param = 1.) {
+                          num_neighbors_pred = NULL) {
       
       if (!is.null(vecchia_approx)) {
         stop("GPModel: The argument 'vecchia_approx' is discontinued. Use the argument 'gp_approx' instead")
@@ -400,6 +416,7 @@ gpb.GPModel <- R6::R6Class(
         ind_points_selection = model_list[["ind_points_selection"]]
         cover_tree_radius = model_list[["cover_tree_radius"]]
         seed = model_list[["seed"]]
+        num_parallel_threads = model_list[["num_parallel_threads"]]
         cluster_ids = model_list[["cluster_ids"]]
         likelihood = model_list[["likelihood"]]
         likelihood_additional_param = model_list[["likelihood_additional_param"]]
@@ -424,7 +441,7 @@ gpb.GPModel <- R6::R6Class(
         private$model_fitted = model_list[["model_fitted"]]
       }# end !is.null(modelfile) | !is.null(model_list)
       
-      if(likelihood == "gaussian"){
+      if(likelihood == "gaussian" & gp_approx != "vecchia_latent"){
         private$cov_par_names <- c("Error_term")
       }else{
         private$cov_par_names <- c()
@@ -435,7 +452,16 @@ gpb.GPModel <- R6::R6Class(
       }
       private$matrix_inversion_method <- as.character(matrix_inversion_method)
       private$seed <- as.integer(seed)
-      private$likelihood_additional_param <- as.numeric(likelihood_additional_param)
+      if (!is.null(num_parallel_threads)) {
+        if (num_parallel_threads > 0) {
+          private$num_parallel_threads <- as.integer(num_parallel_threads)
+        }
+      }
+      if (is.null(likelihood_additional_param)) {
+        private$likelihood_additional_param <- likelihood_additional_param
+      } else {
+        private$likelihood_additional_param <- as.numeric(likelihood_additional_param)
+      }
       # Set data for grouped random effects
       group_data_c_str <- NULL
       if (!is.null(group_data)) {
@@ -538,7 +564,7 @@ gpb.GPModel <- R6::R6Class(
           }
           if (!is.null(private$drop_intercept_group_rand_effect)) {
             if (sum(private$drop_intercept_group_rand_effect) > 0) {
-              ind_drop <- ((1:private$num_group_re) + (likelihood == "gaussian"))[private$drop_intercept_group_rand_effect]
+              ind_drop <- ((1:private$num_group_re) + (likelihood == "gaussian" & gp_approx != "vecchia_latent"))[private$drop_intercept_group_rand_effect]
               private$cov_par_names <- private$cov_par_names[-ind_drop]
               private$re_comp_names <- private$re_comp_names[-which(private$drop_intercept_group_rand_effect)]
             }
@@ -703,6 +729,12 @@ gpb.GPModel <- R6::R6Class(
         cluster_ids <- as.vector(cluster_ids)
       } # End set IDs for independent processes (cluster_ids)
       private$determine_num_cov_pars(likelihood)
+      if (is.null(private$likelihood_additional_param)) {
+        likelihood_additional_param_c <- -999 # internal default values are used
+      } else {
+        likelihood_additional_param_c <- private$likelihood_additional_param
+      }
+      
       # Create handle for the GPModel
       handle <- NULL
       # Create handle for the GPModel
@@ -732,9 +764,10 @@ gpb.GPModel <- R6::R6Class(
         , private$cover_tree_radius
         , private$ind_points_selection
         , likelihood
-        , private$likelihood_additional_param
+        , likelihood_additional_param_c
         , private$matrix_inversion_method
         , private$seed
+        , private$num_parallel_threads
       )
       # Check whether the handle was created properly if it was not stopped earlier by a stop call
       if (gpb.is.null.handle(handle)) {
@@ -771,8 +804,8 @@ gpb.GPModel <- R6::R6Class(
       if (gpb.is.null.handle(private$handle)) {
         stop("fit.GPModel: Gaussian process model has not been initialized")
       }
-      if ((private$num_cov_pars == 1L && self$get_likelihood_name() == "gaussian") ||
-          (private$num_cov_pars == 0L && self$get_likelihood_name() != "gaussian")) {
+      if ((private$num_cov_pars == 1L && (self$get_likelihood_name() == "gaussian" & private$gp_approx != "vecchia_latent")) ||
+          (private$num_cov_pars == 0L && (self$get_likelihood_name() != "gaussian" | private$gp_approx == "vecchia_latent"))) {
         stop("fit.GPModel: No random effects (grouped, spatial, etc.) have been defined")
       }
       if (!is.vector(y)) {
@@ -1055,7 +1088,7 @@ gpb.GPModel <- R6::R6Class(
         cov_pars <- optim_pars[1:private$num_cov_pars]
       }
       names(cov_pars) <- private$cov_par_names
-      if (private$params[["std_dev"]] & self$get_likelihood_name() == "gaussian") {
+      if (private$params[["std_dev"]] & self$get_likelihood_name() == "gaussian" & private$gp_approx != "vecchia_latent") {
         cov_pars_std_dev <- optim_pars[1:private$num_cov_pars+private$num_cov_pars]
         cov_pars <- rbind(cov_pars,cov_pars_std_dev)
         rownames(cov_pars) <- c("Param.", "Std. dev.")
@@ -1856,6 +1889,7 @@ gpb.GPModel <- R6::R6Class(
       model_list[["ind_points_selection"]] <- private$ind_points_selection
       model_list[["matrix_inversion_method"]] <- private$matrix_inversion_method
       model_list[["seed"]] <- private$seed
+      model_list[["num_parallel_threads"]] <- private$num_parallel_threads
       # Covariate data
       model_list[["has_covariates"]] <- private$has_covariates
       if (private$has_covariates) {
@@ -1971,7 +2005,7 @@ gpb.GPModel <- R6::R6Class(
   
   private = list(
     handle = NULL,
-    likelihood_additional_param = 1.,
+    likelihood_additional_param = NULL,
     num_data = NULL,
     num_group_re = 0L,
     num_group_rand_coef = 0L,
@@ -1992,6 +2026,7 @@ gpb.GPModel <- R6::R6Class(
     cov_function = "matern",
     cov_fct_shape = 1.5,
     gp_approx = "none",
+    num_parallel_threads = -1L,
     cov_fct_taper_range = 1.,
     cov_fct_taper_shape = 1.,
     num_neighbors = 20L,
@@ -2056,7 +2091,7 @@ gpb.GPModel <- R6::R6Class(
       if (!is.null(private$drop_intercept_group_rand_effect)) {
         private$num_cov_pars <- private$num_cov_pars - sum(private$drop_intercept_group_rand_effect)
       }
-      if (likelihood == "gaussian"){
+      if (likelihood == "gaussian" & private$gp_approx != "vecchia_latent"){
         private$num_cov_pars <- private$num_cov_pars + 1L
       }
       storage.mode(private$num_cov_pars) <- "integer"
@@ -2160,7 +2195,7 @@ gpb.GPModel <- R6::R6Class(
       if (likelihood != "gaussian" && "Error_term" %in% private$cov_par_names){
         private$cov_par_names <- private$cov_par_names["Error_term" != private$cov_par_names]
       }
-      if (likelihood == "gaussian" && !("Error_term" %in% private$cov_par_names)){
+      if (likelihood == "gaussian" & private$gp_approx != "vecchia_latent" && !("Error_term" %in% private$cov_par_names)){
         private$cov_par_names <- c("Error_term",private$cov_par_names)
       }
     },
@@ -2215,6 +2250,7 @@ GPModel <- function(likelihood = "gaussian",
                     cov_function = "matern",
                     cov_fct_shape = 1.5,
                     gp_approx = "none",
+                    num_parallel_threads = NULL,
                     cov_fct_taper_range = 1.,
                     cov_fct_taper_shape = 1.,
                     num_neighbors = 20L,
@@ -2225,11 +2261,11 @@ GPModel <- function(likelihood = "gaussian",
                     matrix_inversion_method = "cholesky",
                     seed = 0L,
                     cluster_ids = NULL,
+                    likelihood_additional_param = NULL,
                     free_raw_data = FALSE,
                     vecchia_approx = NULL,
                     vecchia_pred_type = NULL,
-                    num_neighbors_pred = NULL,
-                    likelihood_additional_param = 1.) {
+                    num_neighbors_pred = NULL) {
   
   # Create new GPModel
   invisible(gpb.GPModel$new(likelihood = likelihood
@@ -2242,6 +2278,7 @@ GPModel <- function(likelihood = "gaussian",
                             , cov_function = cov_function
                             , cov_fct_shape = cov_fct_shape
                             , gp_approx = gp_approx
+                            , num_parallel_threads = num_parallel_threads
                             , cov_fct_taper_range = cov_fct_taper_range
                             , cov_fct_taper_shape = cov_fct_taper_shape
                             , num_neighbors = num_neighbors
@@ -2421,6 +2458,7 @@ fitGPModel <- function(likelihood = "gaussian",
                        cov_function = "matern",
                        cov_fct_shape = 1.5,
                        gp_approx = "none",
+                       num_parallel_threads = NULL,
                        cov_fct_taper_range = 1.,
                        cov_fct_taper_shape = 1.,
                        num_neighbors = 20L,
@@ -2440,7 +2478,7 @@ fitGPModel <- function(likelihood = "gaussian",
                        num_neighbors_pred = NULL,
                        offset = NULL,
                        fixed_effects = NULL,
-                       likelihood_additional_param = 1.) {
+                       likelihood_additional_param = NULL) {
   #Create model
   gpmodel <- gpb.GPModel$new(likelihood = likelihood
                              , group_data = group_data
@@ -2452,6 +2490,7 @@ fitGPModel <- function(likelihood = "gaussian",
                              , cov_function = cov_function
                              , cov_fct_shape = cov_fct_shape
                              , gp_approx = gp_approx
+                             , num_parallel_threads = num_parallel_threads
                              , cov_fct_taper_range = cov_fct_taper_range
                              , cov_fct_taper_shape = cov_fct_taper_shape
                              , num_neighbors = num_neighbors
@@ -2592,18 +2631,18 @@ summary.GPModel <- function(object, ...){
 #' @author Fabio Sigrist
 #' @export
 predict.GPModel <- function(object,
+                            predict_response = TRUE,
+                            predict_var = FALSE,
+                            predict_cov_mat = FALSE,
                             y = NULL,
+                            cov_pars = NULL,
                             group_data_pred = NULL,
                             group_rand_coef_data_pred = NULL,
                             gp_coords_pred = NULL,
                             gp_rand_coef_data_pred = NULL,
                             cluster_ids_pred = NULL,
-                            predict_cov_mat = FALSE,
-                            predict_var = FALSE,
-                            cov_pars = NULL,
                             X_pred = NULL,
                             use_saved_data = FALSE,
-                            predict_response = TRUE,
                             offset = NULL,
                             offset_pred = NULL, 
                             fixed_effects = NULL,

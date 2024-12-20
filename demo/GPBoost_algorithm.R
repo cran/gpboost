@@ -46,6 +46,7 @@ simulate_response_variable <- function (lp, rand_eff, likelihood) {
 # Choose likelihood: either "gaussian" (=regression), 
 #                     "bernoulli_probit", "bernoulli_logit", (=classification)
 #                     "poisson", "gamma", or "negative_binomial"
+# For a list of all currently supported likelihoods, see https://github.com/fabsig/GPBoost/blob/master/docs/Main_parameters.rst#likelihood
 likelihood <- "gaussian"
 
 #################################
@@ -149,10 +150,12 @@ if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
 gp_model <- GPModel(group_data = group, likelihood = likelihood)
 data_train <- gpb.Dataset(data = X, label = y)
 # Run parameter optimization using Bayesian optimization and k-fold CV 
+crit = makeMBOInfillCritCB() # other criterion options: makeMBOInfillCritEI()
 opt_params <- tune.pars.bayesian.optimization(search_space = search_space, n_iter = 100,
                                               data = dataset, gp_model = gp_model,
                                               nfold = 5, nrounds = 1000, early_stopping_rounds = 20,
-                                              metric = metric, cv_seed = 4, verbose_eval = 1)
+                                              metric = metric, crit = crit,
+                                              cv_seed = 4, verbose_eval = 1)
 print(paste0("Best parameters: ", paste0(unlist(lapply(seq_along(opt_params$best_params), 
                                   function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, y=opt_params$best_params, 
                                   n=names(opt_params$best_params))), collapse=", ")))
@@ -165,7 +168,8 @@ folds <- list(valid_tune_idx)
 opt_params <- tune.pars.bayesian.optimization(search_space = search_space, n_iter = 100,
                                               data = dataset, gp_model = gp_model,
                                               folds = folds, nrounds = 1000, early_stopping_rounds = 20,
-                                              metric = metric, cv_seed = 4, verbose_eval = 1)
+                                              metric = metric, crit = crit, 
+                                              cv_seed = 4, verbose_eval = 1)
 
 #--------------------Choosing tuning parameters using random grid search----------------
 param_grid <- list("learning_rate" = c(0.001, 0.01, 0.1, 1, 10), 

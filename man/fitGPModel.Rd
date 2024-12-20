@@ -8,14 +8,15 @@ fitGPModel(likelihood = "gaussian", group_data = NULL,
   group_rand_coef_data = NULL, ind_effect_group_rand_coef = NULL,
   drop_intercept_group_rand_effect = NULL, gp_coords = NULL,
   gp_rand_coef_data = NULL, cov_function = "matern", cov_fct_shape = 1.5,
-  gp_approx = "none", cov_fct_taper_range = 1, cov_fct_taper_shape = 1,
-  num_neighbors = 20L, vecchia_ordering = "random",
-  ind_points_selection = "kmeans++", num_ind_points = 500L,
-  cover_tree_radius = 1, matrix_inversion_method = "cholesky", seed = 0L,
-  cluster_ids = NULL, free_raw_data = FALSE, y, X = NULL,
-  params = list(), vecchia_approx = NULL, vecchia_pred_type = NULL,
+  gp_approx = "none", num_parallel_threads = NULL,
+  cov_fct_taper_range = 1, cov_fct_taper_shape = 1, num_neighbors = 20L,
+  vecchia_ordering = "random", ind_points_selection = "kmeans++",
+  num_ind_points = 500L, cover_tree_radius = 1,
+  matrix_inversion_method = "cholesky", seed = 0L, cluster_ids = NULL,
+  free_raw_data = FALSE, y, X = NULL, params = list(),
+  vecchia_approx = NULL, vecchia_pred_type = NULL,
   num_neighbors_pred = NULL, offset = NULL, fixed_effects = NULL,
-  likelihood_additional_param = 1)
+  likelihood_additional_param = NULL)
 }
 \arguments{
 \item{likelihood}{A \code{string} specifying the likelihood function (distribution) of the response variable. 
@@ -27,6 +28,9 @@ Available options:
 \item{ "gamma": gamma distribution with a with log link function }
 \item{ "poisson": Poisson distribution with a with log link function }
 \item{ "negative_binomial": negative binomial distribution with a with log link function }
+\item{ "t": t-distribution (e.g., for robust regression) }
+\item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
+The df can be set via the \code{likelihood_additional_param} parameter }
 \item{ Note: other likelihoods could be implemented upon request }
 }}
 
@@ -91,7 +95,12 @@ modified predictive process approximation; see Gyger, Furrer, and Sigrist (2024)
 \item{"full_scale_tapering": A full scale approximation combining an 
 inducing point / predictive process approximation with tapering on the residual process; 
 see Gyger, Furrer, and Sigrist (2024) for more details }
+\item{"vecchia_latent": similar as "vecchia" but a Vecchia approximation is applied to the latent Gaussian process 
+for likelihood == "gaussian". For likelihood != "gaussian", "vecchia" and "vecchia_latent" are equivalent }
 }}
+
+\item{num_parallel_threads}{An \code{integer} specifying the number of parallel threads for OMP. 
+If num_parallel_threads = NULL, all available threads are used}
 
 \item{cov_fct_taper_range}{A \code{numeric} specifying the range parameter 
 of the Wendland covariance function and Wendland correlation taper function. 
@@ -254,16 +263,20 @@ fixed effects linear regression term (if there is one)}
     \item{cg_preconditioner_type: \code{string}.
     Type of preconditioner used for conjugate gradient algorithms.
     \itemize{
-      \item Options for non-Gaussian likelihoods and gp_approx = "vecchia": 
+      \item Options for likelihood != "gaussian" and gp_approx == "vecchia" or
+      likelihood == "gaussian" and gp_approx == "vecchia_latent": 
         \itemize{
-          \item{"Sigma_inv_plus_BtWB" (= default): (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
+          \item{"vadu" (= default): (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
       where B^T * D^-1 * B approx= Sigma^-1 }
-          \item{"piv_chol_on_Sigma": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
+          \item{"fitc": modified predictive process preconditioner for inverting (B^-1 * D * B^-T + W^-1)}
+          \item{"pivoted_cholesky": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
       where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
+          \item{"incomplete_cholesky": zero fill-in incomplete (reverse) Cholesky factorization of 
+          (B^T * D^-1 * B + W) using the sparsity pattern of B^T * D^-1 * B approx= Sigma^-1 }
         }
-      \item Options for likelihood = "gaussian" and gp_approx = "full_scale_tapering": 
+      \item Options for likelihood == "gaussian" and gp_approx == "full_scale_tapering": 
         \itemize{
-          \item{"predictive_process_plus_diagonal" (= default): predictive process preconditiioner }
+          \item{"fitc" (= default): modified predictive process preconditioner }
           \item{"none": no preconditioner }
       }
     }
@@ -285,10 +298,14 @@ The length of this vector needs to equal the number of training data points.}
 \item{fixed_effects}{This is discontinued. Use the renamed equivalent argument \code{offset} instead}
 
 \item{likelihood_additional_param}{A \code{numeric} specifying an additional parameter for the \code{likelihood} 
-which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood="t"}). 
+which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood = "t_fix_df"}). 
 This is not to be confused with any auxiliary parameters that can be estimated and accessed through 
 the function \code{get_aux_pars} after estimation.
-Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.}
+Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.
+If \code{likelihood_additional_param = NULL}, the following internal default values are used:
+\itemize{
+\item{ df = 2 for likelihood = "t_fix_df"}
+}}
 }
 \value{
 A fitted \code{GPModel}

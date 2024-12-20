@@ -8,13 +8,14 @@ GPModel(likelihood = "gaussian", group_data = NULL,
   group_rand_coef_data = NULL, ind_effect_group_rand_coef = NULL,
   drop_intercept_group_rand_effect = NULL, gp_coords = NULL,
   gp_rand_coef_data = NULL, cov_function = "matern", cov_fct_shape = 1.5,
-  gp_approx = "none", cov_fct_taper_range = 1, cov_fct_taper_shape = 1,
-  num_neighbors = 20L, vecchia_ordering = "random",
-  ind_points_selection = "kmeans++", num_ind_points = 500L,
-  cover_tree_radius = 1, matrix_inversion_method = "cholesky", seed = 0L,
-  cluster_ids = NULL, free_raw_data = FALSE, vecchia_approx = NULL,
-  vecchia_pred_type = NULL, num_neighbors_pred = NULL,
-  likelihood_additional_param = 1)
+  gp_approx = "none", num_parallel_threads = NULL,
+  cov_fct_taper_range = 1, cov_fct_taper_shape = 1, num_neighbors = 20L,
+  vecchia_ordering = "random", ind_points_selection = "kmeans++",
+  num_ind_points = 500L, cover_tree_radius = 1,
+  matrix_inversion_method = "cholesky", seed = 0L, cluster_ids = NULL,
+  likelihood_additional_param = NULL, free_raw_data = FALSE,
+  vecchia_approx = NULL, vecchia_pred_type = NULL,
+  num_neighbors_pred = NULL)
 }
 \arguments{
 \item{likelihood}{A \code{string} specifying the likelihood function (distribution) of the response variable. 
@@ -26,6 +27,9 @@ Available options:
 \item{ "gamma": gamma distribution with a with log link function }
 \item{ "poisson": Poisson distribution with a with log link function }
 \item{ "negative_binomial": negative binomial distribution with a with log link function }
+\item{ "t": t-distribution (e.g., for robust regression) }
+\item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
+The df can be set via the \code{likelihood_additional_param} parameter }
 \item{ Note: other likelihoods could be implemented upon request }
 }}
 
@@ -90,7 +94,12 @@ modified predictive process approximation; see Gyger, Furrer, and Sigrist (2024)
 \item{"full_scale_tapering": A full scale approximation combining an 
 inducing point / predictive process approximation with tapering on the residual process; 
 see Gyger, Furrer, and Sigrist (2024) for more details }
+\item{"vecchia_latent": similar as "vecchia" but a Vecchia approximation is applied to the latent Gaussian process 
+for likelihood == "gaussian". For likelihood != "gaussian", "vecchia" and "vecchia_latent" are equivalent }
 }}
+
+\item{num_parallel_threads}{An \code{integer} specifying the number of parallel threads for OMP. 
+If num_parallel_threads = NULL, all available threads are used}
 
 \item{cov_fct_taper_range}{A \code{numeric} specifying the range parameter 
 of the Wendland covariance function and Wendland correlation taper function. 
@@ -152,6 +161,16 @@ This is currently only supported for the following cases:
 random effects / Gaussian processes (same values = same process realization).
 The elements of 'cluster_ids' can be integer, double, or character.}
 
+\item{likelihood_additional_param}{A \code{numeric} specifying an additional parameter for the \code{likelihood} 
+which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood = "t_fix_df"}). 
+This is not to be confused with any auxiliary parameters that can be estimated and accessed through 
+the function \code{get_aux_pars} after estimation.
+Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.
+If \code{likelihood_additional_param = NULL}, the following internal default values are used:
+\itemize{
+\item{ df = 2 for likelihood = "t_fix_df"}
+}}
+
 \item{free_raw_data}{A \code{boolean}. If TRUE, the data (groups, coordinates, covariate data for random coefficients) 
 is freed in R after initialization}
 
@@ -162,12 +181,6 @@ This is discontinued here. Use the function 'set_prediction_data' to specify thi
 
 \item{num_neighbors_pred}{an \code{integer} specifying the number of neighbors for making predictions.
 This is discontinued here. Use the function 'set_prediction_data' to specify this}
-
-\item{likelihood_additional_param}{A \code{numeric} specifying an additional parameter for the \code{likelihood} 
-which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood="t"}). 
-This is not to be confused with any auxiliary parameters that can be estimated and accessed through 
-the function \code{get_aux_pars} after estimation.
-Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.}
 }
 \value{
 A \code{GPModel} containing ontains a Gaussian process and / or mixed effects model with grouped random effects
