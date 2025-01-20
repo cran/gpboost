@@ -2,7 +2,7 @@
 * This file is part of GPBoost a C++ library for combining
 *	boosting with Gaussian process and mixed effects models
 *
-* Copyright (c) 2020 - 2024 Fabio Sigrist. All rights reserved.
+* Copyright (c) 2020 - 2025 Fabio Sigrist. All rights reserved.
 *
 * Licensed under the Apache License Version 2.0. See LICENSE file in the project root for license information.
 *
@@ -100,10 +100,11 @@ namespace GPBoost {
 			information_ll_can_be_negative_ = false;
 			grad_information_wrt_mode_non_zero_ = true;
 			force_laplace_approximation_ = false;
+			force_lls_approximation_ = false;
 			estimate_df_t_ = true;
 			string_t likelihood = type;
-			likelihood = ParseLikelihoodAliasGradientDescent(likelihood);
-			likelihood = ParseLikelihoodAliasFisherLaplace(likelihood);
+			likelihood = ParseLikelihoodAliasModeFindingMethod(likelihood);
+			likelihood = ParseLikelihoodAliasApproximationType(likelihood);
 			likelihood = ParseLikelihoodAliasEstimateAdditionalPars(likelihood);
 			likelihood = ParseLikelihoodAlias(likelihood);
 			if (SUPPORTED_LIKELIHOODS_.find(likelihood) == SUPPORTED_LIKELIHOODS_.end()) {
@@ -253,7 +254,7 @@ namespace GPBoost {
 		*/
 		void SetLikelihood(const string_t& type) {
 			string_t likelihood = ParseLikelihoodAlias(type);
-			likelihood = ParseLikelihoodAliasGradientDescent(likelihood);
+			likelihood = ParseLikelihoodAliasModeFindingMethod(likelihood);
 			if (SUPPORTED_LIKELIHOODS_.find(likelihood) == SUPPORTED_LIKELIHOODS_.end()) {
 				Log::REFatal("Likelihood of type '%s' is not supported.", likelihood.c_str());
 			}
@@ -403,9 +404,7 @@ namespace GPBoost {
 						y_v[i] = y_data[i] - fixed_effects[i];
 					}
 				}
-				int pos_med = (int)(num_data * 0.5);
-				std::nth_element(y_v.begin(), y_v.begin() + pos_med, y_v.end());
-				init_intercept = y_v[pos_med];
+				init_intercept = GPBoost::CalculateMedianPartiallySortInput<std::vector<double>>(y_v);
 			}//end "t"
 			else if (likelihood_type_ == "gaussian") {
 				if (fixed_effects == nullptr) {
@@ -529,15 +528,12 @@ namespace GPBoost {
 						y_v[i] = y_data[i] - fixed_effects[i];
 					}
 				}
-				int pos_med = (int)(num_data * 0.5);
-				std::nth_element(y_v.begin(), y_v.begin() + pos_med, y_v.end());
-				double median = y_v[pos_med];
+				double median = GPBoost::CalculateMedianPartiallySortInput<std::vector<double>>(y_v);
 #pragma omp parallel for schedule(static)
 				for (data_size_t i = 0; i < num_data; ++i) {
 					y_v[i] = std::abs(y_v[i] - median);
 				}
-				std::nth_element(y_v.begin(), y_v.begin() + pos_med, y_v.end());
-				aux_pars_[0] = 1.4826 * y_v[pos_med];
+				aux_pars_[0] = 1.4826 * GPBoost::CalculateMedianPartiallySortInput<std::vector<double>>(y_v);//MAD
 				if (aux_pars_[0] <= EPSILON_NUMBERS) {
 					// use IQR if MAD is zero
 					if (fixed_effects == nullptr) {
@@ -630,15 +626,12 @@ namespace GPBoost {
 						y_v[i] = y_data[i] - fixed_effects[i];
 					}
 				}
-				int pos_med = (int)(num_data * 0.5);
-				std::nth_element(y_v.begin(), y_v.begin() + pos_med, y_v.end());
-				C_mu = y_v[pos_med];
+				C_mu = GPBoost::CalculateMedianPartiallySortInput<std::vector<double>>(y_v);
 #pragma omp parallel for schedule(static)
 				for (data_size_t i = 0; i < num_data; ++i) {
 					y_v[i] = std::abs(y_v[i] - C_mu);
 				}
-				std::nth_element(y_v.begin(), y_v.begin() + pos_med, y_v.end());
-				C_sigma2 = 1.4826 * y_v[pos_med];//MAD
+				C_sigma2 = 1.4826 * GPBoost::CalculateMedianPartiallySortInput<std::vector<double>>(y_v);//MAD
 				C_sigma2 = C_sigma2 * C_sigma2;
 				if (C_sigma2 <= EPSILON_NUMBERS) {
 					// use IQR if MAD is zero
@@ -1403,6 +1396,16 @@ namespace GPBoost {
 					CalcZtVGivenIndices(num_data_, num_re_, random_effects_indices_of_data_, information_ll_data_scale_, information_ll_, true);
 				}//end use_Z_for_duplicates_
 			}//end approximation_type_ == "fisher_laplace"
+			else if (approximation_type_ == "lss_laplace") {
+				if (!use_Z_for_duplicates_) {
+					Log::REFatal("CalcDiagInformationLogLik: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
+						likelihood_type_.c_str(), approximation_type_.c_str());
+				}//end !use_Z_for_duplicates_
+				else {//use_Z_for_duplicates_
+					Log::REFatal("CalcDiagInformationLogLik: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
+						likelihood_type_.c_str(), approximation_type_.c_str());
+				}//end use_Z_for_duplicates_
+			}//end approximation_type_ == "lss_laplace"
 			else {
 				Log::REFatal("CalcDiagInformationLogLik: approximation_type_ '%s' is not supported.", approximation_type_.c_str());
 			}
@@ -1464,6 +1467,11 @@ namespace GPBoost {
 					return(1.);
 				}
 			}//end approximation_type_ == "fisher_laplace"
+			else if (approximation_type_ == "lss_laplace") {
+				Log::REFatal("CalcDiagInformationLogLikOneSample: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
+					likelihood_type_.c_str(), approximation_type_.c_str());
+				return(1.);
+			}//end approximation_type_ == "lss_laplace"
 			else {
 				Log::REFatal("CalcDiagInformationLogLikOneSample: approximation_type_ '%s' is not supported.", approximation_type_.c_str());
 				return(1.);
@@ -1623,8 +1631,12 @@ namespace GPBoost {
 						likelihood_type_.c_str(), approximation_type_.c_str());
 				}
 			}// end approximation_type_ == "fisher_laplace"
+			else if (approximation_type_ == "lss_laplace") {
+				Log::REFatal("CalcFirstDerivInformationLocPar: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
+					likelihood_type_.c_str(), approximation_type_.c_str());
+			}//end approximation_type_ == "lss_laplace"
 			else {
-				Log::REFatal("CalcDiagInformationLogLikOneSample: approximation_type_ '%s' is not supported.", approximation_type_.c_str());
+				Log::REFatal("CalcFirstDerivInformationLocPar: approximation_type_ '%s' is not supported.", approximation_type_.c_str());
 			}
 			first_deriv_information_loc_par_caluclated_ = true;
 		}//end CalcFirstDerivInformationLocPar
@@ -1699,7 +1711,7 @@ namespace GPBoost {
 				neg_log_grad += 0.5 * num_data;
 				grad[0] = neg_log_grad;
 			}//end "gaussian"
-			else if (num_aux_pars_ > 0) {
+			else if (num_aux_pars_estim_ > 0) {
 				Log::REFatal("CalcGradNegLogLikAuxPars: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
 			}
 		}//end CalcGradNegLogLikAuxPars
@@ -1789,7 +1801,7 @@ namespace GPBoost {
 						deriv_information_aux_par[i] = -1. / aux_pars_[0];
 					}
 				}//end "gaussian"
-				else if (num_aux_pars_ > 0) {
+				else if (num_aux_pars_estim_ > 0) {
 					Log::REFatal("CalcSecondDerivNegLogLikAuxParsLocPar: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
 						likelihood_type_.c_str(), approximation_type_.c_str());
 				}
@@ -1828,13 +1840,19 @@ namespace GPBoost {
 						}
 					}
 				}//end "t"
-				else if (num_aux_pars_ > 0) {
+				else if (num_aux_pars_estim_ > 0) {
 					Log::REFatal("CalcSecondDerivNegLogLikAuxParsLocPar: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
 						likelihood_type_.c_str(), approximation_type_.c_str());
 				}
 			}// end approximation_type_ == "fisher_laplace"
+			else if (approximation_type_ == "lss_laplace") {
+				if (num_aux_pars_estim_ > 0) {
+					Log::REFatal("CalcSecondDerivLogLikFirstDerivInformationAuxPar: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
+						likelihood_type_.c_str(), approximation_type_.c_str());
+				}
+			}//end approximation_type_ == "lss_laplace"
 			else {
-				Log::REFatal("CalcDiagInformationLogLikOneSample: approximation_type_ '%s' is not supported.", approximation_type_.c_str());
+				Log::REFatal("CalcSecondDerivLogLikFirstDerivInformationAuxPar: approximation_type_ '%s' is not supported.", approximation_type_.c_str());
 			}
 		}//end CalcSecondDerivLogLikFirstDerivInformationAuxPar
 
@@ -4603,27 +4621,30 @@ namespace GPBoost {
 				}
 			}
 			else if (likelihood_type_ == "t") {
-				// Assume that t-distribution is the true likelihood
-				if (aux_pars_[1] <= 1.) {
-					Log::REFatal("The response mean of a 't' distribution is only defined if the "
-						"'%s' parameter (=degrees of freedom) is larger than 1. Currently, it is %g. "
-						"You can set this parameter via the 'likelihood_additional_param' parameter ", names_aux_pars_[1].c_str(), aux_pars_[1]);
-				}
-				if (predict_var && aux_pars_[1] <= 2.) {
-					Log::REFatal("The response mean of a 't' distribution is only defined if the "
-						"'%s' parameter (=degrees of freedom) is larger than 2. Currently, it is %g. "
-						"You can set this parameter via the 'likelihood_additional_param' parameter ", names_aux_pars_[1].c_str(), aux_pars_[1]);
-				}
-				if (predict_var) {
-					Log::REWarning("Predicting the response variable for a 't' likelihood: it is assumed that the t-distribution is the true likelihood, and  "
-						" predictive variance are calculated accordingly. If you use the 't' likelihood only as an auxiliary tool for robust regression, "
-						"consider predicting the latent variable (predict_response = false) (and maybe add the squared scale parameter assuming the true likelihood without contamination is gaussian) ");
-					double pred_var_const = aux_pars_[0] * aux_pars_[0] * aux_pars_[1] / (aux_pars_[1] - 2.);
-#pragma omp parallel for schedule(static)
-					for (int i = 0; i < (int)pred_mean.size(); ++i) {
-						pred_var[i] = pred_var[i] + pred_var_const;
-					}
-				}
+				pred_var.array() += aux_pars_[0] * aux_pars_[0];
+				Log::REDebug("Response prediction for a 't' likelihood: we simply add the squared 'scale' parameter to the variances of the latent predictions "
+					"and do not assume that the 't' distribution is the true likelihood but rather an auxiliary tool for robust regression ");
+//				// Code when assuming that the t-distribution is the true likelihood
+//				if (aux_pars_[1] <= 1.) {
+//					Log::REFatal("The response mean of a 't' distribution is only defined if the "
+//						"'%s' parameter (=degrees of freedom) is larger than 1. Currently, it is %g. "
+//						"You can set this parameter via the 'likelihood_additional_param' parameter ", names_aux_pars_[1].c_str(), aux_pars_[1]);
+//				}
+//				if (predict_var && aux_pars_[1] <= 2.) {
+//					Log::REFatal("The response mean of a 't' distribution is only defined if the "
+//						"'%s' parameter (=degrees of freedom) is larger than 2. Currently, it is %g. "
+//						"You can set this parameter via the 'likelihood_additional_param' parameter ", names_aux_pars_[1].c_str(), aux_pars_[1]);
+//				}
+//				if (predict_var) {
+//					Log::REWarning("Predicting the response variable for a 't' likelihood: it is assumed that the t-distribution is the true likelihood, and  "
+//						" predictive variance are calculated accordingly. If you use the 't' likelihood only as an auxiliary tool for robust regression, "
+//						"consider predicting the latent variable (predict_response = false) (and maybe add the squared scale parameter assuming the true likelihood without contamination is gaussian) ");
+//					double pred_var_const = aux_pars_[0] * aux_pars_[0] * aux_pars_[1] / (aux_pars_[1] - 2.);
+//#pragma omp parallel for schedule(static)
+//					for (int i = 0; i < (int)pred_mean.size(); ++i) {
+//						pred_var[i] = pred_var[i] + pred_var_const;
+//					}
+//				}
 			}//end "t"
 			else if (likelihood_type_ == "gaussian") {
 				if (predict_var) {
@@ -5256,7 +5277,7 @@ namespace GPBoost {
 			return likelihood;
 		}
 
-		string_t ParseLikelihoodAliasGradientDescent(const string_t& likelihood) {
+		string_t ParseLikelihoodAliasModeFindingMethod(const string_t& likelihood) {
 			if (likelihood.size() > 13) {
 				if (likelihood.substr(likelihood.size() - 13) == string_t("_quasi-newton")) {
 					quasi_newton_for_mode_finding_ = true;
@@ -5267,7 +5288,7 @@ namespace GPBoost {
 			return likelihood;
 		}
 
-		string_t ParseLikelihoodAliasFisherLaplace(const string_t& likelihood) {
+		string_t ParseLikelihoodAliasApproximationType(const string_t& likelihood) {
 			if (likelihood.size() > 15) {
 				if (likelihood.substr(likelihood.size() - 15) == string_t("_fisher-laplace") ||
 					likelihood.substr(likelihood.size() - 15) == string_t("_fisher_laplace")) {
@@ -5279,6 +5300,12 @@ namespace GPBoost {
 				if (likelihood.substr(likelihood.size() - 8) == string_t("_laplace")) {
 					force_laplace_approximation_ = true;
 					return likelihood.substr(0, likelihood.size() - 8);
+				}
+			}
+			if (likelihood.size() > 12) {
+				if (likelihood.substr(likelihood.size() - 12) == string_t("_lls_laplace")) {
+					force_lls_approximation_ = true;
+					return likelihood.substr(0, likelihood.size() - 12);
 				}
 			}
 			return likelihood;
@@ -5400,8 +5427,9 @@ namespace GPBoost {
 		string_t approximation_type_ = "laplace";
 		/*! \brief If true, the Laplace approximation is used (for likelihoods where this is not recommended, instead of a Fisher-Laplace approximation) */
 		bool force_laplace_approximation_ = false;
+		bool force_lls_approximation_ = false;
 		/*! \brief List of supported approximations */
-		const std::set<string_t> SUPPORTED_APPROX_TYPE_{ "laplace", "fisher_laplace" };
+		const std::set<string_t> SUPPORTED_APPROX_TYPE_{ "laplace", "fisher_laplace", "lss_laplace"};
 		/*! \brief If true, 'information_ll_' could contain negative values */
 		bool information_ll_can_be_negative_ = false;
 		/*! \brief If true, the derivative of the information wrt the mode is non-zero (it is zero, e.g., for a "gaussian" likelihood). Consequently, the (observed or expected) Fisher information ('information_ll_') changes in the mode finding algorithm (usually Newton's method) for the Laplace approximation */

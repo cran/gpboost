@@ -2,7 +2,7 @@
 * This file is part of GPBoost a C++ library for combining
 *	boosting with Gaussian process and mixed effects models
 *
-* Copyright (c) 2022 Fabio Sigrist. All rights reserved.
+* Copyright (c) 2022 - 2025 Fabio Sigrist. All rights reserved.
 *
 * Licensed under the Apache License Version 2.0. See LICENSE file in the project root for license information.
 */
@@ -13,6 +13,10 @@
 #include <GPBoost/type_defs.h>
 #include <algorithm>    // std::max, std::sort
 #include <numeric>      // std::iota
+#include <unordered_set>
+#include <LightGBM/utils/log.h>
+
+using LightGBM::Log;
 
 namespace GPBoost {
 
@@ -71,6 +75,74 @@ namespace GPBoost {
 		else {
 			return -INFINITY;
 		}
+	};
+
+	/*! \brief Determines the number of unique values of a vector up to a certain number (max_unique_values) */
+	inline int NumberUniqueValues(const vec_t vec,
+		int max_unique_values) {
+		std::unordered_set<double> unique_values;
+		bool found_more_uniques_than_max = false;
+#pragma omp parallel
+		{
+			std::unordered_set<double> local_set;
+#pragma omp for
+			for (data_size_t i = 0; i < (data_size_t)vec.size(); ++i) {
+				if (found_more_uniques_than_max) {
+					continue;
+				}
+				local_set.insert(vec[i]);
+				if ((int)local_set.size() > max_unique_values) {
+#pragma omp critical
+					{
+						found_more_uniques_than_max = true;
+					}
+				}
+			}
+#pragma omp critical
+			{
+				unique_values.insert(local_set.begin(), local_set.end());
+			}
+		}
+		return (int)unique_values.size();
+	};//end NumberUniqueValues
+
+	/*!
+	* \brief Finds the median of the vector vec
+	* \param[out] vec Vector with values (will be partially sorted)
+	* \return Median
+	*/
+	template <typename T>//T can be std::vector<double> or vec_t
+	inline double CalculateMedianPartiallySortInput(T& vec) {
+		CHECK(vec.size() > 0);
+		int num_el = (int)vec.size();
+		double median;
+		int pos_med = (int)(num_el / 2);
+		std::nth_element(vec.begin(), vec.begin() + pos_med, vec.end());
+		median = vec[pos_med];
+		if (num_el % 2 == 0) {
+			std::nth_element(vec.begin(), vec.begin() + pos_med - 1, vec.end());
+			median += vec[pos_med - 1];
+			median /= 2.;
+		}
+		return(median);
+	};
+
+	/*!
+	* \brief Finds the mean of the vector vec
+	* \param[out] vec Vector with values 
+	* \return Mean
+	*/
+	template <typename T>//T can be std::vector<double> or vec_t
+	inline double CalculateMean(const T& vec) {
+		CHECK(vec.size() > 0);
+		int num_el = (int)vec.size();
+		double mean = 0.;
+#pragma omp parallel for schedule(static) reduction(+:mean)
+		for (int i = 0; i < num_el; ++i) {
+			mean += vec[i];
+		}
+		mean /= num_el;
+		return(mean);
 	};
 
 	/*!
