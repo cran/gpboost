@@ -949,7 +949,7 @@ namespace GPBoost {
 				SetCovParsComps(cov_aux_pars.segment(0, num_cov_par_));
 				RedetermineNearestNeighborsVecchia(true);//called only if gp_approx_ == "vecchia" and neighbors are selected based on correlations and not distances
 			}
-			if (optimizer_cov_pars_ != "lbfgs" && optimizer_cov_pars_ != "lbfgs_linesearch_nocedal_wright") {
+			if ((optimizer_cov_pars_ != "lbfgs" && optimizer_cov_pars_ != "lbfgs_linesearch_nocedal_wright") || max_iter_ == 0) {
 				CalcCovFactorOrModeAndNegLL(cov_aux_pars.segment(0, num_cov_par_), fixed_effects_ptr);
 				// TODO: for likelihood evaluation we don't need y_aux = Psi^-1 * y but only Psi^-0.5 * y. So, if has_covariates_==true, we might skip this step here and save some time
 				string_t ll_str;
@@ -985,27 +985,29 @@ namespace GPBoost {
 			bool na_or_inf_occurred = false;
 			bool profile_out_coef_optim_external = optimizer_coef_ == "wls" && gauss_likelihood_ && has_covariates_;
 			if (OPTIM_EXTERNAL_.find(optimizer_cov_pars_) != OPTIM_EXTERNAL_.end()) {
-				OptimExternal<T_mat, T_chol>(this, cov_aux_pars, beta_, fixed_effects, max_iter_,
-					delta_rel_conv_, convergence_criterion_, num_it, learn_covariance_parameters,
-					optimizer_cov_pars_, profile_out_marginal_variance_, profile_out_coef_optim_external,
-					neg_log_likelihood_, num_cov_par_, NumAuxPars(), GetAuxPars(), has_covariates_, lr_cov_init_, reuse_m_bfgs_from_previous_call);
-				// Check for NA or Inf
-				if (optimizer_cov_pars_ == "bfgs_optim_lib" || optimizer_cov_pars_ == "lbfgs" || optimizer_cov_pars_ == "lbfgs_linesearch_nocedal_wright") {
-					if (learn_covariance_parameters) {
-						for (int i = 0; i < (int)cov_aux_pars.size(); ++i) {
-							if (std::isnan(cov_aux_pars[i]) || std::isinf(cov_aux_pars[i])) {
-								na_or_inf_occurred = true;
+				if (max_iter_ > 0) {
+					OptimExternal<T_mat, T_chol>(this, cov_aux_pars, beta_, fixed_effects, max_iter_,
+						delta_rel_conv_, convergence_criterion_, num_it, learn_covariance_parameters,
+						optimizer_cov_pars_, profile_out_marginal_variance_, profile_out_coef_optim_external,
+						neg_log_likelihood_, num_cov_par_, NumAuxPars(), GetAuxPars(), has_covariates_, lr_cov_init_, reuse_m_bfgs_from_previous_call);
+					// Check for NA or Inf
+					if (optimizer_cov_pars_ == "bfgs_optim_lib" || optimizer_cov_pars_ == "lbfgs" || optimizer_cov_pars_ == "lbfgs_linesearch_nocedal_wright") {
+						if (learn_covariance_parameters) {
+							for (int i = 0; i < (int)cov_aux_pars.size(); ++i) {
+								if (std::isnan(cov_aux_pars[i]) || std::isinf(cov_aux_pars[i])) {
+									na_or_inf_occurred = true;
+								}
 							}
 						}
-					}
-					if (has_covariates_ && !na_or_inf_occurred) {
-						for (int i = 0; i < (int)beta_.size(); ++i) {
-							if (std::isnan(beta_[i]) || std::isinf(beta_[i])) {
-								na_or_inf_occurred = true;
+						if (has_covariates_ && !na_or_inf_occurred) {
+							for (int i = 0; i < (int)beta_.size(); ++i) {
+								if (std::isnan(beta_[i]) || std::isinf(beta_[i])) {
+									na_or_inf_occurred = true;
+								}
 							}
 						}
-					}
-				} // end check for NA or Inf
+					} // end check for NA or Inf
+				}
 			} // end use of external optimizer
 			else {
 				// Start optimization with "gradient_descent" or "fisher_scoring"
@@ -1598,25 +1600,27 @@ namespace GPBoost {
 			if (calc_cov_aux_par_grad) {
 				for (int i = 0; i < (int)grad_cov_aux_par.size(); ++i) {
 					if (std::isnan(grad_cov_aux_par[i])) {
-						Log::REFatal("NaN occured in gradient wrt covariance / auxiliary parameter number %d ", i);
+						Log::REFatal("NaN occured in gradient wrt covariance / auxiliary parameter number %d (counting starts at 1, total nb. par. = %d) ", i + 1, grad_cov_aux_par.size());
 					}
 					else if (std::isinf(grad_cov_aux_par[i])) {
-						Log::REFatal("Inf occured in gradient wrt covariance / auxiliary parameter number %d ", i);
+						Log::REFatal("Inf occured in gradient wrt covariance / auxiliary parameter number %d (counting starts at 1, total nb. par. = %d) ", i + 1, grad_cov_aux_par.size());
 					}
 				}
 			}
 			if (calc_beta_grad) {
 				for (int i = 0; i < (int)grad_beta.size(); ++i) {
 					if (std::isnan(grad_beta[i])) {
-						Log::REFatal("NaN occured in gradient wrt regression coefficient number %d ", i);
+						Log::REFatal("NaN occured in gradient wrt regression coefficient number %d (counting starts at 1, total nb. par. = %d) ", i + 1, grad_beta.size());
 					}
 					else if (std::isinf(grad_beta[i])) {
-						Log::REFatal("Inf occured in gradient wrt regression coefficient number %d ", i);
+						Log::REFatal("Inf occured in gradient wrt regression coefficient number %d (counting starts at 1, total nb. par. = %d) ", i + 1, grad_beta.size());
 					}
 				}
 			}
 		//// For debugging
-		//for (int i = 0; i < (int)grad_cov_aux_par.size(); ++i) { Log::REDebug("grad_cov_aux_par[%d]: %g", i, grad_cov_aux_par[i]); }
+		//for (int i = 0; i < (int)grad_cov_aux_par.size(); ++i) { 
+		//	Log::REDebug("grad_cov_aux_par[%d]: %g", i, grad_cov_aux_par[i]); 
+		//}
 		}//end CalcGradPars
 
 		/*!
@@ -2685,6 +2689,7 @@ namespace GPBoost {
 				}
 				SetYCalcCovCalcYAuxForPred(cov_pars, coef, y_obs, calc_cov_factor, fixed_effects_ptr, false);
 			}
+			bool predict_var_or_response = predict_var || (!gauss_likelihood_ && predict_response && likelihood_[unique_clusters_[0]]->NeedPredLatentVarForResponseMean()); //variance needs to be available for response prediction for most non-Gaussian likelihoods
 			// Loop over different clusters to calculate predictions
 			for (const auto& cluster_i : unique_clusters_pred) {
 
@@ -2845,8 +2850,7 @@ namespace GPBoost {
 						for (int i = 0; i < num_data_per_cluster_pred[cluster_i]; ++i) {
 							mean_pred_id[i] += mu[data_indices_per_cluster_pred[cluster_i][i]];
 						}
-					}
-					bool predict_var_or_response = predict_var || (predict_response && !gauss_likelihood_);
+					}					
 					vec_t var_pred_id;
 					if (predict_var_or_response) {
 						var_pred_id = psi.diagonal();
@@ -2972,7 +2976,6 @@ namespace GPBoost {
 					sp_mat_t Bpo, Bp; // used only if gp_approx_ == "vecchia" && !gauss_likelihood_
 					vec_t Dp;
 					
-					bool predict_var_or_response = predict_var || (predict_response && !gauss_likelihood_);//variance needs to be available for response prediction for non-Gaussian likelihoods
 					// Calculate predictions
 					if (gp_approx_ == "vecchia") {
 						den_mat_t cov_mat_pred_vecchia_id;
@@ -8013,15 +8016,25 @@ namespace GPBoost {
 			T_mat cross_cov;//Cross-covariance between prediction and observation points
 			sp_mat_t Ztilde;//Matrix which relates existing random effects to prediction samples (used only if only_grouped_REs_use_woodbury_identity_ and not only_one_grouped_RE_calculations_on_RE_scale_)
 			sp_mat_t Sigma;//Covariance matrix of random effects (used only if only_grouped_REs_use_woodbury_identity_ and not only_one_grouped_RE_calculations_on_RE_scale_)
+			std::vector<data_size_t> random_effects_indices_of_pred;//Indices that indicate to which training data random effect every prediction point is related. -1 means to none in the training data
 			//Calculate (cross-)covariance matrix
 			int cn = 0;//component number counter
 			bool dont_add_but_overwrite = true;
 			if (only_one_grouped_RE_calculations_on_RE_scale_ || only_one_grouped_RE_calculations_on_RE_scale_for_prediction_) {
 				std::shared_ptr<RECompGroup<T_mat>> re_comp = std::dynamic_pointer_cast<RECompGroup<T_mat>>(re_comps_[cluster_i][0]);
-				re_comp->AddPredCovMatrices(re_group_levels_pred[0], cross_cov, cov_mat_pred_id,
-					true, predict_cov_mat, true, true, nullptr);
+				if (predict_cov_mat) {
+					re_comp->AddPredCovMatrices(re_group_levels_pred[0], cross_cov, cov_mat_pred_id,
+						true, predict_cov_mat, true, true, nullptr);
+				}
+				random_effects_indices_of_pred = std::vector<data_size_t>(re_group_levels_pred[0].size());
+				re_comp->RandomEffectsIndicesPred(re_group_levels_pred[0], random_effects_indices_of_pred.data());//Note re_group_levels_pred[0] contains only data for cluster_i; see above
 				if (predict_var) {
-					re_comp->AddPredUncondVar(var_pred_id.data(), num_REs_pred, nullptr);
+					if (gauss_likelihood_) {
+						re_comp->AddPredUncondVarNewGroups(var_pred_id.data(), num_REs_pred, nullptr, re_group_levels_pred[0]);
+					}
+					else {
+						re_comp->AddPredUncondVar(var_pred_id.data(), num_REs_pred, nullptr);
+					}
 				}
 			}
 			else if (only_grouped_REs_use_woodbury_identity_) {
@@ -8147,7 +8160,14 @@ namespace GPBoost {
 					vec_t Zt_y_aux;
 					CalcZtVGivenIndices(num_data_per_cluster_[cluster_i], num_REs_obs,
 						re_comps_[cluster_i][cn]->random_effects_indices_of_data_.data(), y_aux_[cluster_i], Zt_y_aux, true);
-					mean_pred_id = cross_cov * Zt_y_aux;
+					mean_pred_id = vec_t::Zero(random_effects_indices_of_pred.size());
+					double sigma2 = re_comps_[cluster_i][0]->cov_pars_[0];
+#pragma omp parallel for schedule(static)
+					for (int i = 0; i < (int)random_effects_indices_of_pred.size(); ++i) {
+						if (random_effects_indices_of_pred[i] >= 0) {
+							mean_pred_id[i] = sigma2 * Zt_y_aux[random_effects_indices_of_pred[i]];
+						}
+					}
 				}//end only_one_grouped_RE_calculations_on_RE_scale_for_prediction_
 				else if (only_grouped_REs_use_woodbury_identity_) {
 					vec_t v_aux = Zt_[cluster_i] * y_aux_[cluster_i];
@@ -8157,12 +8177,11 @@ namespace GPBoost {
 				else {
 					mean_pred_id = cross_cov * y_aux_[cluster_i];
 				}
-				if ((predict_cov_mat || predict_var) && only_one_grouped_RE_calculations_on_RE_scale_for_prediction_) {
+				if (predict_cov_mat && only_one_grouped_RE_calculations_on_RE_scale_for_prediction_) {
 					sp_mat_t* Z = re_comps_[cluster_i][0]->GetZ();
 					T_mat cross_cov_temp = cross_cov;
 					cross_cov = cross_cov_temp * (*Z).transpose();
 					cross_cov_temp.resize(0, 0);
-					//TODO (low-prio): things could be done more efficiently (using random_effects_indices_of_data_) as ZtZ_ is diagonal
 				}
 				if (predict_cov_mat) {
 					if (only_grouped_REs_use_woodbury_identity_) {
@@ -8191,13 +8210,12 @@ namespace GPBoost {
 				if (predict_var) {
 					if (only_grouped_REs_use_woodbury_identity_) {
 						if (num_re_group_total_ == 1 && num_comps_total_ == 1) {//only one random effect -> ZtZ_ is diagonal
-							T_mat ZtM_aux = T_mat(Zt_[cluster_i] * cross_cov.transpose());
-							T_mat M_aux2 = sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array().inverse().matrix().asDiagonal() * ZtM_aux;
-							M_aux2 = M_aux2.cwiseProduct(M_aux2);
-							cross_cov = cross_cov.cwiseProduct(cross_cov);
+							vec_t SigmaI_plus_ZtZ_inv = sqrt_diag_SigmaI_plus_ZtZ_[cluster_i].array().square().inverse().matrix();
 #pragma omp parallel for schedule(static)
-							for (int i = 0; i < num_REs_pred; ++i) {
-								var_pred_id[i] -= cross_cov.row(i).sum() - M_aux2.col(i).sum();
+							for (int i = 0; i < (int)random_effects_indices_of_pred.size(); ++i) {
+								if (random_effects_indices_of_pred[i] >= 0) {
+									var_pred_id[i] += SigmaI_plus_ZtZ_inv[random_effects_indices_of_pred[i]];
+								}
 							}
 						}
 						else {//more than one grouped RE component
@@ -8239,7 +8257,8 @@ namespace GPBoost {
 				else if (only_one_grouped_RE_calculations_on_RE_scale_) {
 					likelihood_[cluster_i]->PredictLaplaceApproxOnlyOneGroupedRECalculationsOnREScale(y_[cluster_i].data(), y_int_[cluster_i].data(),
 						fixed_effects_cluster_i_ptr, num_data_per_cluster_[cluster_i],
-						re_comps_[cluster_i][0]->cov_pars_[0], re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(), cross_cov,
+						re_comps_[cluster_i][0]->cov_pars_[0], re_comps_[cluster_i][0]->random_effects_indices_of_data_.data(), 
+						random_effects_indices_of_pred.data(), (data_size_t)random_effects_indices_of_pred.size(), cross_cov,
 						mean_pred_id, cov_mat_pred_id, var_pred_id,
 						predict_cov_mat, predict_var, false);
 				}

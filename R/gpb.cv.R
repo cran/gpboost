@@ -559,21 +559,23 @@ gpb.cv <- function(params = list()
     
     # Update one boosting iteration
     tryCatch({
+      
       msg <- lapply(cv_booster$boosters, function(fd) {
         fd$booster$update(fobj = fobj)
         out <- list()
         for (eval_function in eval_functions) {
           out <- append(out, fd$booster$eval_valid(feval = eval_function))
         }
+        
         return(out)
       })
       
     },
     error = function(err) { 
-      message(paste0("Error in boosting iteration ", i,":"))
+      message(paste0("Error in boosting iteration ", i))
       message(err)
       env$met_early_stop <- TRUE
-      if (env$iteration == 1) {
+      if (env$iteration == begin_iteration) {
         error_in_first_iteration <<- TRUE
       }
       
@@ -584,24 +586,42 @@ gpb.cv <- function(params = list()
       cv_booster$best_score <- NA
       return(cv_booster)
     } else {
-      # Prepare collection of evaluation results
-      merged_msg <- gpb.merge.cv.result(
-        msg = msg
-        , showsd = showsd
-      )
       
-      # Write evaluation result in environment
-      env$eval_list <- merged_msg$eval_list
+      tryCatch({
+        
+        # Prepare collection of evaluation results
+        merged_msg <- gpb.merge.cv.result(
+          msg = msg
+          , showsd = showsd
+        )
+        
+        # Write evaluation result in environment
+        env$eval_list <- merged_msg$eval_list
+        
+        # Check for standard deviation requirement
+        if (showsd) {
+          env$eval_err_list <- merged_msg$eval_err_list
+        }
+        
+        # Loop through env
+        for (f in cb$post_iter) {
+          f(env)
+        }
+        
+      },
+      error = function(err) {
+        env$met_early_stop <- TRUE
+        if (env$iteration == begin_iteration) {
+          error_in_first_iteration <<- TRUE
+        }
+        message(paste0("Error in boosting iteration ", i))
+      })# end tryCatch
       
-      # Check for standard deviation requirement
-      if (showsd) {
-        env$eval_err_list <- merged_msg$eval_err_list
+      if (error_in_first_iteration) {
+        cv_booster$best_score <- NA
+        return(cv_booster)
       }
       
-      # Loop through env
-      for (f in cb$post_iter) {
-        f(env)
-      }
     }
     
     if (env$met_early_stop) break
