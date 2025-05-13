@@ -185,7 +185,9 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 				if (config_.objective != std::string("regression") && config_.objective != std::string("bernoulli_probit")
 					&& config_.objective != std::string("bernoulli_logit") && config_.objective != std::string("binary") 
 					&& config_.objective != std::string("poisson") && config_.objective != std::string("gamma") && 
-					config_.objective != std::string("negative_binomial")) {
+					config_.objective != std::string("negative_binomial") &&
+					config_.objective != std::string("t") && config_.objective != std::string("t_fix_df") &&
+					config_.objective != std::string("gaussian_heteroscedastic")) {
 					Log::Fatal("GPBoost currently does not support 'objective = %s' ", config_.objective.c_str());
 				}
 				// Make sure that objective for boosting and likelihood for re_model match, otherwise change them accordingly
@@ -200,7 +202,7 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 						re_model->SetLikelihood(config_.objective);
 					}
 					else if (config_.objective != re_model->GetLikelihood()) {
-						if (!(config_.objective == std::string("regression") && re_model->GetLikelihood() == std::string("gaussian"))
+						if (!(config_.objective == std::string("regression") && (re_model->GetLikelihood() == std::string("gaussian") || re_model->GetLikelihood() == std::string("t")))
 							&& !(config_.objective == std::string("binary") && (re_model->GetLikelihood() == std::string("bernoulli_probit") || re_model->GetLikelihood() == std::string("bernoulli_logit")))) {
 							Log::Fatal("The 'objective' (='%s') for boosting and the 'likelihood' (='%s') for the GPModel do not match ",
 								obj_name.c_str(), re_model->GetLikelihood().c_str());

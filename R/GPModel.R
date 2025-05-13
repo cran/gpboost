@@ -17,6 +17,8 @@
 #' \item{ "t": t-distribution (e.g., for robust regression) }
 #' \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
 #' The df can be set via the \code{likelihood_additional_param} parameter }
+#' \item{ "gaussian_heteroscedastic": Gaussian likelihood where both the mean and the variance 
+#' are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation }
 #' \item{ Note: other likelihoods could be implemented upon request }
 #' }
 #' @param likelihood_additional_param A \code{numeric} specifying an additional parameter for the \code{likelihood} 
@@ -52,33 +54,37 @@
 #' @param cov_function A \code{string} specifying the covariance function for the Gaussian process. 
 #' Available options:
 #' \itemize{
-#' \item{"exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
-#' \item{"gaussian": Gaussian, aka squared exponential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
 #' \item{ "matern": Matern covariance function with the smoothness specified by 
 #' the \code{cov_fct_shape} parameter (using the parametrization of Rasmussen and Williams, 2006) }
-#' \item{"powered_exponential": powered exponential covariance function with the exponent specified by 
-#' the \code{cov_fct_shape} parameter (using the parametrization of Diggle and Ribeiro, 2007) }
-#' \item{ "wendland": Compactly supported Wendland covariance function (using the parametrization of Bevilacqua et al., 2019, AOS) }
+#' \item{ "matern_estimate_shape": same as "matern" but the smoothness parameter is also estimated }
 #' \item{ "matern_space_time": Spatio-temporal Matern covariance function with different range parameters for space and time. 
 #' Note that the first column in \code{gp_coords} must correspond to the time dimension }
 #' \item{ "matern_ard": anisotropic Matern covariance function with Automatic Relevance Determination (ARD), 
 #' i.e., with a different range parameter for every coordinate dimension / column of \code{gp_coords} }
+#' \item{ "matern_ard_estimate_shape": same as "matern_ard" but the smoothness parameter is also estimated }
+#' \item{"exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+#' \item{"gaussian": Gaussian, aka squared exponential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
 #' \item{ "gaussian_ard": anisotropic Gaussian, aka squared exponential, covariance function with Automatic Relevance Determination (ARD), 
 #' i.e., with a different range parameter for every coordinate dimension / column of \code{gp_coords} }
+#' \item{"powered_exponential": powered exponential covariance function with the exponent specified by 
+#' the \code{cov_fct_shape} parameter (using the parametrization of Diggle and Ribeiro, 2007) }
+#' \item{ "wendland": Compactly supported Wendland covariance function (using the parametrization of Bevilacqua et al., 2019, AOS) }
 #' }
 #' @param cov_fct_shape A \code{numeric} specifying the shape parameter of the covariance function 
-#' (=smoothness parameter for Matern covariance)  
+#' (e.g., smoothness parameter for Matern and Wendland covariance)  
 #' This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
 #' @param gp_approx A \code{string} specifying the large data approximation
 #' for Gaussian processes. Available options: 
 #' \itemize{
 #' \item{"none": No approximation }
-#' \item{"vecchia": A Vecchia approximation; see Sigrist (2022, JMLR) for more details }
+#' \item{"vecchia": Vecchia approximation; see Sigrist (2022, JMLR) for more details }
+#' \item{"full_scale_vecchia": Vecchia-inducing points full-scale (VIF) approximation; 
+#' see Gyger, Furrer, and Sigrist (2025) for more details }
 #' \item{"tapering": The covariance function is multiplied by 
 #' a compactly supported Wendland correlation function }
 #' \item{"fitc": Fully Independent Training Conditional approximation aka 
 #' modified predictive process approximation; see Gyger, Furrer, and Sigrist (2024) for more details }
-#' \item{"full_scale_tapering": A full scale approximation combining an 
+#' \item{"full_scale_tapering": Full-scale approximation combining an 
 #' inducing point / predictive process approximation with tapering on the residual process; 
 #' see Gyger, Furrer, and Sigrist (2024) for more details }
 #' \item{"vecchia_latent": similar as "vecchia" but a Vecchia approximation is applied to the latent Gaussian process 
@@ -93,7 +99,12 @@
 #' of the Wendland covariance function and Wendland correlation taper function. 
 #' We follow the notation of Bevilacqua et al. (2019, AOS)
 #' @param num_neighbors An \code{integer} specifying the number of neighbors for 
-#' the Vecchia approximation. Note: for prediction, the number of neighbors can 
+#' the Vecchia and VIF approximations. Internal default values if NULL: 
+#' \itemize{
+#'    \item{ 20 for gp_approx = "vecchia" }
+#'    \item{ 30 for gp_approx = "full_scale_vecchia" }
+#'    }
+#' Note: for prediction, the number of neighbors can 
 #' be set through the 'num_neighbors_pred' parameter in the 'set_prediction_data'
 #' function. By default, num_neighbors_pred = 2 * num_neighbors. Further, 
 #' the type of Vecchia approximation used for making predictions is set through  
@@ -115,18 +126,24 @@
 #' \item{"random": random selection from data points }
 #' }
 #' @param num_ind_points An \code{integer} specifying the number of inducing 
-#' points / knots for, e.g., a predictive process approximation
+#' points / knots for FITC, full_scale_tapering, and VIF approximations. Internal default values if NULL: 
+#' \itemize{
+#'    \item{ 500 for gp_approx = "FITC" and gp_approx = "full_scale_tapering" }
+#'    \item{ 200 for gp_approx = "full_scale_vecchia" }
+#'    }
 #' @param cover_tree_radius A \code{numeric} specifying the radius (= "spatial resolution") 
 #' for the cover tree algorithm
 #' @param matrix_inversion_method A \code{string} specifying the method used for inverting covariance matrices. 
 #' Available options:
 #' \itemize{
 #' \item{"cholesky": Cholesky factorization }
-#' \item{"iterative": iterative methods. A combination of conjugate gradient, Lanczos algorithm, and other methods. 
+#' \item{"iterative": iterative methods. A combination of the conjugate gradient, the Lanczos algorithm, and other methods. 
 #' 
 #' This is currently only supported for the following cases: 
 #' \itemize{
+#' \item{ grouped random effects with more than one level }
 #' \item{likelihood != "gaussian" and gp_approx == "vecchia" (non-Gaussian likelihoods with a Vecchia-Laplace approximation) }
+#' \item{likelihood != "gaussian" and gp_approx == "full_scale_vecchia" (non-Gaussian likelihoods with a VIFapproximation) }
 #' \item{likelihood == "gaussian" and gp_approx == "full_scale_tapering" (Gaussian likelihood with a full-scale tapering approximation) }
 #' }
 #' }
@@ -155,7 +172,12 @@
 #' Default value if NULL: 1e-3
 #' @param nsim_var_pred an \code{integer} specifying the number of samples when simulation 
 #' is used for calculating predictive variances
-#' Default value if NULL: 1000
+#' Internal default values if NULL: 
+#' \itemize{
+#'    \item{ 500 for grouped random effects }
+#'    \item{ 1000 for gp_approx = "vecchia" and gp_approx = "full_scale_tapering" }
+#'    \item{ 100 for gp_approx = "full_scale_vecchia" }
+#'    }
 #' @param rank_pred_approx_matrix_lanczos an \code{integer} specifying the rank 
 #' of the matrix for approximating predictive covariances obtained using the Lanczos algorithm
 #' Default value if NULL: 1000
@@ -254,22 +276,29 @@
 #'                Otherwise they are sampled every time a trace is calculated }
 #'                \item{seed_rand_vec_trace: \code{integer} (default = 1). 
 #'                Seed number to generate random vectors (e.g., Rademacher) }
-#'                \item{piv_chol_rank: \code{integer} (default = 50). 
-#'                Rank of the pivoted Cholesky decomposition used as 
-#'                preconditioner in conjugate gradient algorithms }
-#'                \item{cg_preconditioner_type: \code{string}.
+#'                \item{cg_preconditioner_type (\code{string}):
 #'                Type of preconditioner used for conjugate gradient algorithms.
 #'                \itemize{
+#'                  \item Options for grouped random effects: 
+#'                  \itemize{
+#'                      \item "ssor" (= default): SSOR preconditioner
+#'                      \item "incomplete_cholesky": zero fill-in incomplete Cholesky factorization
+#'                      }
 #'                  \item Options for likelihood != "gaussian" and gp_approx == "vecchia" or
 #'                  likelihood == "gaussian" and gp_approx == "vecchia_latent": 
 #'                    \itemize{
 #'                      \item{"vadu" (= default): (B^T * (D^-1 + W) * B) as preconditioner for inverting (B^T * D^-1 * B + W), 
 #'                  where B^T * D^-1 * B approx= Sigma^-1 }
-#'                      \item{"fitc": modified predictive process preconditioner for inverting (B^-1 * D * B^-T + W^-1)}
+#'                      \item{"fitc": FITC / modified predictive process preconditioner for inverting (B^-1 * D * B^-T + W^-1)}
 #'                      \item{"pivoted_cholesky": (Lk * Lk^T + W^-1) as preconditioner for inverting (B^-1 * D * B^-T + W^-1), 
 #'                  where Lk is a low-rank pivoted Cholesky approximation for Sigma and B^-1 * D * B^-T approx= Sigma }
 #'                      \item{"incomplete_cholesky": zero fill-in incomplete (reverse) Cholesky factorization of 
 #'                      (B^T * D^-1 * B + W) using the sparsity pattern of B^T * D^-1 * B approx= Sigma^-1 }
+#'                    }
+#'                  \item Options for likelihood != "gaussian" and gp_approx == "full_scale_vecchia": 
+#'                    \itemize{
+#'                      \item{"fitc" ( = default): FITC / modified predictive process preconditioner }
+#'                      \item{"vifdu": VIF with diagonal update preconditioner }
 #'                    }
 #'                  \item Options for likelihood == "gaussian" and gp_approx == "full_scale_tapering": 
 #'                    \itemize{
@@ -278,6 +307,16 @@
 #'                  }
 #'                }
 #'                }
+#'                \item{fitc_piv_chol_preconditioner_rank (\code{integer} ): 
+#'                Rank of the FITC and pivoted Cholesky decomposition preconditioners for 
+#'                iterative methods for Vecchia and VIF approximations 
+#'                (for full_scale_tapering, the same inducing points as in the approximation as used).
+#'                Internal default values if NULL or < 0: 
+#'                \itemize{
+#'                      \item{ 200 for the FITC preconditioner }
+#'                      \item{ 50 for the pivoted Cholesky decomposition preconditioner }
+#'                      }
+#'                  }
 #'            }
 #' @param offset A \code{numeric} \code{vector} with 
 #' additional fixed effects contributions that are added to the linear predictor (= offset). 
@@ -338,10 +377,10 @@ gpb.GPModel <- R6::R6Class(
                           num_parallel_threads = NULL,
                           cov_fct_taper_range = 1.,
                           cov_fct_taper_shape = 1.,
-                          num_neighbors = 20L,
+                          num_neighbors = NULL,
                           vecchia_ordering = "random",
                           ind_points_selection = "kmeans++",
-                          num_ind_points = 500L,
+                          num_ind_points = NULL,
                           cover_tree_radius = 1.,
                           matrix_inversion_method = "cholesky",
                           seed = 0L,
@@ -427,28 +466,37 @@ gpb.GPModel <- R6::R6Class(
         if (!is.null(model_list[["y"]])) {
           private$y_loaded_from_file = model_list[["y"]]
         }
+        private$num_sets_re = model_list[["num_sets_re"]]
         private$has_covariates = model_list[["has_covariates"]]
         if (model_list[["has_covariates"]]) {
           private$coefs_loaded_from_file = model_list[["coefs"]]
           private$num_coef = model_list[["num_coef"]]
+          private$num_covariates = model_list[["num_covariates"]]
+          if (private$num_coef != private$num_covariates * private$num_sets_re) stop("incorrect 'num_coef'")
           private$X_loaded_from_file = model_list[["X"]]
           if (is.null(colnames(private$X_loaded_from_file))) {
-            private$coef_names <- c(private$coef_names,paste0("Covariate_",1:private$num_coef))
+            private$coef_names <- c(private$coef_names,paste0("Covariate_",1:private$num_covariates))
           } else {
             private$coef_names <- c(private$coef_names,colnames(private$X_loaded_from_file))
+          }
+          if (private$num_sets_re == 2) {
+            private$coef_names <- c(private$coef_names, paste0(private$coef_names,"_scale"))
           }
         }
         private$model_fitted = model_list[["model_fitted"]]
       }# end !is.null(modelfile) | !is.null(model_list)
       
-      if(likelihood == "gaussian" & gp_approx != "vecchia_latent"){
-        private$cov_par_names <- c("Error_term")
-      }else{
-        private$cov_par_names <- c()
-      }
       if (is.null(group_data) & is.null(gp_coords)) {
         stop("GPModel: Both ", sQuote("group_data"), " and " , sQuote("gp_coords"),
              " are NULL. Provide at least one of them.")
+      }
+      if (likelihood == "gaussian_heteroscedastic") {
+        private$num_sets_re = 2
+      }
+      if (likelihood == "gaussian" & gp_approx != "vecchia_latent") {
+        private$cov_par_names <- c("Error_term")
+      } else {
+        private$cov_par_names <- c()
       }
       private$matrix_inversion_method <- as.character(matrix_inversion_method)
       private$seed <- as.integer(seed)
@@ -599,9 +647,17 @@ gpb.GPModel <- R6::R6Class(
         private$gp_approx <- as.character(gp_approx)
         private$cov_fct_taper_range <- as.numeric(cov_fct_taper_range)
         private$cov_fct_taper_shape <- as.numeric(cov_fct_taper_shape)
-        private$num_neighbors <- as.integer(num_neighbors)
+        if (!is.null(num_neighbors)) {
+          if (num_neighbors > 0) {
+            private$num_neighbors <- as.integer(num_neighbors)
+          }
+        }
         private$vecchia_ordering <- as.character(vecchia_ordering)
-        private$num_ind_points <- as.integer(num_ind_points)
+        if (!is.null(num_ind_points)) {
+          if (num_ind_points > 0) {
+            private$num_ind_points <- as.integer(num_ind_points)
+          }
+        }
         private$cover_tree_radius <- as.numeric(cover_tree_radius)
         private$ind_points_selection <- as.character(ind_points_selection)
         if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time") {
@@ -728,6 +784,11 @@ gpb.GPModel <- R6::R6Class(
           }
         } # End set data for GP random coefficients
       } # End set data for Gaussian process part
+      
+      if (private$num_sets_re == 2) {
+        private$cov_par_names <- c(private$cov_par_names, paste0(private$cov_par_names,"_scale"))
+        private$re_comp_names <- c(private$re_comp_names, paste0(private$re_comp_names,"_scale"))
+      }
       # Set IDs for independent processes (cluster_ids)
       if (!is.null(cluster_ids)) {
         if (is.vector(cluster_ids)) {
@@ -885,11 +946,15 @@ gpb.GPModel <- R6::R6Class(
           stop("fit.GPModel: Number of data points in ", sQuote("X"), " does not match number of data points of initialized model")
         }
         private$has_covariates <- TRUE
-        private$num_coef <- as.integer(dim(X)[2])
+        private$num_covariates <- as.integer(dim(X)[2])
+        private$num_coef <- private$num_covariates * private$num_sets_re
         if (is.null(colnames(X))) {
-          private$coef_names <- c(private$coef_names,paste0("Covariate_",1:private$num_coef))
+          private$coef_names <- c(private$coef_names,paste0("Covariate_",1:private$num_covariates))
         } else {
           private$coef_names <- c(private$coef_names,colnames(X))
+        }
+        if (private$num_sets_re == 2) {
+          private$coef_names <- c(private$coef_names, paste0(private$coef_names,"_scale"))
         }
         X <- as.vector(matrix(X))#matrix() is needed in order that all values are contiguous in memory (when colnames is not NULL)
       } else {
@@ -910,7 +975,7 @@ gpb.GPModel <- R6::R6Class(
           , private$handle
           , y
           , X
-          , private$num_coef
+          , private$num_covariates
           , offset
         )
       }
@@ -972,8 +1037,8 @@ gpb.GPModel <- R6::R6Class(
         } else {
           stop("GPModel.neg_log_likelihood: Can only use ", sQuote("vector"), " as ", sQuote("fixed_effects"))
         }
-        if (length(fixed_effects) != private$num_data) {
-          stop("GPModel.neg_log_likelihood: Length of ", sQuote("fixed_effects"), " does not match number of observed data points")
+        if (length(fixed_effects) != private$num_data * private$num_sets_re) {
+          stop("GPModel.neg_log_likelihood: Length of ", sQuote("fixed_effects"), " is not correct ")
         }
       }# end fixed_effects
       if (!is.null(aux_pars)) {
@@ -1045,7 +1110,7 @@ gpb.GPModel <- R6::R6Class(
         , private$params[["reuse_rand_vec_trace"]]
         , cg_preconditioner_type_c_str
         , private$params[["seed_rand_vec_trace"]]
-        , private$params[["piv_chol_rank"]]
+        , private$params[["fitc_piv_chol_preconditioner_rank"]]
         , init_aux_pars
         , private$params[["estimate_aux_pars"]]
       )
@@ -1126,7 +1191,7 @@ gpb.GPModel <- R6::R6Class(
       if (private$model_has_been_loaded_from_saved_file) {
         coef <- private$coefs_loaded_from_file
       } else {
-        if (is.null(private$num_coef)) {
+        if (is.null(private$num_covariates)) {
           stop("GPModel: ", sQuote("fit"), " has not been called")
         }
         if (private$params[["std_dev"]]) {
@@ -1287,7 +1352,7 @@ gpb.GPModel <- R6::R6Class(
         if (dim(X_pred)[1] != num_data_pred) {
           stop("set_prediction_data: Number of data points in ", sQuote("X_pred"), " is not correct")
         }
-        if (dim(X_pred)[2] != private$num_coef) {
+        if (dim(X_pred)[2] != private$num_covariates) {
           stop("set_prediction_data: Number of covariates in ", sQuote("X_pred"), " is not correct")
         }
         X_pred <- as.vector(matrix(X_pred))
@@ -1574,7 +1639,7 @@ gpb.GPModel <- R6::R6Class(
           if (dim(X_pred)[1] != num_data_pred) {
             stop("predict.GPModel: Number of data points in ", sQuote("X_pred"), " is not correct")
           }
-          if (dim(X_pred)[2] != private$num_coef) {
+          if (dim(X_pred)[2] != private$num_covariates) {
             stop("predict.GPModel: Number of covariates in ", sQuote("X_pred"), " is not correct")
           }
           if (private$model_has_been_loaded_from_saved_file) {
@@ -1726,8 +1791,8 @@ gpb.GPModel <- R6::R6Class(
         stop("GPModel: 'predict_training_data_random_effects' is currently not 
         implemented for models that have been loaded from a saved file")
       }
-      num_re_comps = private$num_group_re + private$num_group_rand_coef + 
-        private$num_gp + private$num_gp_rand_coef
+      num_re_comps = (private$num_group_re + private$num_group_rand_coef + 
+        private$num_gp + private$num_gp_rand_coef) * private$num_sets_re
       if (!is.null(private$drop_intercept_group_rand_effect)) {
         num_re_comps <- num_re_comps - sum(private$drop_intercept_group_rand_effect)
       }
@@ -1815,13 +1880,13 @@ gpb.GPModel <- R6::R6Class(
       if (!private$has_covariates) {
         stop("GPModel: Model has no covariate data for linear predictor")
       }
-      covariate_data <- numeric(private$num_data * private$num_coef)
+      covariate_data <- numeric(private$num_data * private$num_covariates)
       .Call(
         GPB_GetCovariateData_R
         , private$handle
         , covariate_data
       )
-      covariate_data <- matrix(covariate_data,ncol=private$num_coef)
+      covariate_data <- matrix(covariate_data,ncol=private$num_covariates)
       return(covariate_data)
     },
     
@@ -1921,10 +1986,12 @@ gpb.GPModel <- R6::R6Class(
       model_list[["matrix_inversion_method"]] <- private$matrix_inversion_method
       model_list[["seed"]] <- private$seed
       model_list[["num_parallel_threads"]] <- private$num_parallel_threads
+      model_list[["num_sets_re"]] <- private$num_sets_re
       # Covariate data
       model_list[["has_covariates"]] <- private$has_covariates
       if (private$has_covariates) {
         model_list[["coefs"]] <- self$get_coef()
+        model_list[["num_covariates"]] <- private$num_covariates
         model_list[["num_coef"]] <- private$num_coef
         model_list[["X"]] <- self$get_covariate_data()
       }
@@ -2046,6 +2113,7 @@ gpb.GPModel <- R6::R6Class(
     num_gp_rand_coef = 0L,
     has_covariates = FALSE,
     has_offset = FALSE,
+    num_covariates = 0,
     num_coef = 0,
     group_data = NULL,
     nb_groups = NULL,
@@ -2060,14 +2128,14 @@ gpb.GPModel <- R6::R6Class(
     num_parallel_threads = -1L,
     cov_fct_taper_range = 1.,
     cov_fct_taper_shape = 1.,
-    num_neighbors = 20L,
+    num_neighbors = -1L, # default is set in C++
     vecchia_ordering = "random",
     vecchia_pred_type = NULL,
     num_neighbors_pred = -1,
     cg_delta_conv_pred = -1,
     nsim_var_pred = -1,
     rank_pred_approx_matrix_lanczos = -1,
-    num_ind_points = 500L,
+    num_ind_points = -1L, # default is set in C++
     cover_tree_radius = 1.,
     ind_points_selection = "kmeans++",
     matrix_inversion_method = "cholesky",
@@ -2104,8 +2172,9 @@ gpb.GPModel <- R6::R6Class(
                   num_rand_vec_trace = 50L,
                   reuse_rand_vec_trace = TRUE,
                   seed_rand_vec_trace = 1L,
-                  piv_chol_rank = 50L,
+                  fitc_piv_chol_preconditioner_rank = -1L, # default value is set in C++
                   estimate_aux_pars = TRUE),
+    num_sets_re = 1,
     
     determine_num_cov_pars = function(likelihood) {
       if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time" | private$cov_function == "matern_estimate_shape") {
@@ -2127,17 +2196,23 @@ gpb.GPModel <- R6::R6Class(
       if (likelihood == "gaussian" & private$gp_approx != "vecchia_latent"){
         private$num_cov_pars <- private$num_cov_pars + 1L
       }
+      if (private$num_sets_re > 1) {
+        private$num_cov_pars <- private$num_cov_pars * private$num_sets_re
+      }
       storage.mode(private$num_cov_pars) <- "integer"
     },
     
     update_params = function(params) {
+      if (!is.null(params[["piv_chol_rank"]])) {
+        stop("GPModel: The argument 'piv_chol_rank' is discontinued. Use the argument 'fitc_piv_chol_preconditioner_rank' instead ")
+      }
       ## Check format of parameters
       numeric_params <- c("lr_cov", "acc_rate_cov", "delta_rel_conv",
                           "lr_coef", "acc_rate_coef", "cg_delta_conv")
       integer_params <- c("maxit", "nesterov_schedule_version",
                           "momentum_offset", "cg_max_num_it", "cg_max_num_it_tridiag",
                           "num_rand_vec_trace", "seed_rand_vec_trace",
-                          "piv_chol_rank")
+                          "fitc_piv_chol_preconditioner_rank")
       character_params <- c("optimizer_cov", "convergence_criterion",
                             "optimizer_coef", "cg_preconditioner_type")
       logical_params <- c("use_nesterov_acc", "trace", "std_dev", 
@@ -2162,9 +2237,10 @@ gpb.GPModel <- R6::R6Class(
             storage.mode(params[["init_coef"]]) <- "double"
           }
           params[["init_coef"]] <- as.vector(params[["init_coef"]])
-          num_coef <- as.integer(length(params[["init_coef"]]))
-          if (is.null(private$num_coef) | private$num_coef==0) {
-            private$num_coef <- num_coef
+          num_covariates <- as.integer(length(params[["init_coef"]]))
+          if (is.null(private$num_covariates) | private$num_covariates==0) {
+            private$num_covariates <- num_covariates
+            private$num_coef <- private$num_covariates * private$num_sets_re
           }
         } else {
           stop("GPModel: Can only use ", sQuote("vector"), " as ", sQuote("init_coef"))
@@ -2286,10 +2362,10 @@ GPModel <- function(likelihood = "gaussian",
                     num_parallel_threads = NULL,
                     cov_fct_taper_range = 1.,
                     cov_fct_taper_shape = 1.,
-                    num_neighbors = 20L,
+                    num_neighbors = NULL,
                     vecchia_ordering = "random",
                     ind_points_selection = "kmeans++",
-                    num_ind_points = 500L,
+                    num_ind_points = NULL,
                     cover_tree_radius = 1.,
                     matrix_inversion_method = "cholesky",
                     seed = 0L,
@@ -2494,10 +2570,10 @@ fitGPModel <- function(likelihood = "gaussian",
                        num_parallel_threads = NULL,
                        cov_fct_taper_range = 1.,
                        cov_fct_taper_shape = 1.,
-                       num_neighbors = 20L,
+                       num_neighbors = NULL,
                        vecchia_ordering = "random",
                        ind_points_selection = "kmeans++",
-                       num_ind_points = 500L,
+                       num_ind_points = NULL,
                        cover_tree_radius = 1.,
                        matrix_inversion_method = "cholesky",
                        seed = 0L,
