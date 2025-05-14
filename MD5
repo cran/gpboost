@@ -1,4 +1,4 @@
-74b4f69ac1cbcde1d857741ef4fc1ebc *DESCRIPTION
+ab28d8c1ad89697499003872bc15f5f9 *DESCRIPTION
 62aa7e7a29985341875a00e6ac33d872 *LICENSE
 2b33a9d52152963c2edfb9ef5e9d7481 *NAMESPACE
 24175fb8ac5583223b57084ee491011a *R/GPModel.R
@@ -24,7 +24,7 @@ e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 c29b2a8272b09ada5f005b454a4d07c5 *README.md
 6071edd604dbeb75308cfbedc7790398 *cleanup
 f1d6fe171befb313103dc47543c59926 *configure
-ca42aab5c674aa367032d1adc160b4ed *configure.ac
+da8e958f6efcac4920e96d25935344b1 *configure.ac
 a13efe244eeaa3c23879779a832ff539 *configure.win
 0276a7e04cef5f86e4146107bfb24e98 *data/GPBoost_data.RData
 05e29359ef24243df589703588987c0e *data/agaricus.test.rda
@@ -446,11 +446,11 @@ d281a1ac9909d0d5f88e1ddc8a73da7f *src/include/GPBoost/CG_utils.h
 34d2a8ec5c915ee3ac3935a7e280653d *src/include/GPBoost/GP_utils.h
 9542d5d652bcb2f86a43a821df2fdfee *src/include/GPBoost/Vecchia_utils.h
 f68f59f152ad9f2aa1e21be21698019d *src/include/GPBoost/cov_fcts.h
-903728052e4f25f41001264248caed50 *src/include/GPBoost/likelihoods.h
+67553518105be0d9019bcff118699adf *src/include/GPBoost/likelihoods.h
 5b4f5989cf3e6b54141a82abdcd7f063 *src/include/GPBoost/optim_utils.h
 be79e111fb5c066aa3980888a8b18269 *src/include/GPBoost/re_comp.h
 e24859a10d63d9963dcd7a635cb1ea2f *src/include/GPBoost/re_model.h
-46f84070037db8a38904c40cea9a2c39 *src/include/GPBoost/re_model_template.h
+da053e9c1b59ea67cefd9d4ce5a6308f *src/include/GPBoost/re_model_template.h
 afe13127a022e6d6fab8c8e057e0c716 *src/include/GPBoost/sparse_matrix_utils.h
 9e098957d1b24e9d19e4982efdecc451 *src/include/GPBoost/type_defs.h
 1741ad397b36a797a9f1502b9ceafce0 *src/include/GPBoost/utils.h
