@@ -13,6 +13,7 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
   DEFAULT_OPTIM_PARAMS_EARLY_STOP <- list(maxit=10, lr_cov=0.1, optimizer_cov="gradient_descent", lr_coef=0.1)
   DEFAULT_OPTIM_PARAMS_EARLY_STOP_NO_NESTEROV <- list(maxit=20, lr_cov=0.01, use_nesterov_acc=FALSE,
                                                       optimizer_cov="gradient_descent", lr_coef=0.1)
+  OPTIM_PARAMS_BFGS <- list(optimizer_cov = "lbfgs", optimizer_coef = "lbfgs", maxit = 1000)
   
   # Function that simulates uniform random variables
   sim_rand_unif <- function(n, init_c=0.1){
@@ -1880,7 +1881,7 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       group_data_test <- group_data[1:ntest+ntrain,]
       
       # Train model and make predictions
-      gp_model <- GPModel(group_data = group_data_train, likelihood = "bernoulli_probit")
+      gp_model <- GPModel(group_data = group_data_train, likelihood = "bernoulli_probit", matrix_inversion_method = "cholesky")
       gp_model$set_optim_params(params=DEFAULT_OPTIM_PARAMS_NO_NESTEROV)
       bst <- gpboost(data = X_train,
                      label = y_train,
@@ -1916,7 +1917,7 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       filename2 <- tempfile(fileext = ".model")
       gpb.save(bst, filename=filename2, save_raw_data = TRUE)
       # finalize and destroy models
-      bst$finalize()
+      bst$.__enclos_env__$private$finalize()
       expect_null(bst$.__enclos_env__$private$handle)
       rm(bst)
       rm(gp_model)
@@ -1982,7 +1983,7 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
       
     })
     
-    test_that("Paramter tuning for GPBoost algorithm ", {
+    test_that("Parameter tuning for GPBoost algorithm ", {
       
       ntrain <- 1000
       # Simulate fixed effects
@@ -2130,6 +2131,93 @@ if(Sys.getenv("NO_GPBOOST_ALGO_TESTS") != "NO_GPBOOST_ALGO_TESTS"){
         if(inv_method=="iterative") tol_bin <- 10 else tol_bin <- 255
         expect_equal(opt_params$best_params$max_bin,tol_bin)
       }
+    })
+    
+    test_that("GPBoost algorithm with Gaussian process model and 'gaussian_heteroscedastic' likelihood", {
+      
+      ntrain <- ntest <- 500
+      n <- ntrain + ntest
+      # Simulate fixed effects
+      sim_data <- sim_friedman3(n=n, n_irrelevant=5, init_c=0.69)
+      f <- sim_data$f
+      f <- f - mean(f)
+      X <- sim_data$X
+      # Simulate spatial Gaussian process
+      sigma2_1 <- 1 # marginal variance of GP
+      rho <- 0.1 # range parameter
+      d <- 2 # dimension of GP locations
+      coords <- matrix(sim_rand_unif(n=n*d, init_c=0.63), ncol=d)
+      D <- as.matrix(dist(coords))
+      Sigma <- sigma2_1 * exp(-D/rho) + diag(1E-20,n)
+      C <- t(chol(Sigma))
+      b_1 <- qnorm(sim_rand_unif(n=n, init_c=0.987864))
+      eps <- as.vector(C %*% b_1)
+      # Observed data
+      probs <- 1/(1+exp(-(f+eps)))
+      y <- as.numeric(sim_rand_unif(n=n, init_c=0.52574) < probs)
+      # Split into training and test data
+      y_train <- y[1:ntrain]
+      X_train <- X[1:ntrain,]
+      coords_train <- coords[1:ntrain,]
+      dtrain <- gpb.Dataset(data = X_train, label = y_train)
+      y_test <- y[1:ntest+ntrain]
+      X_test <- X[1:ntest+ntrain,]
+      f_test <- f[1:ntest+ntrain]
+      coords_test <- coords[1:ntest+ntrain,]
+      eps_test <- eps[1:ntest+ntrain]
+      
+      init_cov_pars <- c(1,mean(dist(coords_train))/3)
+      
+      # Train model
+      gp_model <- GPModel(gp_coords = coords_train, cov_function = "exponential",
+                          likelihood = "gaussian_heteroscedastic", gp_approx = "vecchia",
+                          matrix_inversion_method = "iterative")
+      gp_model$set_optim_params(params=OPTIM_PARAMS_BFGS)
+      bst <- gpb.train(data = dtrain,
+                       gp_model = gp_model,
+                       nrounds = 2,
+                       learning_rate = 0.5,
+                       max_depth = 6,
+                       min_data_in_leaf = 5,
+                       verbose = 0, deterministic = TRUE)
+      cov_pars_est <- c(1.127432e-01, 2.989325e-02, 1.064309e-06, 1.970296e-01)
+      expect_lt(sum(abs(as.vector(gp_model$get_cov_pars())-cov_pars_est)),TOLERANCE)
+      
+      # Prediction
+      pred <- predict(bst, data = X_test, gp_coords_pred = coords_test,
+                      predict_var = TRUE, pred_latent = TRUE)
+      npred <- dim(X_test)[1]
+      expect_lt(sum(abs(pred$fixed_effect[1:4]-c(0.9287969, 0.9392324, 0.6386508, 0.6837547))),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$random_effect_mean, n=4)-c(0.013631968, 0.001888464, 0.072146693, 0.118746547))),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$random_effect_cov, n=4)-c(0.10732077, 0.07915076, 0.07670887, 0.09757507))),0.01)
+      # Predict response
+      pred <- predict(bst, data = X_test, gp_coords_pred = coords_test, 
+                      predict_var = TRUE, pred_latent = FALSE)
+      expect_lt(sum(abs(tail(pred$response_mean, n=4)-c(1.2609604, 0.4655176, 0.8336034, 0.6664328))),TOLERANCE)
+      expect_lt(sum(abs(tail(pred$response_var, n=4)-c(0.2599629, 0.2383203, 0.2248717, 0.3464849))),TOLERANCE)
+      
+      # Parameter tuning
+      # Folds for CV
+      group_aux <- rep(1,ntrain) # grouping variable
+      nfold <- 2
+      for(i in 1:(ntrain/nfold)) group_aux[(1:nfold)+nfold*(i-1)] <- 1:nfold
+      folds <- list()
+      for(i in 1:nfold) folds[[i]] <- as.integer(which(group_aux==i))
+      
+      params <- list(verbose = 0)
+      metric = "crps_gaussian"
+      param_grid = list("learning_rate" = c(0.5,0.11), "min_data_in_leaf" = c(20),
+                        "max_depth" = c(2), "num_leaves" = 2^17, "max_bin" = c(10,255))
+      opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid, params = params,
+                                                    data = dtrain, gp_model = gp_model, verbose_eval = 1,
+                                                    nrounds = 100, early_stopping_rounds = 5,
+                                                    metric = metric, folds = folds)
+      expect_lt(abs(opt_params$best_score-0.2723836),0.01)
+      expect_equal(opt_params$best_iter,7)
+      expect_equal(opt_params$best_params$learning_rate,0.11)
+      expect_equal(opt_params$best_params$max_bin,255)
+      expect_equal(opt_params$best_params$max_depth,2)
+      
     })
   }
 }
