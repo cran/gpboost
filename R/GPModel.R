@@ -9,18 +9,32 @@
 #' Available options:
 #' \itemize{
 #' \item{ "gaussian" }
-#' \item{ "bernoulli_probit": Binary data with Bernoulli likelihood and a probit link function }
-#' \item{ "bernoulli_logit": Binary data with Bernoulli likelihood and a logit link function }
-#' \item{ "gamma": Pamma distribution with a with log link function }
-#' \item{ "poisson": Poisson distribution with a with log link function }
-#' \item{ "negative_binomial": negative binomial distribution with a with log link function }
+#' \item{ "bernoulli_logit": Bernoulli likelihood with a logit link function for binary classification. Aliases: "binary", "binary_logit" }
+#' \item{ "bernoulli_probit": Bernoulli likelihood with a probit link function for binary classification. Aliases: "binary_probit" }
+#' \item{ "binomial_logit": Binomial likelihood with a logit link function. 
+#' The response variable \code{y} needs to contain proportions of successes / trials, 
+#' and the \code{weights} parameter needs to contain the numbers of trials. Aliases: "binomial"}
+#' \item{ "binomial_probit": Binomial likelihood with a probit link function. 
+#' The response variable \code{y} needs to contain proportions of successes / trials, 
+#' and the \code{weights} parameter needs to contain the numbers of trials }
+#' \item{ "beta_binomial": Beta-binomial likelihood with a logit link function. 
+#' The response variable \code{y} needs to contain proportions of successes / trials, 
+#' and the \code{weights} parameter needs to contain the numbers of trials. Aliases: "betabinomial", "beta-binomial"}
+#' \item{ "poisson": Poisson likelihood with a log link function }
+#' \item{ "negative_binomial": negative binomial likelihood with a log link function (aka "nbinom2", "negative_binomial_2"). 
+#' The variance is mu * (mu + r) / r, mu = mean, r = shape, with this parametrization }
+#' \item{ "negative_binomial_1": Negative binomial 1 (aka "nbinom1") likelihood with a log link function. 
+#' The variance is mu * (1 + phi), mu = mean, phi = dispersion, with this parametrization }
+#' \item{ "gamma": Gamma likelihood with a log link function }
+#' \item{ "lognormal": Log-normal likelihood with a log link function }
 #' \item{ "beta" : Beta likelihood with a logit link function (parametrization of Ferrari and Cribari-Neto, 2004)}
 #' \item{ "t": t-distribution (e.g., for robust regression) }
 #' \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
 #' The df can be set via the \code{likelihood_additional_param} parameter }
 #' \item{ "gaussian_heteroscedastic": Gaussian likelihood where both the mean and the variance 
 #' are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation }
-#' \item{ Note: other likelihoods could be implemented upon request }
+#' \item{ Note: the first lines in \url{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h} contain additional comments on the specific parametrizations used }
+#' \item{ Note: other likelihoods can be implemented upon request }
 #' }
 #' @param likelihood_additional_param A \code{numeric} specifying an additional parameter for the \code{likelihood} 
 #' which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood = "t_fix_df"}). 
@@ -63,13 +77,14 @@
 #' \item{ "matern_ard": anisotropic Matern covariance function with Automatic Relevance Determination (ARD), 
 #' i.e., with a different range parameter for every coordinate dimension / column of \code{gp_coords} }
 #' \item{ "matern_ard_estimate_shape": same as "matern_ard" but the smoothness parameter is also estimated }
-#' \item{"exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
-#' \item{"gaussian": Gaussian, aka squared exponential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+#' \item{ "exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
+#' \item{ "gaussian": Gaussian, aka squared exponential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
 #' \item{ "gaussian_ard": anisotropic Gaussian, aka squared exponential, covariance function with Automatic Relevance Determination (ARD), 
 #' i.e., with a different range parameter for every coordinate dimension / column of \code{gp_coords} }
-#' \item{"powered_exponential": powered exponential covariance function with the exponent specified by 
+#' \item{ "powered_exponential": powered exponential covariance function with the exponent specified by 
 #' the \code{cov_fct_shape} parameter (using the parametrization of Diggle and Ribeiro, 2007) }
 #' \item{ "wendland": Compactly supported Wendland covariance function (using the parametrization of Bevilacqua et al., 2019, AOS) }
+#' \item{ "linear": linear covariance function. This corresponds to a Bayesian linear regression model with a Gaussian prior on the coefficients with a constant variance diagonal prior covariance, and the prior variance is estimated using empirical Bayes. }
 #' }
 #' @param cov_fct_shape A \code{numeric} specifying the shape parameter of the covariance function 
 #' (e.g., smoothness parameter for Matern and Wendland covariance)  
@@ -688,7 +703,7 @@ gpb.GPModel <- R6::R6Class(
           } else {
             private$cov_par_names <- c(private$cov_par_names,"GP_var", paste0("GP_range_",colnames(gp_coords)))
           }
-        } else if (private$cov_function == "wendland") {
+        } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
           private$cov_par_names <- c(private$cov_par_names,"GP_var")
         } else if (private$cov_function == "matern_estimate_shape") {
           private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range", "GP_smoothness")
@@ -740,7 +755,7 @@ gpb.GPModel <- R6::R6Class(
                   private$cov_par_names <- c(private$cov_par_names,"GP_var", 
                                              paste0(paste0("GP_rand_coef_nb_", ii,"_range"),colnames(gp_coords)))
                 }
-              } else if (private$cov_function == "wendland") {
+              } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_nb_", ii,"_var"))
               } else if (private$cov_function == "matern_estimate_shape") {
@@ -778,7 +793,7 @@ gpb.GPModel <- R6::R6Class(
                   private$cov_par_names <- c(private$cov_par_names,"GP_var", 
                                              paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_range"),colnames(gp_coords)))
                 }
-              } else if (private$cov_function == "wendland") {
+              } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"))
               }  else if (private$cov_function == "matern_estimate_shape") {
@@ -2262,7 +2277,7 @@ gpb.GPModel <- R6::R6Class(
         num_par_per_GP <- 1L + private$dim_coords
       } else if (private$cov_function == "matern_ard_estimate_shape") {
         num_par_per_GP <- 2L + private$dim_coords
-      } else if (private$cov_function == "wendland") {
+      } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
         num_par_per_GP <- 1L
       } else {
         num_par_per_GP <- 2L

@@ -19,15 +19,18 @@
 #include <set>
 #include <string>
 #include <vector>
+#if __has_include(<version>)
+#  include <version>   // collects all feature-test macros
+#endif
 #include <cmath>
 
 #include <LightGBM/utils/log.h>
 using LightGBM::Log;
 
-#if (defined(__GNUC__) && !defined(__clang__)) || defined(_MSC_VER)
-#define MSVC_OR_GCC_COMPILER 1
-#else 
-#define MSVC_OR_GCC_COMPILER 0
+#if defined(__cpp_lib_math_special_functions) && __cpp_lib_math_special_functions >= 201603L
+#  define HAS_STD_CYL_BESSEL_K 1
+#else
+#  define HAS_STD_CYL_BESSEL_K 0
 #endif
 
 
@@ -94,14 +97,28 @@ namespace GPBoost {
 			use_precomputed_dist_for_calc_cov_ = use_precomputed_dist_for_calc_cov;
 			if (cov_fct_type == "matern_space_time" || cov_fct_type == "matern_ard" ||
 				cov_fct_type == "matern_ard_estimate_shape" || cov_fct_type == "gaussian_ard" || 
-				cov_fct_type == "space_time_gneiting") {
+				cov_fct_type == "space_time_gneiting" || cov_fct_type == "linear") {
 				is_isotropic_ = false;
 				use_precomputed_dist_for_calc_cov_ = false;
+				if (cov_fct_type == "space_time_gneiting" || cov_fct_type == "linear") {
+					use_scaled_coordinates_ = false;
+				}
+				else {
+					use_scaled_coordinates_ = true;
+				}
+				if (cov_fct_type == "linear") {
+					redetermine_vecchia_neighbors_IPs_ = false;
+				}
+				else {
+					redetermine_vecchia_neighbors_IPs_ = true;
+				}
 			}
 			else {
 				is_isotropic_ = true;
+				use_scaled_coordinates_ = false;
+				redetermine_vecchia_neighbors_IPs_ = false;
 			}
-			if (cov_fct_type == "matern_space_time") {
+			if (cov_fct_type == "matern_space_time" || cov_fct_type == "matern_estimate_shape") {
 				num_cov_par_ = 3;
 			}
 			else if (cov_fct_type == "matern_ard" || cov_fct_type == "gaussian_ard") {
@@ -110,11 +127,8 @@ namespace GPBoost {
 			else if (cov_fct_type == "matern_ard_estimate_shape") {
 				num_cov_par_ = dim_coordinates + 2;
 			}
-			else if (cov_fct_type == "wendland") {
+			else if (cov_fct_type == "wendland" || cov_fct_type == "linear") {
 				num_cov_par_ = 1;
-			}
-			else if (cov_fct_type == "matern_estimate_shape") {
-				num_cov_par_ = 3;
 			}
 			else if (cov_fct_type == "space_time_gneiting") {
 				num_cov_par_ = 7;
@@ -127,11 +141,11 @@ namespace GPBoost {
 			if (cov_fct_type == "matern" || cov_fct_type == "matern_space_time" || cov_fct_type == "matern_ard") {
 				CHECK(shape > 0.);
 				if (!(TwoNumbersAreEqual<double>(shape, 0.5) || TwoNumbersAreEqual<double>(shape, 1.5) || TwoNumbersAreEqual<double>(shape, 2.5))) {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 					const_ = std::pow(2., 1 - shape_) / std::tgamma(shape_);
 #else
 					// Mathematical special functions are not supported in C++17 by Clang and some other compilers (see https://en.cppreference.com/w/cpp/compiler_support/17#C.2B.2B17_library_features) 
-					Log::REFatal("'shape' of %g is not supported for the '%s' covariance function (only 0.5, 1.5, and 2.5) when using this compiler (e.g. Clang on Mac). Use gcc or (a newer version of) MSVC instead. ", shape, cov_fct_type.c_str());
+					Log::REFatal("'shape' of %g is not supported for the '%s' covariance function (only 0.5, 1.5, and 2.5) when using this compiler (e.g., Clang on Mac). Use another compiler such as gcc or (a newer version of) MSVC instead. ", shape, cov_fct_type.c_str());
 #endif
 				}
 				if (shape > LARGE_SHAPE_WARNING_THRESHOLD_) {
@@ -144,9 +158,9 @@ namespace GPBoost {
 				}
 			}
 			else if (cov_fct_type == "matern_estimate_shape" || cov_fct_type == "matern_ard_estimate_shape") {
-#if !defined(MSVC_OR_GCC_COMPILER)
+#if !defined(HAS_STD_CYL_BESSEL_K)
 				// Mathematical special functions are not supported in C++17 by Clang and some other compilers (see https://en.cppreference.com/w/cpp/compiler_support/17#C.2B.2B17_library_features) 
-				Log::REFatal("The covariance function '%s' is not supported when using this compiler (e.g. Clang on Mac). Use gcc or (a newer version of) MSVC instead. ", cov_fct_type.c_str());
+				Log::REFatal("The covariance function '%s' is not supported when using this compiler (e.g. Clang on Mac). Use another compiler such as gcc or (a newer version of) MSVC instead. ", cov_fct_type.c_str());
 #endif
 			}
 			if (cov_fct_type == "wendland" || apply_tapering) {
@@ -190,8 +204,16 @@ namespace GPBoost {
 			return(is_isotropic_);
 		}
 
+		bool UseScaledCoordinates() const {
+			return(use_scaled_coordinates_);
+		}
+
+		bool RedetermineVecchiaNeighborsInducingPoints() const {
+			return(redetermine_vecchia_neighbors_IPs_);
+		}
+
 		bool IsSpaceTimeModel() const {
-			return(cov_fct_type_ == "matern_space_time");
+			return(cov_fct_type_ == "matern_space_time" || cov_fct_type_ == "space_time_gneiting");
 		}
 
 		/*!
@@ -248,7 +270,7 @@ namespace GPBoost {
 			den_mat_t& coords_pred_scaled,
 			const den_mat_t** coords_ptr,
 			const den_mat_t** coords_pred_ptr) const {
-			if (!is_isotropic_) {// the coordinates are scaled before calculating distances (e.g. for '_ard' or '_space_time' covariance functions)
+			if (use_scaled_coordinates_) {// the coordinates are scaled before calculating distances (e.g. for '_ard' or '_space_time' covariance functions)
 				ScaleCoordinates(pars, coords, coords_scaled);
 				if (!is_symmmetric) {
 					ScaleCoordinates(pars, coords_pred, coords_pred_scaled);
@@ -256,7 +278,7 @@ namespace GPBoost {
 			}
 			// choose coords to be used (if applicable)
 			if (is_symmmetric) {
-				if (is_isotropic_) {
+				if (!use_scaled_coordinates_) {
 					*coords_ptr = &coords;
 					*coords_pred_ptr = &coords;
 				}
@@ -264,9 +286,9 @@ namespace GPBoost {
 					*coords_ptr = &coords_scaled;
 					*coords_pred_ptr = &coords_scaled;
 				}
-			}
-			else {
-				if (is_isotropic_) {
+			}//end is_symmmetric
+			else {//!is_symmmetric
+				if (!use_scaled_coordinates_) {
 					*coords_ptr = &coords;
 					*coords_pred_ptr = &coords_pred;
 				}
@@ -274,7 +296,7 @@ namespace GPBoost {
 					*coords_ptr = &coords_scaled;
 					*coords_pred_ptr = &coords_pred_scaled;
 				}
-			}
+			}//end !is_symmmetric
 		}//end DefineCoordsPtrScaleCoords
 
 		/*!
@@ -530,6 +552,14 @@ namespace GPBoost {
 					}// end loop rows
 				}// end !is_symmmetric
 			}//end space_time_gneiting
+			else if (cov_fct_type_ == "linear") {
+				if (is_symmmetric) {
+					sigma = pars[0] * coords * coords.transpose();
+				}
+				else {
+					sigma = pars[0] * coords_pred * coords.transpose();
+				}
+			}//end linear
 			else {// cov_fct_type_ != "wendland"
 				den_mat_t coords_scaled, coords_pred_scaled;
 				const den_mat_t* coords_ptr = nullptr;
@@ -630,6 +660,14 @@ namespace GPBoost {
 					}
 				}// end !is_symmmetric
 			}//end space_time_gneiting
+			else if (cov_fct_type_ == "linear") {
+				if (is_symmmetric) {
+					sigma = (pars[0] * (coords * coords.transpose())).sparseView();
+				}
+				else {
+					sigma = (pars[0] * (coords_pred * coords.transpose())).sparseView();
+				}
+			}//end linear
 			else {// cov_fct_type_ != "wendland"
 				den_mat_t coords_scaled, coords_pred_scaled;
 				const den_mat_t* coords_ptr = nullptr;
@@ -693,7 +731,7 @@ namespace GPBoost {
 				sigma = SpaceTimeGneitingCovariance(coords, coords_pred, pars);
 			}
 			else {
-				Log::REFatal("'CalculateCovMat()' is not implemented for one distance when cov_fct_type_ == '%s' ", cov_fct_type_.c_str());
+				Log::REFatal("'CalculateCovMat()' is not implemented for a single distance when cov_fct_type_ == '%s' ", cov_fct_type_.c_str());
 			}
 		}//end CalculateCovMat (one single entry)
 
@@ -710,8 +748,9 @@ namespace GPBoost {
 			vec_t pars = pars_in;
 			CapPars(pars);
 			CheckPars(pars);
-			if (cov_fct_type_ == "matern_space_time" || cov_fct_type_ == "matern_ard" || cov_fct_type_ == "gaussian_ard") {
-				Log::REFatal("'CalculateCovMat()' is not implemented for one distance when cov_fct_type_ == '%s' ", cov_fct_type_.c_str());
+			if (cov_fct_type_ == "matern_space_time" || cov_fct_type_ == "matern_ard" || 
+				cov_fct_type_ == "gaussian_ard" || cov_fct_type_ == "linear") {
+				Log::REFatal("'CalculateCovMat()' is not implemented for a single distance when cov_fct_type_ == '%s' ", cov_fct_type_.c_str());
 			}
 			else if (cov_fct_type_ == "wendland") {
 				// note: this is usually not used
@@ -911,7 +950,10 @@ namespace GPBoost {
 				}
 			}
 			sigma_grad = T_mat(sigma.rows(), sigma.cols());
-			if (cov_fct_type_ == "space_time_gneiting") {
+			if (cov_fct_type_ == "linear") {
+				Log::REFatal("'CalculateGradientCovMat()' is not implemented for cov_fct_type_ == '%s' ", cov_fct_type_.c_str());
+			} 
+			else if (cov_fct_type_ == "space_time_gneiting") {
 				if (is_symmmetric) {
 #pragma omp parallel for schedule(static)
 					for (int i = 0; i < num_rows; ++i) {
@@ -1008,7 +1050,10 @@ namespace GPBoost {
 				DefineCoordsPtrScaleCoords(pars, coords, coords_pred, is_symmmetric, coords_scaled, coords_pred_scaled, &coords_ptr, &coords_pred_ptr);
 			}
 			// calculate gradients
-			if (cov_fct_type_ == "space_time_gneiting") {
+			if (cov_fct_type_ == "linear") {
+				Log::REFatal("'CalculateGradientCovMat()' is not implemented for cov_fct_type_ == '%s' ", cov_fct_type_.c_str());
+			}
+			else if (cov_fct_type_ == "space_time_gneiting") {
 				if (is_symmmetric) {
 #pragma omp parallel for schedule(static)
 					for (int k = 0; k < sigma_grad.outerSize(); ++k) {
@@ -1089,7 +1134,7 @@ namespace GPBoost {
 			double marginal_variance) const {
 			CHECK(pars.size() == num_cov_par_);
 			pars[0] = marginal_variance;// marginal variance
-			if (cov_fct_type_ != "wendland") {
+			if (num_cov_par_ > 1) {
 				// Range parameters
 				int MAX_POINTS_INIT_RANGE = 1000;//limit number of samples considered to save computational time
 				int num_data;
@@ -1324,7 +1369,7 @@ namespace GPBoost {
 				else {
 					Log::REFatal("Finding initial values for covariance parameters for covariance of type '%s' is not supported ", cov_fct_type_.c_str());
 				}
-			}//end cov_fct_type_ != "wendland"
+			}//end num_cov_par_ > 1
 		}//end FindInitCovPar
 
 	private:
@@ -1441,7 +1486,7 @@ namespace GPBoost {
 					return CovariancePoweredExponential(dist_ij, var, range);
 					};
 			}
-			else if (cov_fct_type_ != "wendland" && cov_fct_type_ != "space_time_gneiting") {
+			else if (cov_fct_type_ != "wendland" && cov_fct_type_ != "space_time_gneiting" && cov_fct_type_ != "linear") {
 				Log::REFatal("InitializeCovFct: covariance of type '%s' is not supported.", cov_fct_type_.c_str());
 			}
 		}//end InitializeCovFct
@@ -1474,7 +1519,7 @@ namespace GPBoost {
 				return(var);
 			}
 			else {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 				return(var * const_ * std::pow(range_dist, shape_) * std::cyl_bessel_k(shape_, range_dist));
 #else
 				return(1.);
@@ -1492,7 +1537,7 @@ namespace GPBoost {
 				return(var);
 			}
 			else {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 				return(var * std::pow(2., 1 - shape) / std::tgamma(shape) * std::pow(range_dist, shape) * std::cyl_bessel_k(shape, range_dist));
 #else
 				return(1.);
@@ -1819,7 +1864,8 @@ namespace GPBoost {
 						return GradientRangeGaussianARD(cm, sigma, ind_range, i, j, coords_ptr, coords_pred_ptr);
 					};
 			}
-			else if (cov_fct_type_ != "wendland" && cov_fct_type_ != "powered_exponential" && cov_fct_type_ != "gaussian" && cov_fct_type_ != "space_time_gneiting") {
+			else if (cov_fct_type_ != "wendland" && cov_fct_type_ != "powered_exponential" && cov_fct_type_ != "gaussian" && 
+				cov_fct_type_ != "space_time_gneiting" && cov_fct_type_ != "linear") {
 				Log::REFatal("InitializeCovFctGrad: covariance of type '%s' is not supported.", cov_fct_type_.c_str());
 			}
 		}//end InitializeCovFctGrad
@@ -1865,7 +1911,7 @@ namespace GPBoost {
 			const double dist_ij,
 			double cm_dist,
 			double shape) const {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 			double range_dist = cm_dist * dist_ij;
 			return(cm * std::pow(range_dist, shape) * (2. * shape * std::cyl_bessel_k(shape, range_dist) - range_dist * std::cyl_bessel_k(shape + 1., range_dist)));
 #else
@@ -1882,7 +1928,7 @@ namespace GPBoost {
 			double pars_2_up,
 			double pars_2_down,
 			double shape) const {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 			double z = dist_ij * par_aux;
 			double z_up = dist_ij * par_aux_up;
 			double z_down = dist_ij * par_aux_down;
@@ -2028,7 +2074,7 @@ namespace GPBoost {
 			const int j,
 			const den_mat_t* coords_ptr,
 			const den_mat_t* coords_pred_ptr) const {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 			int dim_space = (int)(*coords_ptr).cols() - 1;
 			if (ind_range == 0) {
 				double dist_sq_ij_time = ((*coords_pred_ptr).coeff(i, 0) - (*coords_ptr).coeff(j, 0));
@@ -2095,7 +2141,7 @@ namespace GPBoost {
 			const den_mat_t* coords_ptr,
 			const den_mat_t* coords_pred_ptr,
 			const double shape) const {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 			double range_dist = cm_dist * dist_ij;
 			double dist_sq_ij_coord = ((*coords_pred_ptr).coeff(i, ind_range) - (*coords_ptr).coeff(j, ind_range));
 			dist_sq_ij_coord = dist_sq_ij_coord * dist_sq_ij_coord;
@@ -2153,7 +2199,7 @@ namespace GPBoost {
 				return(d_aux2 * (1. + d_aux + d_aux * d_aux / 3.) * std::exp(-d_aux));
 			}
 			else {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 				return(d_aux2 * std::pow(2., 1 - pars[4]) / std::tgamma(pars[4]) * std::pow(d_aux, pars[4]) * std::cyl_bessel_k(pars[4], d_aux));
 #else
 				Log::REFatal("'shape' of %g is not supported for the '%s' covariance function (only 0.5, 1.5, and 2.5) when using this compiler (e.g. Clang on Mac). Use gcc or (a newer version of) MSVC instead. ", pars[4], cov_fct_type_.c_str());
@@ -2180,7 +2226,7 @@ namespace GPBoost {
 				return(d_aux2 * (1. + d_aux + d_aux * d_aux / 3.) * std::exp(-d_aux));
 			}
 			else {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 				return(d_aux2 * std::pow(2., 1 - pars[4]) / std::tgamma(pars[4]) * std::pow(d_aux, pars[4]) * std::cyl_bessel_k(pars[4], d_aux));
 #else
 				Log::REFatal("'shape' of %g is not supported for the '%s' covariance function (only 0.5, 1.5, and 2.5) when using this compiler (e.g. Clang on Mac). Use gcc or (a newer version of) MSVC instead. ", pars[4], cov_fct_type_.c_str());
@@ -2252,7 +2298,7 @@ namespace GPBoost {
 						d_aux2 * (d_aux+ d_aux * d_aux) / 3. * d_aux_grad) * std::exp(-d_aux);
 				}
 				else {
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 					double bessel = std::cyl_bessel_k(pars[4], d_aux);
 					double grad_bessel = pars[4] / d_aux * bessel - std::cyl_bessel_k(pars[4] + 1., d_aux); // d/dz K_nu(z) = nu / z * K_nu(z) - K_(nu+1)(z)
 					grad = d_aux2_grad * std::pow(d_aux, pars[4]) * bessel +
@@ -2265,7 +2311,7 @@ namespace GPBoost {
 				}
 			}//end a, c, alpha, beta, delta
 			else if (ind_par == 3) {//nu
-#if MSVC_OR_GCC_COMPILER
+#if HAS_STD_CYL_BESSEL_K
 				double nu_up, nu_down;
 				if (transf_scale) {
 					nu_up = std::exp(std::log(pars[4]) + delta_step_);//gradient on log-scale
@@ -2326,6 +2372,10 @@ namespace GPBoost {
 		int num_cov_par_;
 		/*! \brief If true, the covariance function is isotropic */
 		bool is_isotropic_;
+		/*! \brief If true, scaled coordinates are used (e.g., for ARD kernels) */
+		bool use_scaled_coordinates_ = false;
+		/*! \brief If true, Vecchia neigbors and inducing points are redetermined during parameter estimation (e.g., for ARD kernels) */
+		bool redetermine_vecchia_neighbors_IPs_ = false;
 		/*! \brief for calculating finite differences  */
 		const double delta_step_ = 1e-6;// based on https://math.stackexchange.com/questions/815113/is-there-a-general-formula-for-estimating-the-step-size-h-in-numerical-different/819015#819015
 		/*! \brief If true, precomputed distances('dist') are used for calculating covariances, otherwise the coordinates are used('coords' and 'coords_pred') */
@@ -2341,7 +2391,8 @@ namespace GPBoost {
 			"gaussian_ard",
 			"matern_estimate_shape",
 			"matern_ard_estimate_shape",
-			"space_time_gneiting" };
+			"space_time_gneiting",
+			"linear" };
 		const double LARGE_SHAPE_WARNING_THRESHOLD_ = 50.;
 		const char* LARGE_SHAPE_WARNING_ = "The shape parameter is very large, it is recommended to use the 'gausian' covariance funtion ";
 
