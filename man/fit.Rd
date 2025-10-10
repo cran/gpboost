@@ -41,8 +41,9 @@ fixed effects linear regression term (if there is one)}
     Initial values for additional parameters for non-Gaussian likelihoods 
     (e.g., shape parameter of a gamma or negative_binomial likelihood) }
     \item{estimate_cov_par_index: \code{vector} with \code{integer} (default = -1). 
-    If estimate_cov_par_index[1] >= 0, some covariance parameters might not be estimated, 
-    estimate_cov_par_index[i] is then bool and indicates which ones are estimated. 
+    This allows for disabling the estimation of some (or all) covariance parameters if estimate_cov_par_index != -1. 
+    'estimate_cov_par_index' should then be a vector with length equal to the number of covariance parameters, 
+    and estimate_cov_par_index[i] should be of bool type indicating whether parameter number i is estimated or not. 
     For instance, estimate_cov_par_index = c(1,1,0) means that the first two covariance parameters 
     are estimated and the last one not.}  
     \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
@@ -147,6 +148,8 @@ fixed effects linear regression term (if there is one)}
     Acceleration rate for covariance parameters for Nesterov acceleration }
     \item{momentum_offset: \code{integer} (Default = 2, only relevant for "gradient_descent")}. 
     Number of iterations for which no momentum is applied in the beginning.
+    \item{m_lbfgs: \code{integer} (Default = 6)}. Number of corrections to approximate the inverse Hessian matrix for the "lbfgs" optimizer
+    \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8)}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods
 }}
 
 \item{offset}{A \code{numeric} \code{vector} with 

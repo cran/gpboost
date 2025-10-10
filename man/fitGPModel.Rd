@@ -46,9 +46,19 @@ The variance is mu * (1 + phi), mu = mean, phi = dispersion, with this parametri
 \item{ "t": t-distribution (e.g., for robust regression) }
 \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
 The df can be set via the \code{likelihood_additional_param} parameter }
+\item{ "zero_inflated_gamma": Zero-inflated gamma likelihood. 
+The log-transformed mean of the response variable equals the sum of fixed and random effects, E(y) = mu = exp(F(X) + Zb), 
+and the rate parameter equals (1-p0) * gamma / mu, where p0 is the zero-inflation probability and gamma the shape parameter. 
+I.e., the rate parameter depends on F(X) + Zb, and p0 and gamma are (univariate auxiliary) parameters that are estimated. 
+Note that E(y) = mu above refers the the mean of the entire distribution and not just the positive part }
+\item{ "zero_censored_power_transformed_normal": Likelihood of a censored and power-transformed normal variable 
+for modeling data with a point mass at 0 and a continuous distribution for y > 0. 
+The model used is Y = max(0,X)^lambda, X ~ N(mu, sigma^2), where mu = F(X) + Zb, 
+and sigma and lambda are (auxiliary) parameters that are estimated. 
+For more details on this model, see Sigrist et al. (2012, AOAS) "A dynamic nonstationary spatio-temporal model for short term prediction of precipitation" }
 \item{ "gaussian_heteroscedastic": Gaussian likelihood where both the mean and the variance 
 are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation }
-\item{ Note: the first lines in \url{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h} contain additional comments on the specific parametrizations used }
+\item{ Note: the first lines in the \href{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h}{likelihoods source file} contain additional comments on the specific parametrizations used }
 \item{ Note: other likelihoods can be implemented upon request }
 }}
 
@@ -236,8 +246,9 @@ fixed effects linear regression term (if there is one)}
     Initial values for additional parameters for non-Gaussian likelihoods 
     (e.g., shape parameter of a gamma or negative_binomial likelihood) }
     \item{estimate_cov_par_index: \code{vector} with \code{integer} (default = -1). 
-    If estimate_cov_par_index[1] >= 0, some covariance parameters might not be estimated, 
-    estimate_cov_par_index[i] is then bool and indicates which ones are estimated. 
+    This allows for disabling the estimation of some (or all) covariance parameters if estimate_cov_par_index != -1. 
+    'estimate_cov_par_index' should then be a vector with length equal to the number of covariance parameters, 
+    and estimate_cov_par_index[i] should be of bool type indicating whether parameter number i is estimated or not. 
     For instance, estimate_cov_par_index = c(1,1,0) means that the first two covariance parameters 
     are estimated and the last one not.}  
     \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
@@ -342,6 +353,8 @@ fixed effects linear regression term (if there is one)}
     Acceleration rate for covariance parameters for Nesterov acceleration }
     \item{momentum_offset: \code{integer} (Default = 2, only relevant for "gradient_descent")}. 
     Number of iterations for which no momentum is applied in the beginning.
+    \item{m_lbfgs: \code{integer} (Default = 6)}. Number of corrections to approximate the inverse Hessian matrix for the "lbfgs" optimizer
+    \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8)}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods
 }}
 
 \item{vecchia_approx}{Discontinued. Use the argument \code{gp_approx} instead}

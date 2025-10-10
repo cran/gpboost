@@ -31,9 +31,19 @@
 #' \item{ "t": t-distribution (e.g., for robust regression) }
 #' \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
 #' The df can be set via the \code{likelihood_additional_param} parameter }
+#' \item{ "zero_inflated_gamma": Zero-inflated gamma likelihood. 
+#' The log-transformed mean of the response variable equals the sum of fixed and random effects, E(y) = mu = exp(F(X) + Zb), 
+#' and the rate parameter equals (1-p0) * gamma / mu, where p0 is the zero-inflation probability and gamma the shape parameter. 
+#' I.e., the rate parameter depends on F(X) + Zb, and p0 and gamma are (univariate auxiliary) parameters that are estimated. 
+#' Note that E(y) = mu above refers the the mean of the entire distribution and not just the positive part }
+#' \item{ "zero_censored_power_transformed_normal": Likelihood of a censored and power-transformed normal variable 
+#' for modeling data with a point mass at 0 and a continuous distribution for y > 0. 
+#' The model used is Y = max(0,X)^lambda, X ~ N(mu, sigma^2), where mu = F(X) + Zb, 
+#' and sigma and lambda are (auxiliary) parameters that are estimated. 
+#' For more details on this model, see Sigrist et al. (2012, AOAS) "A dynamic nonstationary spatio-temporal model for short term prediction of precipitation" }
 #' \item{ "gaussian_heteroscedastic": Gaussian likelihood where both the mean and the variance 
 #' are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation }
-#' \item{ Note: the first lines in \url{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h} contain additional comments on the specific parametrizations used }
+#' \item{ Note: the first lines in the \href{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h}{likelihoods source file} contain additional comments on the specific parametrizations used }
 #' \item{ Note: other likelihoods can be implemented upon request }
 #' }
 #' @param likelihood_additional_param A \code{numeric} specifying an additional parameter for the \code{likelihood} 
@@ -235,8 +245,9 @@
 #'                Initial values for additional parameters for non-Gaussian likelihoods 
 #'                (e.g., shape parameter of a gamma or negative_binomial likelihood) }
 #'                \item{estimate_cov_par_index: \code{vector} with \code{integer} (default = -1). 
-#'                If estimate_cov_par_index[1] >= 0, some covariance parameters might not be estimated, 
-#'                estimate_cov_par_index[i] is then bool and indicates which ones are estimated. 
+#'                This allows for disabling the estimation of some (or all) covariance parameters if estimate_cov_par_index != -1. 
+#'                'estimate_cov_par_index' should then be a vector with length equal to the number of covariance parameters, 
+#'                and estimate_cov_par_index[i] should be of bool type indicating whether parameter number i is estimated or not. 
 #'                For instance, estimate_cov_par_index = c(1,1,0) means that the first two covariance parameters 
 #'                are estimated and the last one not.}  
 #'                \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
@@ -341,6 +352,8 @@
 #'                Acceleration rate for covariance parameters for Nesterov acceleration }
 #'                \item{momentum_offset: \code{integer} (Default = 2, only relevant for "gradient_descent")}. 
 #'                Number of iterations for which no momentum is applied in the beginning.
+#'                \item{m_lbfgs: \code{integer} (Default = 6)}. Number of corrections to approximate the inverse Hessian matrix for the "lbfgs" optimizer
+#'                \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8)}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods
 #'            }
 #' @param offset A \code{numeric} \code{vector} with 
 #' additional fixed effects contributions that are added to the linear predictor (= offset). 
@@ -1171,6 +1184,8 @@ gpb.GPModel <- R6::R6Class(
         , init_aux_pars
         , private$params[["estimate_aux_pars"]]
         , private$params[["estimate_cov_par_index"]]
+        , private$params[["m_lbfgs"]]
+        , private$params[["delta_conv_mode_finding"]]
       )
       return(invisible(self))
     },
@@ -2254,7 +2269,10 @@ gpb.GPModel <- R6::R6Class(
                   seed_rand_vec_trace = 1L,
                   fitc_piv_chol_preconditioner_rank = -1L, # default value is set in C++
                   estimate_aux_pars = TRUE,
-                  estimate_cov_par_index = -1L),
+                  estimate_cov_par_index = -1L,
+                  m_lbfgs = -1L, # default value is set in C++
+                  delta_conv_mode_finding = -1 # default value is set in C++
+                  ),
     num_sets_re = 1,
     num_sets_fe = 1,
 
@@ -2302,11 +2320,12 @@ gpb.GPModel <- R6::R6Class(
       }
       ## Check format of parameters
       numeric_params <- c("lr_cov", "acc_rate_cov", "delta_rel_conv",
-                          "lr_coef", "acc_rate_coef", "cg_delta_conv")
+                          "lr_coef", "acc_rate_coef", "cg_delta_conv", "delta_conv_mode_finding")
       integer_params <- c("maxit", "nesterov_schedule_version",
                           "momentum_offset", "cg_max_num_it", "cg_max_num_it_tridiag",
                           "num_rand_vec_trace", "seed_rand_vec_trace",
-                          "fitc_piv_chol_preconditioner_rank", "estimate_cov_par_index")
+                          "fitc_piv_chol_preconditioner_rank", "estimate_cov_par_index", 
+                          "m_lbfgs")
       character_params <- c("optimizer_cov", "convergence_criterion",
                             "optimizer_coef", "cg_preconditioner_type")
       logical_params <- c("use_nesterov_acc", "trace", "std_dev", 

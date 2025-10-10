@@ -221,7 +221,9 @@ namespace GPBoost {
 		int piv_chol_rank,
 		double* init_aux_pars,
 		bool estimate_aux_pars,
-		const int* estimate_cov_par_index) {
+		const int* estimate_cov_par_index,
+		int m_lbfgs,
+		double delta_conv_mode_finding) {
 		// Initial covariance parameters
 		if (init_cov_pars != nullptr) {
 			vec_t init_cov_pars_orig = Eigen::Map<const vec_t>(init_cov_pars, num_cov_pars_);
@@ -252,7 +254,17 @@ namespace GPBoost {
 		// Initial aux_pars
 		if (init_aux_pars != nullptr) {
 			init_aux_pars_ = Eigen::Map<const vec_t>(init_aux_pars, NumAuxPars());
-			SetAuxPars(init_aux_pars);
+			vec_t init_aux_pars_trans = init_aux_pars_;
+			if (matrix_format_ == "sp_mat_t") {
+				re_model_sp_->TransformAuxPars(init_aux_pars_.data(), init_aux_pars_trans.data());
+			}
+			else if (matrix_format_ == "sp_mat_rm_t") {
+				re_model_sp_rm_->TransformAuxPars(init_aux_pars_.data(), init_aux_pars_trans.data());
+			}
+			else {
+				re_model_den_->TransformAuxPars(init_aux_pars_.data(), init_aux_pars_trans.data());
+			}
+			SetAuxPars(init_aux_pars_trans.data());
 			init_aux_pars_given_ = true;
 		}
 		else {
@@ -270,21 +282,21 @@ namespace GPBoost {
 			re_model_sp_->SetOptimConfig(lr, acc_rate_cov, max_iter, delta_rel_conv, use_nesterov_acc, nesterov_schedule_version,
 				optimizer, momentum_offset, convergence_criterion, lr_coef, acc_rate_coef, optimizer_coef,
 				cg_max_num_it, cg_max_num_it_tridiag, cg_delta_conv, num_rand_vec_trace, reuse_rand_vec_trace,
-				cg_preconditioner_type, seed_rand_vec_trace, piv_chol_rank, estimate_aux_pars, estimate_cov_par_index);
+				cg_preconditioner_type, seed_rand_vec_trace, piv_chol_rank, estimate_aux_pars, estimate_cov_par_index, m_lbfgs, delta_conv_mode_finding);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->SetOptimConfig(lr, acc_rate_cov, max_iter, delta_rel_conv, use_nesterov_acc, nesterov_schedule_version,
 				optimizer, momentum_offset, convergence_criterion, lr_coef, acc_rate_coef, optimizer_coef,
 				cg_max_num_it, cg_max_num_it_tridiag, cg_delta_conv, num_rand_vec_trace, reuse_rand_vec_trace,
-				cg_preconditioner_type, seed_rand_vec_trace, piv_chol_rank, estimate_aux_pars, estimate_cov_par_index);
+				cg_preconditioner_type, seed_rand_vec_trace, piv_chol_rank, estimate_aux_pars, estimate_cov_par_index, m_lbfgs, delta_conv_mode_finding);
 		}
 		else {
 			re_model_den_->SetOptimConfig(lr, acc_rate_cov, max_iter, delta_rel_conv, use_nesterov_acc, nesterov_schedule_version,
 				optimizer, momentum_offset, convergence_criterion, lr_coef, acc_rate_coef, optimizer_coef,
 				cg_max_num_it, cg_max_num_it_tridiag, cg_delta_conv, num_rand_vec_trace, reuse_rand_vec_trace,
-				cg_preconditioner_type, seed_rand_vec_trace, piv_chol_rank, estimate_aux_pars, estimate_cov_par_index);
+				cg_preconditioner_type, seed_rand_vec_trace, piv_chol_rank, estimate_aux_pars, estimate_cov_par_index, m_lbfgs, delta_conv_mode_finding);
 		}
-	}
+	}//end SetOptimConfig
 
 	void REModel::ResetCovPars() {
 		cov_pars_ = vec_t(num_cov_pars_);
@@ -1103,23 +1115,23 @@ namespace GPBoost {
 	}
 
 	void REModel::GetAuxPars(double* aux_pars,
-		string_t& name) const {
+		string_t& name) const {//only for exporting -> thus aux_pars on original scale
 		const double* aux_pars_temp;
 		if (matrix_format_ == "sp_mat_t") {
 			aux_pars_temp = re_model_sp_->GetAuxPars();
+			re_model_sp_->BackTransformAuxPars(aux_pars_temp, aux_pars);
 			re_model_sp_->GetNamesAuxPars(name);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			aux_pars_temp = re_model_sp_rm_->GetAuxPars();
+			re_model_sp_rm_->BackTransformAuxPars(aux_pars_temp, aux_pars);
 			re_model_sp_rm_->GetNamesAuxPars(name);
 		}
 		else {
 			aux_pars_temp = re_model_den_->GetAuxPars();
+			re_model_den_->BackTransformAuxPars(aux_pars_temp, aux_pars);
 			re_model_den_->GetNamesAuxPars(name);
-		}
-		for (int j = 0; j < NumAuxPars(); ++j) {
-			aux_pars[j] = aux_pars_temp[j];
-		}
+		}		
 	}
 
 	void REModel::SetAuxPars(const double* aux_pars) {
