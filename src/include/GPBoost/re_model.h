@@ -123,6 +123,12 @@ namespace GPBoost {
 		*/
 		void SetLikelihood(const string_t& likelihood);
 
+		/*!
+		* \brief Transform from the latent to the response variable scale (often this is the inverse link function)
+		*			This is only used by the 'ConvertOutput()' function in regression_objective.hpp
+		*/
+		double TransformToReponseScale(const double value) const;
+
 		string_t GetOptimizerCovPars() const;
 
 		string_t GetOptimizerCoef() const;
@@ -142,7 +148,6 @@ namespace GPBoost {
 		* \param optimizer_cov Optimizer for covariance parameters
 		* \param momentum_offset Number of iterations for which no mometum is applied in the beginning (only relevant if use_nesterov_acc)
 		* \param convergence_criterion The convergence criterion used for terminating the optimization algorithm. Options: "relative_change_in_log_likelihood" or "relative_change_in_parameters"
-		* \param calc_std_dev If true, approximate standard deviations are calculated (= square root of diagonal of the inverse Fisher information for Gaussian likelihoods and square root of diagonal of a numerically approximated inverse Hessian for non-Gaussian likelihoods)
 		* \param num_covariates Number of covariates
 		* \param init_coef Initial values for the regression coefficients
 		* \param lr_coef Learning rate for fixed-effect linear coefficients
@@ -173,7 +178,6 @@ namespace GPBoost {
 			const char* optimizer,
 			int momentum_offset,
 			const char* convergence_criterion,
-			bool calc_std_dev, 
 			int num_covariates,
 			double* init_coef,
 			double lr_coef,
@@ -306,11 +310,25 @@ namespace GPBoost {
 		void GetCovariateData(double* covariate_data) const;
 
 		/*!
+		* \brief Return offset data
+		* \param[out] fixed_effects offset data
+		*/
+		void GetOffsetData(double* fixed_effects) const;
+
+		/*!
+		* \brief Set offset data
+		* \param fixed_effects offset data
+		*/
+		void SetOffsetData(const double* fixed_effects);
+
+		bool CanCalculateStandardErrorsCovPars() const;
+
+		/*!
 		* \brief Get covariance parameters
 		* \param[out] cov_par Covariance parameters stored in cov_pars_. This vector needs to be pre-allocated of length number of covariance parameters or twice this if calc_std_dev = true
 		* \param calc_std_dev If true, standard deviations are also exported
 		*/
-		void GetCovPar(double* cov_par, bool calc_std_dev) const;
+		void GetCovPar(double* cov_par, bool calc_std_dev);
 
 		/*!
 		* \brief Get initial values for covariance parameters
@@ -323,7 +341,7 @@ namespace GPBoost {
 		* \param[out] coef Regression coefficients stored in coef_. This vector needs to be pre-allocated of length number of covariates or twice this if calc_std_dev = true
 		* \param calc_std_dev If true, standard deviations are also exported
 		*/
-		void GetCoef(double* coef, bool calc_std_dev) const;
+		void GetCoef(double* coef, bool calc_std_dev);
 
 		/*!
 		* \brief Set the data used for making predictions (useful if the same data is used repeatedly, e.g., in validation of GPBoost)
@@ -435,6 +453,11 @@ namespace GPBoost {
 			const double* fixed_effects);
 
 		/*!
+		* \brief Return true if aux_pars have been set or estimated
+		*/
+		bool AuxParsHaveBeenSetOrEstimated() const;
+
+		/*!
 		* \brief Return number of additional likelihood parameters (aux_pars_)
 		*/
 		int NumAuxPars() const;
@@ -489,6 +512,7 @@ namespace GPBoost {
 		bool init_cov_pars_provided_ = false;
 		bool cov_pars_have_been_provided_for_prediction_ = false; //This is true if Predict() has been called once with cov_pars_pred != nullptr (saved in order to determine whether covariance matrix needs to be factorized again or not)
 		vec_t std_dev_cov_pars_;
+		bool std_dev_cov_pars_calculated_ = false;
 		int num_cov_pars_;
 		/*! \brief Number of fixed effects sets (>1 e.g. for heteroscedastic models) */
 		int num_sets_fixed_effects_ = 1;
@@ -498,6 +522,9 @@ namespace GPBoost {
 		bool init_coef_given_ = false;
 		bool coef_given_or_estimated_ = false;
 		vec_t std_dev_coef_;
+		bool std_dev_coef_calculated_ = false;
+		int num_covariates_;
+		int num_coef_;
 		// Variables for additional parameters for non-Gaussian likelihoods
 		vec_t init_aux_pars_; // Additional parameters for non-Gaussian likelihoods
 		bool init_aux_pars_given_ = false;

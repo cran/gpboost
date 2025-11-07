@@ -178,17 +178,19 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 					Log::Fatal("Bagging cannot be applied for the GPBoost algorithm. Set 'bagging_freq = 0' ");
 				}
 				if (train_data_->metadata().weights() != nullptr) {
-					Log::Fatal("Weighted data is currently not supported for the GPBoost algorithm ");
+					Log::Fatal("Weights need to be provided to the 'GPModel()' constructor for the GPBoost algorithm ");
 				}
 				if (config_.sigmoid != 1.0) {
 					Log::Fatal("The GPBoost algorithm currently does not support a sigmoid != 1.0 ");
 				}
 				if (config_.objective != std::string("regression") && config_.objective != std::string("bernoulli_probit") && 
 					config_.objective != std::string("bernoulli_logit") && config_.objective != std::string("binary") && 
+					config_.objective != std::string("binomial") && config_.objective != std::string("binomial_probit") && config_.objective != std::string("binomial_logit") &&
 					config_.objective != std::string("poisson") && config_.objective != std::string("gamma") && 
 					config_.objective != std::string("negative_binomial") && config_.objective != std::string("negative_binomial_1") &&
-					config_.objective != std::string("t") && config_.objective != std::string("t_fix_df") &&
-					config_.objective != std::string("beta") && config_.objective != std::string("gaussian_heteroscedastic")) {
+					config_.objective != std::string("beta") && config_.objective != std::string("t") && config_.objective != std::string("t_fix_df") &&
+					config_.objective != std::string("gaussian_heteroscedastic") && config_.objective != std::string("lognormal") && config_.objective != std::string("beta_binomial") &&
+					config_.objective != std::string("zero_inflated_gamma") && config_.objective != std::string("zero_censored_power_transformed_normal")) {
 					Log::Fatal("GPBoost currently does not support 'objective = %s' ", config_.objective.c_str());
 				}
 				// Make sure that objective for boosting and likelihood for re_model match, otherwise change them accordingly
@@ -2775,7 +2777,6 @@ int GPB_SetOptimConfig(REModelHandle handle,
 	const char* optimizer,
 	int momentum_offset,
 	const char* convergence_criterion,
-	bool calc_std_dev,
 	int num_covariates,
 	double* init_coef,
 	double lr_coef,
@@ -2807,7 +2808,6 @@ int GPB_SetOptimConfig(REModelHandle handle,
 		optimizer,
 		momentum_offset,
 		convergence_criterion, 
-		calc_std_dev,
 		num_covariates,
 		init_coef,
 		lr_coef,
@@ -2865,6 +2865,14 @@ int GPB_GetCurrentNegLogLikelihood(REModelHandle handle,
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	ref_remodel->GetCurrentNegLogLikelihood(negll[0]);
+	API_END();
+}
+
+int GPB_CanCalculateStandardErrorsCovPars(REModelHandle handle,
+	int* out) {
+	API_BEGIN();
+	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
+	out[0] = (int)ref_remodel->CanCalculateStandardErrorsCovPars();
 	API_END();
 }
 
@@ -3050,6 +3058,22 @@ int GPB_GetCovariateData(REModelHandle handle,
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	ref_remodel->GetCovariateData(covariate_data);
+	API_END();
+}
+
+int GPB_GetOffsetData(REModelHandle handle,
+	double* fixed_effects) {
+	API_BEGIN();
+	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
+	ref_remodel->GetOffsetData(fixed_effects);
+	API_END();
+}
+
+int GPB_SetOffsetData(REModelHandle handle,
+	const double* fixed_effects) {
+	API_BEGIN();
+	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
+	ref_remodel->SetOffsetData(fixed_effects);
 	API_END();
 }
 
