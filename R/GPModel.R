@@ -29,8 +29,12 @@
 #' \item{ "lognormal": Log-normal likelihood with a log link function }
 #' \item{ "beta" : Beta likelihood with a logit link function (parametrization of Ferrari and Cribari-Neto, 2004)}
 #' \item{ "t": t-distribution (e.g., for robust regression) }
-#' \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
-#' The df can be set via the \code{likelihood_additional_param} parameter }
+#' \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated
+#' \itemize{ \item{ The degrees-of-freedom (df) can be set via the \code{likelihood_additional_param} parameter. The default is df = 2 }}
+#' }
+#' \item{ "quantile_regression" / "asymmetric_laplace" : an asymmetric Laplace likelihood for quantile regression, aliases: "asymmetric_laplace", "quantile_regression" 
+#' \itemize{ \item{ The quantile can be set via the \code{likelihood_additional_param} parameter. The default is quantile = 0.5 }}
+#' }
 #' \item{ "zero_inflated_gamma": Zero-inflated gamma likelihood. 
 #' The log-transformed mean of the response variable equals the sum of fixed and random effects, E(y) = mu = exp(F(X) + Zb), 
 #' and the rate parameter equals (1-p0) * gamma / mu, where p0 is the zero-inflation probability and gamma the shape parameter. 
@@ -53,7 +57,8 @@
 #' Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.
 #' If \code{likelihood_additional_param = NULL}, the following internal default values are used:
 #' \itemize{
-#' \item{ df = 2 for likelihood = "t_fix_df"}
+#' \item{ df = 2 for likelihood = "t_fix_df" }
+#' \item{ quantile = 0.5 for likelihood = "asymmetric_laplace" }
 #' }
 #' @param group_data A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
 #' The elements being group levels defining grouped random effects.
@@ -90,16 +95,25 @@
 #' You can disable the estimation of some of these parameter using the 'estimate_cov_par_index' argument of the \code{params} argument in either 
 #' the \code{fit} function of a \code{gp_model} object or the \code{set_optim_params} function prior to estimation. }
 #' \item{ "matern_ard": anisotropic Matern covariance function with Automatic Relevance Determination (ARD), 
-#' i.e., with a different range parameter for every coordinate dimension / column of \code{gp_coords} }
+#' i.e., with a different range parameter for every coordinate of \code{gp_coords} }
 #' \item{ "matern_ard_estimate_shape": same as "matern_ard" but the smoothness parameter is also estimated }
 #' \item{ "exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
 #' \item{ "gaussian": Gaussian, aka squared exponential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
 #' \item{ "gaussian_ard": anisotropic Gaussian, aka squared exponential, covariance function with Automatic Relevance Determination (ARD), 
-#' i.e., with a different range parameter for every coordinate dimension / column of \code{gp_coords} }
+#' i.e., with a different range parameter for every coordinate of \code{gp_coords} }
 #' \item{ "powered_exponential": powered exponential covariance function with the exponent specified by 
 #' the \code{cov_fct_shape} parameter (using the parametrization of Diggle and Ribeiro, 2007) }
-#' \item{ "wendland": Compactly supported Wendland covariance function (using the parametrization of Bevilacqua et al., 2019, AOS) }
-#' \item{ "linear": linear covariance function. This corresponds to a Bayesian linear regression model with a Gaussian prior on the coefficients with a constant variance diagonal prior covariance, and the prior variance is estimated using empirical Bayes. }
+#' \item{ "wendland": Compactly supported Wendland covariance function 
+#' (using the parametrization of Bevilacqua et al., 2019, AOS) }
+#' \item{ "linear": linear covariance function. This corresponds to a Bayesian linear 
+#' regression model with a Gaussian prior on the coefficients with a constant variance 
+#' diagonal prior covariance, and the prior variance is estimated using empirical Bayes. }
+#' \item{ "hurst": Hurst covariance function cov(s, s') = (sigma2 / 2) * ( ||s||^(2H) + ||s'||^(2H) - ||s - s'||^(2H) ). 
+#' For H = 0.5, this corresponds to Brownian motion (-> see the 'estimate_cov_par_index' argument) }
+#' \item{ "hurst_ard": Hurst covariance function with with Automatic Relevance Determination (ARD), 
+#' i.e., with a different range parameter for every coordinate of ``gp_coords`` except 
+#' for the first coordinate which has a range parameter of 1 due to identifiability with the marginal variance: 
+#' \eqn{ cov(s, s') = (\sigma^2/2)\left[ \left(s_1^2 + \sum_{k=2}^d (s_k/l_k)^2\right)^H + \left({s'}_1^2 + \sum_{k=2}^d ({s'}_k/l_k)^2\right)^H - \left((s_1-{s'}_1)^2 + \sum_{k=2}^d ((s_k-{s'}_k)/l_k)^2\right)^H \right] } }
 #' }
 #' @param cov_fct_shape A \code{numeric} specifying the shape parameter of the covariance function 
 #' (e.g., smoothness parameter for Matern and Wendland covariance)  
@@ -123,6 +137,7 @@
 #' }
 #' @param num_parallel_threads An \code{integer} specifying the number of parallel threads for OMP. 
 #' If num_parallel_threads = NULL, all available threads are used
+#' @param GPU_use A \code{boolean}. If TRUE, GPU acceleration will be used if supported 
 #' @param cov_fct_taper_range A \code{numeric} specifying the range parameter 
 #' of the Wendland covariance function and Wendland correlation taper function. 
 #' We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -246,11 +261,13 @@
 #'                Initial values for additional parameters for non-Gaussian likelihoods 
 #'                (e.g., shape parameter of a gamma or negative_binomial likelihood) }
 #'                \item{estimate_cov_par_index: \code{vector} with \code{integer} (default = -1). 
-#'                This allows for disabling the estimation of some (or all) covariance parameters if estimate_cov_par_index != -1. 
-#'                'estimate_cov_par_index' should then be a vector with length equal to the number of covariance parameters, 
+#'                This allows for disabling the estimation of some (or all) covariance parameters. 
+#'                If 'estimate_cov_par_index' = -1, all covariance parameters are estimated. 
+#'                If estimate_cov_par_index != -1, this should be a vector with length equal to the number of covariance parameters, 
 #'                and estimate_cov_par_index[i] should be of bool type indicating whether parameter number i is estimated or not. 
 #'                For instance, estimate_cov_par_index = c(1,1,0) means that the first two covariance parameters 
-#'                are estimated and the last one not.}  
+#'                are estimated and the last one not. 
+#'                Parameters that are not estimated are kept at their initial values (see 'init_cov_pars'). }  
 #'                \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
 #'                If TRUE, additional parameters for non-Gaussian likelihoods 
 #'                are also estimated (e.g., shape parameter of a gamma or negative_binomial likelihood) }
@@ -381,6 +398,7 @@
 #'                (= square root of diagonal of the inverse Fisher information for Gaussian likelihoods and 
 #'                square root of diagonal of a numerically approximated inverse Hessian for non-Gaussian likelihoods)
 #' @param vecchia_approx Discontinued. Use the argument \code{gp_approx} instead
+#' @param num_data A \code{numeric} with the number of samples. This is only used for iid models
 
 
 NULL
@@ -406,6 +424,7 @@ gpb.GPModel <- R6::R6Class(
                           cov_fct_shape = 1.5,
                           gp_approx = "none",
                           num_parallel_threads = NULL,
+                          GPU_use = FALSE,
                           matrix_inversion_method = "default",
                           weights = NULL,
                           likelihood_learning_rate = 1.,
@@ -418,6 +437,7 @@ gpb.GPModel <- R6::R6Class(
                           cover_tree_radius = 1.,
                           seed = 0L,
                           cluster_ids = NULL,
+                          num_data = NULL,
                           likelihood_additional_param = NULL,
                           free_raw_data = FALSE,
                           modelfile = NULL,
@@ -492,6 +512,7 @@ gpb.GPModel <- R6::R6Class(
         cover_tree_radius = model_list[["cover_tree_radius"]]
         seed = model_list[["seed"]]
         num_parallel_threads = model_list[["num_parallel_threads"]]
+        GPU_use = model_list[["GPU_use"]]
         cluster_ids = model_list[["cluster_ids"]]
         likelihood = model_list[["likelihood"]]
         likelihood_additional_param = model_list[["likelihood_additional_param"]]
@@ -535,15 +556,20 @@ gpb.GPModel <- R6::R6Class(
       }# end !is.null(modelfile) | !is.null(model_list)
       
       if (is.null(group_data) & is.null(gp_coords)) {
-        stop("GPModel: Both ", sQuote("group_data"), " and " , sQuote("gp_coords"),
-             " are NULL. Provide at least one of them.")
+        if (is.null(num_data)) {
+          stop("GPModel: Both ", sQuote("group_data"), " and " , sQuote("gp_coords"),
+               " are NULL. Provide at least one of them or provide 'num_data' if you want an iid model ")
+        } else {
+          group_data <- rep(0, num_data)
+          private$iid_model <- TRUE
+        }
       }
       if (likelihood == "gaussian_heteroscedastic") {
         private$num_sets_re = 2
         private$num_sets_fe = 2
       }
       if (likelihood == "gaussian" & gp_approx != "vecchia_latent") {
-        private$cov_par_names <- c("Error_term")
+        private$cov_par_names <- c("Error_var")
       } else {
         private$cov_par_names <- c()
       }
@@ -553,6 +579,11 @@ gpb.GPModel <- R6::R6Class(
         if (num_parallel_threads > 0) {
           private$num_parallel_threads <- as.integer(num_parallel_threads)
         }
+      }
+      if (is.null(GPU_use)) {
+          private$GPU_use = FALSE
+      } else {
+          private$GPU_use = GPU_use
       }
       if (is.null(likelihood_additional_param)) {
         private$likelihood_additional_param <- likelihood_additional_param
@@ -731,6 +762,15 @@ gpb.GPModel <- R6::R6Class(
           } else {
             private$cov_par_names <- c(private$cov_par_names,"GP_var", paste0("GP_range_",colnames(gp_coords)), "GP_smoothness")
           }
+        } else if (private$cov_function == "hurst" || private$cov_function == "hurst_ard") {
+          private$cov_par_names <- c(private$cov_par_names,"GP_var", "H")
+          if (private$cov_function == "hurst_ard") {
+            if (is.null(colnames(gp_coords))) {
+              private$cov_par_names <- c(private$cov_par_names,paste0("GP_range_",2:private$dim_coords))
+            } else {
+              private$cov_par_names <- c(private$cov_par_names,paste0("GP_range_",colnames(gp_coords)[2:private$dim_coords]))
+            }
+          }
         } else {
           private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range")
         }
@@ -770,7 +810,7 @@ gpb.GPModel <- R6::R6Class(
                   private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
                                              paste0(paste0("GP_rand_coef_nb_", ii,"_var"),1:private$dim_coords))
                 } else {
-                  private$cov_par_names <- c(private$cov_par_names,"GP_var", 
+                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
                                              paste0(paste0("GP_rand_coef_nb_", ii,"_range"),colnames(gp_coords)))
                 }
               } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
@@ -787,11 +827,24 @@ gpb.GPModel <- R6::R6Class(
                                              paste0(paste0("GP_rand_coef_nb_", ii,"_var"),1:private$dim_coords),
                                              paste0("GP_rand_coef_nb_", ii,"_smoothness"))
                 } else {
-                  private$cov_par_names <- c(private$cov_par_names,"GP_var", 
+                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
                                              paste0(paste0("GP_rand_coef_nb_", ii,"_range"),colnames(gp_coords)),
                                              paste0("GP_rand_coef_nb_", ii,"_smoothness"))
                 }
-              } else {
+              }  else if (private$cov_function == "hurst" || private$cov_function == "hurst_ard") {
+                private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
+                                           paste0("GP_rand_coef_nb_", ii,"_H"))
+                if (private$cov_function == "hurst_ard") {
+                  if (is.null(colnames(gp_coords))) {
+                    private$cov_par_names <- c(private$cov_par_names, 
+                                               paste0(paste0("GP_rand_coef_nb_", ii,"_var"),2:private$dim_coords))
+                  } else {
+                    private$cov_par_names <- c(private$cov_par_names, 
+                                               paste0(paste0("GP_rand_coef_nb_", ii,"_range"),colnames(gp_coords)[2:private$dim_coords]))
+                  }
+                }
+              }
+              else {
                 private$cov_par_names <- c(private$cov_par_names,
                                            paste0("GP_rand_coef_nb_", ii,"_var"),
                                            paste0("GP_rand_coef_nb_", ii,"_range"))
@@ -808,7 +861,7 @@ gpb.GPModel <- R6::R6Class(
                   private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
                                              paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_var"),1:private$dim_coords))
                 } else {
-                  private$cov_par_names <- c(private$cov_par_names,"GP_var", 
+                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
                                              paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_range"),colnames(gp_coords)))
                 }
               } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
@@ -825,9 +878,21 @@ gpb.GPModel <- R6::R6Class(
                                              paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_var"),1:private$dim_coords),
                                              paste0("GP_rand_coef_nb_", ii,"_smoothness"))
                 } else {
-                  private$cov_par_names <- c(private$cov_par_names,"GP_var", 
+                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
                                              paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_range"),colnames(gp_coords)),
                                              paste0("GP_rand_coef_nb_", ii,"_smoothness"))
+                }
+              } else if (private$cov_function == "hurst" || private$cov_function == "hurst_ard") {
+                private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
+                                           paste0("GP_rand_coef_nb_", ii,"_H"))
+                if (private$cov_function == "hurst_ard") {
+                  if (is.null(colnames(gp_coords))) {
+                    private$cov_par_names <- c(private$cov_par_names,
+                                               paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_var"),2:private$dim_coords))
+                  } else {
+                    private$cov_par_names <- c(private$cov_par_names, 
+                                               paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_range"),colnames(gp_coords)[2:private$dim_coords]))
+                  }
                 }
               } else {
                 private$cov_par_names <- c(private$cov_par_names,
@@ -926,6 +991,7 @@ gpb.GPModel <- R6::R6Class(
         , private$matrix_inversion_method
         , private$seed
         , private$num_parallel_threads
+        , private$GPU_use
         , private$has_weights
         , private$weights
         , private$likelihood_learning_rate
@@ -1586,6 +1652,28 @@ gpb.GPModel <- R6::R6Class(
           stop("predict.GPModel: Number of parameters in ", sQuote("cov_pars"), " does not correspond to numbers of parameters of model")
         }
       }
+      # Set data for linear fixed-effects
+      if (!is.null(X_pred) & !private$has_covariates) {
+        stop("set_prediction_data: Covariate data provided in ", sQuote("X_pred"), " but model has no linear predictor")
+      }
+      if(private$has_covariates){
+        if (is.null(X_pred)) {
+          stop("predict.GPModel: No covariate data is provided in ", sQuote("X_pred"), " but model has linear predictor")
+        } 
+        if (is.numeric(X_pred)) {
+          X_pred <- as.matrix(X_pred)
+        }
+        if (is.matrix(X_pred)) {
+          if (storage.mode(X_pred) != "double") {
+            storage.mode(X_pred) <- "double"
+          }
+        } else {
+          stop("predict.GPModel: Can only use ", sQuote("matrix"), " as ", sQuote("X_pred"))
+        }
+        if (private$iid_model) {
+          group_data_pred <- rep(0,dim(X_pred)[1])
+        }
+      }# End set data for linear fixed-effects
       if (!use_saved_data) {
         num_data_pred <- 0
         # Set data for grouped random effects
@@ -1692,25 +1780,7 @@ gpb.GPModel <- R6::R6Class(
           }
         } # End set data for GP random coefficients
         # Set data for linear fixed-effects
-        if (!is.null(X_pred)) {
-          if(!private$has_covariates){
-            stop("set_prediction_data: Covariate data provided in ", sQuote("X_pred"), " but model has no linear predictor")
-          }
-        }
-        if(private$has_covariates){
-          if(is.null(X_pred)){
-            stop("predict.GPModel: No covariate data is provided in ", sQuote("X_pred"), " but model has linear predictor")
-          }
-          if (is.numeric(X_pred)) {
-            X_pred <- as.matrix(X_pred)
-          }
-          if (is.matrix(X_pred)) {
-            if (storage.mode(X_pred) != "double") {
-              storage.mode(X_pred) <- "double"
-            }
-          } else {
-            stop("predict.GPModel: Can only use ", sQuote("matrix"), " as ", sQuote("X_pred"))
-          }
+        if (private$has_covariates) {
           if (dim(X_pred)[1] != num_data_pred) {
             stop("predict.GPModel: Number of data points in ", sQuote("X_pred"), " is not correct")
           }
@@ -1718,7 +1788,7 @@ gpb.GPModel <- R6::R6Class(
             stop("predict.GPModel: Number of covariates in ", sQuote("X_pred"), " is not correct")
           }
           X_pred <- as.vector(matrix(X_pred))
-        } # End set data for linear fixed-effects
+        }
         # Set cluster_ids_pred for independent processes
         if (!is.null(cluster_ids_pred)) {
           if (is.vector(cluster_ids_pred)) {
@@ -2123,6 +2193,7 @@ gpb.GPModel <- R6::R6Class(
       model_list[["ind_points_selection"]] <- private$ind_points_selection
       model_list[["seed"]] <- private$seed
       model_list[["num_parallel_threads"]] <- private$num_parallel_threads
+      model_list[["GPU_use"]] <- private$GPU_use
       model_list[["num_sets_re"]] <- private$num_sets_re
       model_list[["num_sets_fe"]] <- private$num_sets_fe
       # Covariate data
@@ -2196,21 +2267,33 @@ gpb.GPModel <- R6::R6Class(
       if (private$model_fitted) {
         ll <- -self$get_current_neg_log_likelihood()
         npar <- private$num_cov_pars
-        if (private$has_covariates) {
-          npar <- npar + private$num_coef
-        }
+        if (private$has_covariates) npar <- npar + private$num_coef
+        if (private$iid_model) npar <- npar - 1 # do not count variance component
         aic <- 2*npar - 2*ll
         bic <- npar*log(self$get_num_data()) - 2*ll
         print(round(c("Log-lik"=ll, "AIC"=aic, "BIC"=bic),digits=2))
         cat("-----------------------------------------------------\n")
       }
-      cat("Covariance parameters (random effects):\n")
-      if (is.matrix(cov_pars)) {
-        print(round(t(cov_pars),4))
-      } else {
-        cov_pars <- t(t(cov_pars))
-        colnames(cov_pars) <- "Param."
-        print(round(cov_pars,4))
+      if(!private$iid_model) {
+        cat("Covariance parameters (random effects):\n")
+        if (is.matrix(cov_pars)) {
+          print(round(t(cov_pars),4))
+        } else {
+          cov_pars <- t(t(cov_pars))
+          colnames(cov_pars) <- "Param."
+          print(round(cov_pars,4))
+        }
+      } else if (private$iid_model & self$get_likelihood_name() == "gaussian") {
+        if (is.matrix(cov_pars)) {
+          cov_pars_print <- t(cov_pars)
+        }
+        if (!is.matrix(cov_pars)) {
+          cov_pars_print <- t(t(cov_pars))
+          colnames(cov_pars_print) <- "Param."
+        }
+        cov_pars_print <- cov_pars_print[1, , drop = FALSE]
+        rownames(cov_pars_print) <- "Error_var"
+        print(round(cov_pars_print,4))
       }
       if (private$has_covariates) {
         coefs <- self$get_coef(std_err = std_err)
@@ -2248,7 +2331,7 @@ gpb.GPModel <- R6::R6Class(
   
   private = list(
     handle = NULL,
-    likelihood_additional_param = NULL,
+    likelihood_additional_param = -999, # default is set in C++
     num_data = NULL,
     num_group_re = 0L,
     num_group_rand_coef = 0L,
@@ -2275,6 +2358,7 @@ gpb.GPModel <- R6::R6Class(
     weights = NULL,
     likelihood_learning_rate = 1.,
     num_parallel_threads = -1L,
+    GPU_use = FALSE,
     cov_fct_taper_range = 1.,
     cov_fct_taper_shape = 1.,
     num_neighbors = -1L, # default is set in C++
@@ -2328,6 +2412,7 @@ gpb.GPModel <- R6::R6Class(
     ),
     num_sets_re = 1,
     num_sets_fe = 1,
+    iid_model = FALSE,
     
     # Finalize will free up the handles
     finalize = function() {
@@ -2342,13 +2427,16 @@ gpb.GPModel <- R6::R6Class(
     determine_num_cov_pars = function(likelihood) {
       if (private$cov_function == "space_time_gneiting") {
         num_par_per_GP <- 7L
-      } else if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time" | private$cov_function == "matern_estimate_shape") {
+      } else if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time" | 
+                 private$cov_function == "matern_estimate_shape") {
         num_par_per_GP <- 3L
-      } else if (private$cov_function == "matern_ard" | private$cov_function == "gaussian_ard" | private$cov_function == "exponential_ard") {
+      } else if (private$cov_function == "matern_ard" | private$cov_function == "gaussian_ard" | 
+                 private$cov_function == "exponential_ard" | private$cov_function == "hurst_ard") {
         num_par_per_GP <- 1L + private$dim_coords
       } else if (private$cov_function == "matern_ard_estimate_shape") {
         num_par_per_GP <- 2L + private$dim_coords
-      } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
+      } else if (private$cov_function == "wendland" | private$cov_function == "linear" | 
+                 private$cov_function == "linear_no_woodbury") {
         num_par_per_GP <- 1L
       } else {
         num_par_per_GP <- 2L
@@ -2476,11 +2564,11 @@ gpb.GPModel <- R6::R6Class(
         stop("set_likelihood: Can only use ", sQuote("character"), " as ", sQuote("likelihood"))
       }
       private$determine_num_cov_pars(likelihood)
-      if (likelihood != "gaussian" && "Error_term" %in% private$cov_par_names){
-        private$cov_par_names <- private$cov_par_names["Error_term" != private$cov_par_names]
+      if (likelihood != "gaussian" && "Error_var" %in% private$cov_par_names){
+        private$cov_par_names <- private$cov_par_names["Error_var" != private$cov_par_names]
       }
-      if (likelihood == "gaussian" & private$gp_approx != "vecchia_latent" && !("Error_term" %in% private$cov_par_names)){
-        private$cov_par_names <- c("Error_term",private$cov_par_names)
+      if (likelihood == "gaussian" & private$gp_approx != "vecchia_latent" && !("Error_var" %in% private$cov_par_names)){
+        private$cov_par_names <- c("Error_var",private$cov_par_names)
       }
     },
     
@@ -2535,6 +2623,7 @@ GPModel <- function(likelihood = "gaussian",
                     cov_fct_shape = 1.5,
                     gp_approx = "none",
                     num_parallel_threads = NULL,
+                    GPU_use = FALSE,
                     matrix_inversion_method = "default",
                     weights = NULL,
                     likelihood_learning_rate = 1.,
@@ -2548,6 +2637,7 @@ GPModel <- function(likelihood = "gaussian",
                     seed = 0L,
                     cluster_ids = NULL,
                     likelihood_additional_param = NULL,
+                    num_data = NULL,
                     free_raw_data = FALSE,
                     vecchia_approx = NULL,
                     vecchia_pred_type = NULL,
@@ -2565,6 +2655,7 @@ GPModel <- function(likelihood = "gaussian",
                             , cov_fct_shape = cov_fct_shape
                             , gp_approx = gp_approx
                             , num_parallel_threads = num_parallel_threads
+                            , GPU_use = GPU_use
                             , matrix_inversion_method = matrix_inversion_method
                             , weights = weights
                             , likelihood_learning_rate = likelihood_learning_rate
@@ -2577,6 +2668,7 @@ GPModel <- function(likelihood = "gaussian",
                             , cover_tree_radius = cover_tree_radius
                             , seed = seed
                             , cluster_ids = cluster_ids
+                            , num_data = num_data
                             , free_raw_data = free_raw_data
                             , vecchia_approx = vecchia_approx
                             , vecchia_pred_type = vecchia_pred_type
@@ -2747,6 +2839,7 @@ fitGPModel <- function(likelihood = "gaussian",
                        cov_fct_shape = 1.5,
                        gp_approx = "none",
                        num_parallel_threads = NULL,
+                       GPU_use = FALSE,
                        matrix_inversion_method = "default",
                        weights = NULL,
                        likelihood_learning_rate = 1.,
@@ -2781,6 +2874,7 @@ fitGPModel <- function(likelihood = "gaussian",
                              , cov_fct_shape = cov_fct_shape
                              , gp_approx = gp_approx
                              , num_parallel_threads = num_parallel_threads
+                             , GPU_use = GPU_use
                              , matrix_inversion_method = matrix_inversion_method
                              , weights = weights
                              , likelihood_learning_rate = likelihood_learning_rate
@@ -2793,6 +2887,7 @@ fitGPModel <- function(likelihood = "gaussian",
                              , cover_tree_radius = cover_tree_radius
                              , seed = seed
                              , cluster_ids = cluster_ids
+                             , num_data = length(y)
                              , free_raw_data = free_raw_data
                              , vecchia_approx = vecchia_approx
                              , vecchia_pred_type = vecchia_pred_type
@@ -2814,6 +2909,7 @@ fitGPModel <- function(likelihood = "gaussian",
 #'
 #' @param object a \code{GPModel}
 #' @param ... (not used, ignore this, simply here that there is no CRAN warning)
+#' @inheritParams GPModel_shared_params
 #'
 #' @return Summary of a (fitted) \code{GPModel}
 #'
@@ -2842,8 +2938,8 @@ fitGPModel <- function(likelihood = "gaussian",
 #' @rdname summary.GPModel
 #' @author Fabio Sigrist
 #' @export
-summary.GPModel <- function(object, ...){
-  object$summary()
+summary.GPModel <- function(object, std_err = TRUE, ...){
+  object$summary(std_err = std_err)
   return(invisible(object))
 }
 

@@ -140,6 +140,7 @@ search_space <- list("learning_rate" = c(0.001, 10),
                      "num_leaves" = c(2, 2^10),
                      "lambda_l2" = c(0, 100),
                      "max_bin" = c(63, min(n,10000)),
+                     "feature_fraction" = c(0.5, 1),
                      "line_search_step_length" = c(TRUE, FALSE))
 metric = "mse" # Define metric
 if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
@@ -156,8 +157,8 @@ opt_params <- tune.pars.bayesian.optimization(search_space = search_space, n_ite
                                               metric = metric, crit = crit,
                                               cv_seed = 4, verbose_eval = 1)
 print(paste0("Best parameters: ", paste0(unlist(lapply(seq_along(opt_params$best_params), 
-                                  function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, y=opt_params$best_params, 
-                                  n=names(opt_params$best_params))), collapse=", ")))
+                                                       function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, y=opt_params$best_params, 
+                                                       n=names(opt_params$best_params))), collapse=", ")))
 print(paste0("Best number of iterations: ", opt_params$best_iter))
 print(paste0("Best score: ", round(opt_params$best_score, digits=3)))
 
@@ -177,6 +178,7 @@ param_grid <- list("learning_rate" = c(0.001, 0.01, 0.1, 1, 10),
                    "num_leaves" = 2^(1:10),
                    "lambda_l2" = c(0, 1, 10, 100),
                    "max_bin" = c(250, 500, 1000, min(n,10000)),
+                   "feature_fraction" = c(0.5, 0.75, 1),
                    "line_search_step_length" = c(TRUE, FALSE))
 metric = "mse" # Define metric
 if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
@@ -194,8 +196,8 @@ opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid,
                                               nrounds = 1000, early_stopping_rounds = 20,
                                               verbose_eval = 1, metric = metric, cv_seed = 4)
 print(paste0("Best parameters: ", paste0(unlist(lapply(seq_along(opt_params$best_params), 
-                                  function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, y=opt_params$best_params, 
-                                  n=names(opt_params$best_params))), collapse=", ")))
+                                                       function(y, n, i) { paste0(n[[i]],": ", y[[i]]) }, y=opt_params$best_params, 
+                                                       n=names(opt_params$best_params))), collapse=", ")))
 print(paste0("Best number of iterations: ", opt_params$best_iter))
 print(paste0("Best score: ", round(opt_params$best_score, digits=3)))
 
@@ -211,8 +213,9 @@ opt_params <- gpb.grid.search.tune.parameters(param_grid = param_grid,
 #--------------------Cross-validation for determining number of iterations----------------
 gp_model <- GPModel(group_data = group, likelihood = likelihood)
 dataset <- gpb.Dataset(data = X, label = y)
+set.seed(1)
 bst <- gpb.cv(data = dataset, gp_model = gp_model, params = params,
-              nrounds = 1000, nfold = 5, early_stopping_rounds = 20)
+              nrounds = 1000, nfold = 5, early_stopping_rounds = 20, metric = metric)
 print(paste0("Optimal number of iterations: ", bst$best_iter))
 
 #--------------------Using a validation set for finding number of iterations----------------
@@ -226,7 +229,7 @@ gp_model <- GPModel(group_data = group[train_ind], likelihood = likelihood)
 gp_model$set_prediction_data(group_data_pred = group[-train_ind])
 bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = 1000,
                  params = params, verbose = 1, valids = valids,
-                 early_stopping_rounds = 20)
+                 early_stopping_rounds = 20, metric = metric)
 print(paste0("Optimal number of iterations: ", bst$best_iter,
              ", best test error: ", bst$best_score))
 # Plot validation error
@@ -302,6 +305,71 @@ summary(bst_loaded$.__enclos_env__$private$gp_model)
 # Note: can also convert to string and load from string
 # model_str <- bst$save_model_to_string()
 # bst_loaded <- gpb.load(model_str = model_str)
+
+#--------------------Continue training----------------
+gp_model_cont <- GPModel(group_data = group, likelihood = likelihood)
+dataset <- gpb.Dataset(data = X, label = y)
+# Train for 10 boosting iterations
+bst <- gpb.train(data = dataset, gp_model = gp_model_cont, nrounds = 10,
+                 params = params, verbose = 0) # Note: 'params' is defined above in this demo
+# Continue training with more boosting iterations
+bst_cont <- gpb.train(data = dataset, gp_model = gp_model_cont, nrounds = nrounds-10,
+                      params = params, verbose = 0,
+                      init_model = bst)
+pred_cont <- predict(bst_cont, data = Xtest, group_data_pred = group_test, 
+                     predict_var = TRUE, pred_latent = TRUE)
+# Check equality
+pred$fixed_effect - pred_cont$fixed_effect
+pred$random_effect_mean - pred_cont$random_effect_mean
+pred$random_effect_cov - pred_cont$random_effect_cov
+summary(gp_model)
+summary(gp_model_cont)
+
+#--------------------Custom validation loss for choosing the number of iterations----------------
+l4_loss <- function(preds, dtrain) {
+  y <- getinfo(dtrain, "label")
+  loss <- sum((preds - y)^4) / length(y)
+  list(name = "l4_loss", value = loss, higher_better = FALSE)
+}
+gp_model <- GPModel(group_data = group, likelihood = likelihood)
+dataset <- gpb.Dataset(data = X, label = y)
+params_cust <- params
+params_cust$first_metric_only <- FALSE  # early stop only on the first metric or not
+set.seed(1)
+bst <- gpb.cv(data = dataset, gp_model = gp_model, params = params_cust,
+              nrounds = 1000, nfold = 5, early_stopping_rounds = 20,
+              eval = list(metric, l4_loss),
+              use_gp_model_for_validation = FALSE) # Currently, only use_gp_model_for_validation = False is supported
+print(paste0("Optimal number of iterations: ", bst$best_iter))
+l4_vals <- bst$record_evals$valid[["l4_loss"]]$eval
+best_iter_l4 <- which.min(l4_vals)
+cat("Best number of iterations for custom loss:", best_iter_l4, "\n")
+
+#--------------------Using offsets in GPBoost models----------------
+gp_model <- GPModel(group_data = group, likelihood = likelihood)
+# 'init_score' corresponds to an offset for training
+dataset <- gpb.Dataset(data = X, label = y, init_score = -0.5*X[,1])
+bst <- gpb.train(data = dataset, gp_model = gp_model, nrounds = nrounds,
+                 params = params, verbose = 0) # Note: 'params' is defined above in this demo
+# Add offset to predictions ('offset_pred'): example when prediction the latent variable
+group_test <- 1:m # Predictions for existing groups
+x_test <- seq(from=0, to=1, length.out=m)
+Xtest <- cbind(x_test, matrix(0, ncol=p-1 , nrow=m))
+pred_lat <- predict(bst, data = Xtest, group_data_pred = group_test, 
+                    predict_var = TRUE, pred_latent = TRUE, offset_pred = rep(0.3,dim(Xtest)[1]))
+x <- seq(from=0, to=1, length.out=200)
+ylim <- c(min(c(f1d(x),pred_lat$fixed_effect)),max(c(f1d(x),pred_lat$fixed_effect)))
+plot(x, f1d(x), type="l",lwd=3, col=2, main="True and predicted latent function F", ylim=ylim)
+lines(Xtest[,1], pred_lat$fixed_effect, col=4, lwd=3)
+legend(legend=c("True F","Pred F"), "bottomright", bty="n", lwd=3, col=c(2,4))
+# Interpretation: the offset for training ('init_score') is negatively correlated with y,
+#   and consequently the trained F(x) has larger magnitude at both ends to compensate for this. 
+#   In addition, the offset for prediction ('offset_pred') shifts all predictions up
+# Predict response variable
+pred_resp <- predict(bst, data = Xtest, group_data_pred = group_test, 
+                     predict_var = TRUE, pred_latent = FALSE, offset_pred = rep(0.3,dim(Xtest)[1]))
+plot(X[,1], y, col=rgb(0,0,0,alpha=0.1), main="Data and predicted response variable")
+lines(Xtest[,1], pred_resp$response_mean, col=3, lwd=3)
 
 #--------------------GPBoostOOS algorithm: Hyperparameters estimated out-of-sample----------------
 # Create random effects model and dataset

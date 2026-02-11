@@ -8,7 +8,7 @@ fitGPModel(likelihood = "gaussian", group_data = NULL,
   group_rand_coef_data = NULL, ind_effect_group_rand_coef = NULL,
   drop_intercept_group_rand_effect = NULL, gp_coords = NULL,
   gp_rand_coef_data = NULL, cov_function = "matern", cov_fct_shape = 1.5,
-  gp_approx = "none", num_parallel_threads = NULL,
+  gp_approx = "none", num_parallel_threads = NULL, GPU_use = FALSE,
   matrix_inversion_method = "default", weights = NULL,
   likelihood_learning_rate = 1, cov_fct_taper_range = 1,
   cov_fct_taper_shape = 1, num_neighbors = NULL,
@@ -44,8 +44,12 @@ The variance is mu * (1 + phi), mu = mean, phi = dispersion, with this parametri
 \item{ "lognormal": Log-normal likelihood with a log link function }
 \item{ "beta" : Beta likelihood with a logit link function (parametrization of Ferrari and Cribari-Neto, 2004)}
 \item{ "t": t-distribution (e.g., for robust regression) }
-\item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated. 
-The df can be set via the \code{likelihood_additional_param} parameter }
+\item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated
+\itemize{ \item{ The degrees-of-freedom (df) can be set via the \code{likelihood_additional_param} parameter. The default is df = 2 }}
+}
+\item{ "quantile_regression" / "asymmetric_laplace" : an asymmetric Laplace likelihood for quantile regression, aliases: "asymmetric_laplace", "quantile_regression" 
+\itemize{ \item{ The quantile can be set via the \code{likelihood_additional_param} parameter. The default is quantile = 0.5 }}
+}
 \item{ "zero_inflated_gamma": Zero-inflated gamma likelihood. 
 The log-transformed mean of the response variable equals the sum of fixed and random effects, E(y) = mu = exp(F(X) + Zb), 
 and the rate parameter equals (1-p0) * gamma / mu, where p0 is the zero-inflation probability and gamma the shape parameter. 
@@ -103,16 +107,25 @@ This covariance has seven parameters (in the following order: sigma2, a, c, alph
 You can disable the estimation of some of these parameter using the 'estimate_cov_par_index' argument of the \code{params} argument in either 
 the \code{fit} function of a \code{gp_model} object or the \code{set_optim_params} function prior to estimation. }
 \item{ "matern_ard": anisotropic Matern covariance function with Automatic Relevance Determination (ARD), 
-i.e., with a different range parameter for every coordinate dimension / column of \code{gp_coords} }
+i.e., with a different range parameter for every coordinate of \code{gp_coords} }
 \item{ "matern_ard_estimate_shape": same as "matern_ard" but the smoothness parameter is also estimated }
 \item{ "exponential": Exponential covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
 \item{ "gaussian": Gaussian, aka squared exponential, covariance function (using the parametrization of Diggle and Ribeiro, 2007) }
 \item{ "gaussian_ard": anisotropic Gaussian, aka squared exponential, covariance function with Automatic Relevance Determination (ARD), 
-i.e., with a different range parameter for every coordinate dimension / column of \code{gp_coords} }
+i.e., with a different range parameter for every coordinate of \code{gp_coords} }
 \item{ "powered_exponential": powered exponential covariance function with the exponent specified by 
 the \code{cov_fct_shape} parameter (using the parametrization of Diggle and Ribeiro, 2007) }
-\item{ "wendland": Compactly supported Wendland covariance function (using the parametrization of Bevilacqua et al., 2019, AOS) }
-\item{ "linear": linear covariance function. This corresponds to a Bayesian linear regression model with a Gaussian prior on the coefficients with a constant variance diagonal prior covariance, and the prior variance is estimated using empirical Bayes. }
+\item{ "wendland": Compactly supported Wendland covariance function 
+(using the parametrization of Bevilacqua et al., 2019, AOS) }
+\item{ "linear": linear covariance function. This corresponds to a Bayesian linear 
+regression model with a Gaussian prior on the coefficients with a constant variance 
+diagonal prior covariance, and the prior variance is estimated using empirical Bayes. }
+\item{ "hurst": Hurst covariance function cov(s, s') = (sigma2 / 2) * ( ||s||^(2H) + ||s'||^(2H) - ||s - s'||^(2H) ). 
+For H = 0.5, this corresponds to Brownian motion (-> see the 'estimate_cov_par_index' argument) }
+\item{ "hurst_ard": Hurst covariance function with with Automatic Relevance Determination (ARD), 
+i.e., with a different range parameter for every coordinate of ``gp_coords`` except 
+for the first coordinate which has a range parameter of 1 due to identifiability with the marginal variance: 
+\eqn{ cov(s, s') = (\sigma^2/2)\left[ \left(s_1^2 + \sum_{k=2}^d (s_k/l_k)^2\right)^H + \left({s'}_1^2 + \sum_{k=2}^d ({s'}_k/l_k)^2\right)^H - \left((s_1-{s'}_1)^2 + \sum_{k=2}^d ((s_k-{s'}_k)/l_k)^2\right)^H \right] } }
 }}
 
 \item{cov_fct_shape}{A \code{numeric} specifying the shape parameter of the covariance function 
@@ -139,6 +152,8 @@ for likelihood == "gaussian". For likelihood != "gaussian", "vecchia" and "vecch
 
 \item{num_parallel_threads}{An \code{integer} specifying the number of parallel threads for OMP. 
 If num_parallel_threads = NULL, all available threads are used}
+
+\item{GPU_use}{A \code{boolean}. If TRUE, GPU acceleration will be used if supported}
 
 \item{matrix_inversion_method}{A \code{string} specifying the method used for inverting covariance matrices. 
 Available options:
@@ -247,11 +262,13 @@ fixed effects linear regression term (if there is one)}
     Initial values for additional parameters for non-Gaussian likelihoods 
     (e.g., shape parameter of a gamma or negative_binomial likelihood) }
     \item{estimate_cov_par_index: \code{vector} with \code{integer} (default = -1). 
-    This allows for disabling the estimation of some (or all) covariance parameters if estimate_cov_par_index != -1. 
-    'estimate_cov_par_index' should then be a vector with length equal to the number of covariance parameters, 
+    This allows for disabling the estimation of some (or all) covariance parameters. 
+    If 'estimate_cov_par_index' = -1, all covariance parameters are estimated. 
+    If estimate_cov_par_index != -1, this should be a vector with length equal to the number of covariance parameters, 
     and estimate_cov_par_index[i] should be of bool type indicating whether parameter number i is estimated or not. 
     For instance, estimate_cov_par_index = c(1,1,0) means that the first two covariance parameters 
-    are estimated and the last one not.}  
+    are estimated and the last one not. 
+    Parameters that are not estimated are kept at their initial values (see 'init_cov_pars'). }  
     \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
     If TRUE, additional parameters for non-Gaussian likelihoods 
     are also estimated (e.g., shape parameter of a gamma or negative_binomial likelihood) }
@@ -379,7 +396,8 @@ the function \code{get_aux_pars} after estimation.
 Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.
 If \code{likelihood_additional_param = NULL}, the following internal default values are used:
 \itemize{
-\item{ df = 2 for likelihood = "t_fix_df"}
+\item{ df = 2 for likelihood = "t_fix_df" }
+\item{ quantile = 0.5 for likelihood = "asymmetric_laplace" }
 }}
 }
 \value{

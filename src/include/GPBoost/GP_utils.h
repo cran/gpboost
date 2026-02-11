@@ -286,7 +286,7 @@ namespace GPBoost {
 //				}
 //			}
 //		}
-		
+
 		dist = T_mat(coords2.rows(), coords1.rows());
 		dist.setFromTriplets(triplets.begin(), triplets.end());
 		dist.makeCompressed();
@@ -516,12 +516,14 @@ namespace GPBoost {
 	* \param gen RNG
 	* \param[out] means data cluster means that determine the inducing points
 	* \param[out] max_int maximal number of iterations
+	* \params initial_means_provided If true, means contains intial values for the means
 	*/
 	void kmeans_plusplus(const den_mat_t& data,
 		int k,
 		RNG_t& gen,
 		den_mat_t& means,
-		int max_it);
+		int max_it,
+		bool initial_means_provided);
 
 	/*
 	Determines indices of data which is inside a ball with given radius around given point
@@ -548,6 +550,42 @@ namespace GPBoost {
 		double eps,
 		RNG_t& gen,
 		den_mat_t& means);
+
+	/*!
+	* \brief Matrix-multiplication A * B = C (dense)
+	* \param A First Matrix
+	* \param B Second Matrix
+	* \param[out] C = A * B
+	* \param GPU_use if false Use CPU
+	*/
+	void matmul(const den_mat_t& A, const den_mat_t& B, den_mat_t& C, bool GPU_use);
+
+	/*!
+	* \brief Matrix-multiplication A * B = C (sparse)
+	* \param A First Matrix
+	* \param B Second Matrix
+	* \param[out] C = A * B
+	* \param GPU_use if false Use CPU
+	*/
+	void spmatmul(const sp_mat_rm_t& A, const sp_mat_rm_t& B, sp_mat_rm_t& C, bool GPU_use);
+
+	/*!
+	* \brief Linear solve L^{-1} * R = X for given Cholesky factor L
+	* \param chol Cholesky factor L
+	* \param R_host Right-hand side
+	* \param[out] X = L^{-1} * R
+	* \param GPU_use if false Use CPU
+	*/
+	void solve_lower_triangular(const chol_den_mat_t& chol, const den_mat_t& R_host, den_mat_t& X_host, bool GPU_use);
+
+	/*!
+	* \brief Linear solve A^{-1} * R = X for given Cholesky factor L of A
+	* \param chol Cholesky factor L
+	* \param R_host Right-hand side
+	* \param[out] X = A^{-1} * R
+	* \param GPU_use if false Use CPU
+	*/
+	void solve_linear_sys(const chol_den_mat_t& chol, const den_mat_t& R_host, den_mat_t& X_host, bool GPU_use);
 
 }  // namespace GPBoost
 

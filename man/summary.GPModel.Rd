@@ -4,10 +4,14 @@
 \alias{summary.GPModel}
 \title{Summary for a \code{GPModel}}
 \usage{
-\method{summary}{GPModel}(object, ...)
+\method{summary}{GPModel}(object, std_err = TRUE, ...)
 }
 \arguments{
 \item{object}{a \code{GPModel}}
+
+\item{std_err}{A \code{boolean}. If TRUE, (approximate) standard errors are calculated 
+(= square root of diagonal of the inverse Fisher information for Gaussian likelihoods and 
+square root of diagonal of a numerically approximated inverse Hessian for non-Gaussian likelihoods)}
 
 \item{...}{(not used, ignore this, simply here that there is no CRAN warning)}
 }
