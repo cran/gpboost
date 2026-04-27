@@ -1,4 +1,4 @@
-# Copyright (c) 2020 - 2025 Fabio Sigrist. All rights reserved.
+# Copyright (c) 2020 - 2026 Fabio Sigrist. All rights reserved.
 # 
 # Licensed under the Apache License Version 2.0. See LICENSE file in the project root for license information.
 
@@ -11,6 +11,8 @@
 #' \item{ "gaussian" }
 #' \item{ "bernoulli_logit": Bernoulli likelihood with a logit link function for binary classification. Aliases: "binary", "binary_logit" }
 #' \item{ "bernoulli_probit": Bernoulli likelihood with a probit link function for binary classification. Aliases: "binary_probit" }
+#' \item{ "quasi_bernoulli_logit": quasi-Bernoulli likelihood with a logit link function for y in [0,1]. Aliases: "quasi_binary", "quasi_binary_logit" }
+#' \item{ "quasi_bernoulli_probit": quasi-Bernoulli likelihood with a probit link function for y in [0,1]. Aliases: "quasi_binary_probit" }
 #' \item{ "binomial_logit": Binomial likelihood with a logit link function. 
 #' The response variable \code{y} needs to contain proportions of successes / trials, 
 #' and the \code{weights} parameter needs to contain the numbers of trials. Aliases: "binomial"}
@@ -231,7 +233,7 @@
 #' @param cluster_ids A \code{vector} with elements indicating independent realizations of 
 #' random effects / Gaussian processes (same values = same process realization).
 #' The elements of 'cluster_ids' can be integer, double, or character.
-#' @param weights A \code{vector} with sample weights
+#' @param weights A \code{vector} with sample weights. Note that this affects both the random and fixed effects components.
 #' @param likelihood_learning_rate A \code{numeric} with a learning rate for the likelihood for generalized Bayesian inference (only non-Gaussian likelihoods)
 #' @param free_raw_data A \code{boolean}. If TRUE, the data (groups, coordinates, covariate data for random coefficients) 
 #' is freed in R after initialization
@@ -394,6 +396,10 @@
 #' predictive covariance is calculated in addition to the (posterior) predictive mean
 #' @param predict_var A \code{boolean}. If TRUE, the (posterior) 
 #' predictive variances are calculated
+#' @param sample_posterior A \code{boolean}. If TRUE, samples from the posterior are drawn (currently very limited support)
+#' @param sample_prior A \code{boolean}. If TRUE, samples from the prior are drawn (currently very limited support)
+#' @param num_post_samples A \code{numeric} with the number of posterior samples to draw if 'sample_posterior=TRUE'
+#' @param num_prior_samples A \code{numeric} with the number of prior samples to draw if 'sample_prior=TRUE'
 #' @param std_err A \code{boolean}. If TRUE, (approximate) standard errors are calculated 
 #'                (= square root of diagonal of the inverse Fisher information for Gaussian likelihoods and 
 #'                square root of diagonal of a numerically approximated inverse Hessian for non-Gaussian likelihoods)
@@ -568,11 +574,7 @@ gpb.GPModel <- R6::R6Class(
         private$num_sets_re = 2
         private$num_sets_fe = 2
       }
-      if (likelihood == "gaussian" & gp_approx != "vecchia_latent") {
-        private$cov_par_names <- c("Error_var")
-      } else {
-        private$cov_par_names <- c()
-      }
+      private$cov_par_names <- c()
       private$matrix_inversion_method <- as.character(matrix_inversion_method)
       private$seed <- as.integer(seed)
       if (!is.null(num_parallel_threads)) {
@@ -692,7 +694,7 @@ gpb.GPModel <- R6::R6Class(
           }
           if (!is.null(private$drop_intercept_group_rand_effect)) {
             if (sum(private$drop_intercept_group_rand_effect) > 0) {
-              ind_drop <- ((1:private$num_group_re) + (likelihood == "gaussian" & gp_approx != "vecchia_latent"))[private$drop_intercept_group_rand_effect]
+              ind_drop <- (1:private$num_group_re)[private$drop_intercept_group_rand_effect]
               private$cov_par_names <- private$cov_par_names[-ind_drop]
               private$re_comp_names <- private$re_comp_names[-which(private$drop_intercept_group_rand_effect)]
             }
@@ -702,6 +704,9 @@ gpb.GPModel <- R6::R6Class(
       # Set data for Gaussian process part
       private$cover_tree_radius <- as.numeric(cover_tree_radius)##TODO DELETE: this is a hack for setting the quantile parameter
       if (!is.null(gp_coords)) {
+        if (private$num_group_re > 0 & gp_approx == "vecchia") {
+          gp_approx <- "vecchia_latent"
+        }
         # Check for correct format
         if (!(is.data.frame(gp_coords) | is.matrix(gp_coords) | 
               is.numeric(gp_coords))) {
@@ -909,6 +914,10 @@ gpb.GPModel <- R6::R6Class(
         private$cov_par_names <- c(private$cov_par_names, paste0(private$cov_par_names,"_scale"))
         private$re_comp_names <- c(private$re_comp_names, paste0(private$re_comp_names,"_scale"))
       }
+      if (likelihood == "gaussian" & gp_approx != "vecchia_latent") {
+        private$cov_par_names <- c("Error_var", private$cov_par_names)
+      }
+      
       # Set IDs for independent processes (cluster_ids)
       if (!is.null(cluster_ids)) {
         if (is.vector(cluster_ids)) {
@@ -1147,8 +1156,10 @@ gpb.GPModel <- R6::R6Class(
              sQuote("cov_pars"))
       }
       if (length(cov_pars) != private$num_cov_pars) {
-        stop("GPModel.neg_log_likelihood: Number of parameters in ", sQuote("cov_pars"), 
-             " does not correspond to numbers of parameters")
+        add_message <- ""
+        if (private$gp_approx == "vecchia_latent") add_message <- ". The error variance should be provided via the 'aux_pars' argument"
+        stop("GPModel.neg_log_likelihood: Size of ", sQuote("cov_pars"), 
+             " does not correspond to the number of parameters", add_message)
       }
       if (!is.vector(y)) {
         if (is.matrix(y)) {
@@ -1575,6 +1586,10 @@ gpb.GPModel <- R6::R6Class(
                        cluster_ids_pred = NULL,
                        predict_cov_mat = FALSE,
                        predict_var = FALSE,
+                       sample_posterior = FALSE,
+                       sample_prior = FALSE,
+                       num_post_samples = 100,
+                       num_prior_samples = 100,
                        cov_pars = NULL,
                        X_pred = NULL,
                        use_saved_data = FALSE,
@@ -1649,7 +1664,9 @@ gpb.GPModel <- R6::R6Class(
           stop("predict.GPModel: Can only use ", sQuote("vector"), " as ", sQuote("cov_pars"))
         }
         if (length(cov_pars) != private$num_cov_pars) {
-          stop("predict.GPModel: Number of parameters in ", sQuote("cov_pars"), " does not correspond to numbers of parameters of model")
+          add_message <- ""
+          if (private$gp_approx == "vecchia_latent") add_message <- ". The error variance should be provided via the 'aux_pars' argument"
+          stop("predict.GPModel: Size of ", sQuote("cov_pars"), " does not correspond to the number of parameters", add_message)
         }
       }
       # Set data for linear fixed-effects
@@ -1843,6 +1860,12 @@ gpb.GPModel <- R6::R6Class(
       if (storage.mode(predict_var) != "logical") {
         stop("predict.GPModel: Can only use ", sQuote("logical"), " as ", sQuote("predict_var"))
       }
+      if (storage.mode(sample_posterior) != "logical") {
+        stop("predict.GPModel: Can only use ", sQuote("logical"), " as ", sQuote("sample_posterior"))
+      }
+      if (storage.mode(sample_prior) != "logical") {
+        stop("predict.GPModel: Can only use ", sQuote("logical"), " as ", sQuote("sample_prior"))
+      }
       if (storage.mode(predict_response) != "logical") {
         stop("predict.GPModel: Can only use ", sQuote("logical"), " as ", sQuote("predict_response"))
       }
@@ -1867,13 +1890,22 @@ gpb.GPModel <- R6::R6Class(
         }
       }# end offset_pred
       # Pre-allocate empty vector
-      if (predict_var) {
-        preds <- numeric(num_data_pred * 2)
-      } else if (predict_cov_mat) {
-        preds <- numeric(num_data_pred * (1 + num_data_pred))
-      } else {
-        preds <- numeric(num_data_pred)
+      size_allocate <- 0
+      if (!sample_prior) {
+        size_allocate <- size_allocate + num_data_pred
       }
+      if (predict_var) {
+        size_allocate <- size_allocate + num_data_pred
+      } else if (predict_cov_mat) {
+        size_allocate <- size_allocate + num_data_pred * num_data_pred
+      }
+      if (sample_posterior) {
+        size_allocate <- size_allocate + num_data_pred * num_post_samples
+      }
+      if (sample_prior) {
+        size_allocate <- size_allocate + private$num_data * num_prior_samples
+      }
+      preds <- numeric(size_allocate)
       .Call(
         GPB_PredictREModel_R
         , private$handle
@@ -1882,6 +1914,10 @@ gpb.GPModel <- R6::R6Class(
         , predict_cov_mat
         , predict_var
         , predict_response
+        , sample_posterior
+        , sample_prior
+        , as.integer(num_post_samples)
+        , as.integer(num_prior_samples)
         , cluster_ids_pred
         , group_data_pred_c_str
         , group_rand_coef_data_pred
@@ -1895,15 +1931,31 @@ gpb.GPModel <- R6::R6Class(
         , preds
       )
       # Process C++ output
-      pred_mean <- preds[1:num_data_pred]
+      pred_mean <- NA
       pred_cov_mat <- NA
       pred_var <- NA
+      posterior_samples <- NA
+      prior_samples <- NA
+      idx_start_post_sample <- 0
+      if (!sample_prior) {
+        pred_mean <- preds[1:num_data_pred]
+        idx_start_post_sample <- idx_start_post_sample + num_data_pred
+      }
       if (predict_var) {
         pred_var <- preds[1:num_data_pred + num_data_pred]
+        idx_start_post_sample <- idx_start_post_sample + num_data_pred
       } else if (predict_cov_mat) {
         pred_cov_mat <- matrix(preds[1:(num_data_pred^2) + num_data_pred],ncol=num_data_pred)
+        idx_start_post_sample <- idx_start_post_sample + num_data_pred^2
       }
-      return(list(mu=pred_mean,cov=pred_cov_mat,var=pred_var))
+      if (sample_posterior) {
+        posterior_samples <- matrix(preds[1:(num_data_pred*num_post_samples) + idx_start_post_sample], ncol=num_post_samples)
+        idx_start_post_sample <- idx_start_post_sample + num_data_pred*num_post_samples
+      }
+      if (sample_prior) {
+        prior_samples <- matrix(preds[1:(private$num_data*num_prior_samples) + idx_start_post_sample], ncol=num_prior_samples)
+      }
+      return(list(mu=pred_mean,cov=pred_cov_mat,var=pred_var,posterior_samples=posterior_samples,prior_samples=prior_samples))
     },
     
     predict_training_data_random_effects = function(predict_var = FALSE) {
@@ -2088,6 +2140,16 @@ gpb.GPModel <- R6::R6Class(
       num_it <- integer(1)
       .Call(
         GPB_GetNumCGStepsTridiag_R
+        , private$handle
+        , num_it
+      )
+      return(num_it)
+    },
+    
+    get_num_mode_finding_steps = function() {
+      num_it <- integer(1)
+      .Call(
+        GPB_GetNumModeFindingSteps_R
         , private$handle
         , num_it
       )
@@ -3022,6 +3084,10 @@ predict.GPModel <- function(object,
                             predict_response = TRUE,
                             predict_var = FALSE,
                             predict_cov_mat = FALSE,
+                            sample_posterior = FALSE,
+                            sample_prior = FALSE,
+                            num_post_samples = 100,
+                            num_prior_samples = 100,
                             y = NULL,
                             cov_pars = NULL,
                             group_data_pred = NULL,
@@ -3045,6 +3111,10 @@ predict.GPModel <- function(object,
                          , cluster_ids_pred = cluster_ids_pred
                          , predict_cov_mat = predict_cov_mat
                          , predict_var = predict_var
+                         , sample_posterior = sample_posterior
+                         , sample_prior = sample_prior
+                         , num_post_samples = num_post_samples
+                         , num_prior_samples = num_prior_samples
                          , cov_pars = cov_pars
                          , X_pred = X_pred
                          , use_saved_data = use_saved_data

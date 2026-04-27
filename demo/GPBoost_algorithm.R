@@ -72,16 +72,17 @@ hist(y, breaks=20)  # visualize response variable
 #--------------------Training----------------
 # Define random effects model
 gp_model <- GPModel(group_data = group, likelihood = likelihood)
-# The default optimizer for covariance parameters (hyperparameters) is 
-# Nesterov-accelerated gradient descent.
-# This can be changed to, e.g., Nelder-Mead as follows:
-# set_optim_params(gp_model, params=list(optimizer_cov="nelder_mead"))
-# Use the option trace=TRUE to monitor convergence of hyperparameter estimation of the gp_model. E.g.:
-# set_optim_params(gp_model, params=list(trace=TRUE))
+# - Use the option trace=TRUE to monitor convergence of hyperparameter estimation of the gp_model. E.g.:
+#   set_optim_params(gp_model, params=list(trace=TRUE))
+# - iid boosting without random effects or GP: 
+#   gp_model <- GPModel(num_data = n, likelihood = likelihood)
+# - The default optimizer for covariance parameters (hyperparameters) is "lbfgs".
+#   This can be changed to, e.g., Nelder-Mead as follows:
+#   set_optim_params(gp_model, params=list(optimizer_cov="nelder_mead"))
 
 # Specify boosting parameters
 # Note: these parameters are by no means optimal for all data sets but 
-#       need to be chosen appropriately, e.g., using 'gpb.grid.search.tune.parameters'
+#       need to be chosen appropriately (see below)
 nrounds <- 250
 if (likelihood=="gaussian") {
   nrounds <- 50
@@ -102,7 +103,7 @@ bst <- gpb.train(data = dataset, gp_model = gp_model, nrounds = nrounds,
 group_test <- 1:m # Predictions for existing groups
 group_test_new <- rep(-1,m) # Can also do predictions for new/unobserved groups
 x_test <- seq(from=0, to=1, length.out=m)
-Xtest <- cbind(x_test, matrix(0, ncol=p-1 , nrow=m))
+Xtest <- cbind(x_test, matrix(0.5, ncol=p-1 , nrow=m))
 # 1. Predict latent variable (pred_latent=TRUE) and variance
 pred <- predict(bst, data = Xtest, group_data_pred = group_test, 
                 predict_var = TRUE, pred_latent = TRUE)
@@ -128,6 +129,14 @@ legend(legend=c("True F","Pred F"), "bottomright", bty="n", lwd=3, col=c(2,4))
 plot(b1, pred$random_effect_mean, xlab="truth", ylab="predicted",
      main="Comparison of true and predicted random effects")
 
+# Define metric for parameter tuning and CV below
+# Can also use metric = "test_neg_log_likelihood" 
+# For more options, see https://github.com/fabsig/GPBoost/blob/master/docs/Parameters.rst#metric-parameters
+metric = "mse"
+if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
+  metric = "binary_logloss"
+}
+
 #--------------------Choosing tuning parameters using Bayesian optimization and the 'mlrMBO' R package ----------------
 packakes_to_load <- c("mlrMBO", "DiceKriging", "rgenoud") # load required packages (non-standard way of loading to avoid CRAN warnings)
 for (package in packakes_to_load) do.call(require,list(package, character.only=TRUE))
@@ -142,11 +151,6 @@ search_space <- list("learning_rate" = c(0.001, 10),
                      "max_bin" = c(63, min(n,10000)),
                      "feature_fraction" = c(0.5, 1),
                      "line_search_step_length" = c(TRUE, FALSE))
-metric = "mse" # Define metric
-if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
-  metric = "binary_logloss"
-}
-# Note: can also use metric = "test_neg_log_likelihood". For more options, see https://github.com/fabsig/GPBoost/blob/master/docs/Parameters.rst#metric-parameters
 gp_model <- GPModel(group_data = group, likelihood = likelihood)
 data_train <- gpb.Dataset(data = X, label = y)
 # Run parameter optimization using Bayesian optimization and k-fold CV 
@@ -180,11 +184,6 @@ param_grid <- list("learning_rate" = c(0.001, 0.01, 0.1, 1, 10),
                    "max_bin" = c(250, 500, 1000, min(n,10000)),
                    "feature_fraction" = c(0.5, 0.75, 1),
                    "line_search_step_length" = c(TRUE, FALSE))
-metric = "mse" # Define metric
-if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
-  metric = "binary_logloss"
-}
-# Note: can also use metric = "test_neg_log_likelihood". For more options, see https://github.com/fabsig/GPBoost/blob/master/docs/Parameters.rst#metric-parameters
 gp_model <- GPModel(group_data = group, likelihood = likelihood)
 data_train <- gpb.Dataset(data = X, label = y)
 set.seed(1)

@@ -10,6 +10,8 @@ Available options:
 \item{ "gaussian" }
 \item{ "bernoulli_logit": Bernoulli likelihood with a logit link function for binary classification. Aliases: "binary", "binary_logit" }
 \item{ "bernoulli_probit": Bernoulli likelihood with a probit link function for binary classification. Aliases: "binary_probit" }
+\item{ "quasi_bernoulli_logit": quasi-Bernoulli likelihood with a logit link function for y in [0,1]. Aliases: "quasi_binary", "quasi_binary_logit" }
+\item{ "quasi_bernoulli_probit": quasi-Bernoulli likelihood with a probit link function for y in [0,1]. Aliases: "quasi_binary_probit" }
 \item{ "binomial_logit": Binomial likelihood with a logit link function. 
 The response variable \code{y} needs to contain proportions of successes / trials, 
 and the \code{weights} parameter needs to contain the numbers of trials. Aliases: "binomial"}
@@ -258,7 +260,7 @@ Default value if NULL: 1000}
 random effects / Gaussian processes (same values = same process realization).
 The elements of 'cluster_ids' can be integer, double, or character.}
 
-\item{weights}{A \code{vector} with sample weights}
+\item{weights}{A \code{vector} with sample weights. Note that this affects both the random and fixed effects components.}
 
 \item{likelihood_learning_rate}{A \code{numeric} with a learning rate for the likelihood for generalized Bayesian inference (only non-Gaussian likelihoods)}
 
@@ -436,6 +438,14 @@ predictive covariance is calculated in addition to the (posterior) predictive me
 
 \item{predict_var}{A \code{boolean}. If TRUE, the (posterior) 
 predictive variances are calculated}
+
+\item{sample_posterior}{A \code{boolean}. If TRUE, samples from the posterior are drawn (currently very limited support)}
+
+\item{sample_prior}{A \code{boolean}. If TRUE, samples from the prior are drawn (currently very limited support)}
+
+\item{num_post_samples}{A \code{numeric} with the number of posterior samples to draw if 'sample_posterior=TRUE'}
+
+\item{num_prior_samples}{A \code{numeric} with the number of prior samples to draw if 'sample_prior=TRUE'}
 
 \item{std_err}{A \code{boolean}. If TRUE, (approximate) standard errors are calculated 
 (= square root of diagonal of the inverse Fisher information for Gaussian likelihoods and 

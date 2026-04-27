@@ -159,6 +159,18 @@ namespace GPBoost {
 		}
 	}
 
+	bool REModel::LikelihoodSupported(const string_t& likelihood) const {
+		if (matrix_format_ == "sp_mat_t") {
+			return re_model_sp_->LikelihoodSupported(likelihood);
+		}
+		else if (matrix_format_ == "sp_mat_rm_t") {
+			return re_model_sp_rm_->LikelihoodSupported(likelihood);
+		}
+		else {
+			return re_model_den_->LikelihoodSupported(likelihood);
+		}
+	}
+
 	double REModel::TransformToReponseScale(const double value) const {
 		if (matrix_format_ == "sp_mat_t") {
 			return(re_model_sp_->TransformToReponseScale(value));
@@ -228,6 +240,18 @@ namespace GPBoost {
 		}
 		else {
 			return(re_model_den_->GetNumCGStepsTridiag());
+		}
+	}
+
+	int REModel::GetNumModeFindingSteps() const {
+		if (matrix_format_ == "sp_mat_t") {
+			return(re_model_sp_->GetNumModeFindingSteps());
+		}
+		else if (matrix_format_ == "sp_mat_rm_t") {
+			return(re_model_sp_rm_->GetNumModeFindingSteps());
+		}
+		else {
+			return(re_model_den_->GetNumModeFindingSteps());
 		}
 	}
 
@@ -618,34 +642,16 @@ namespace GPBoost {
 			}
 		}
 		if (matrix_format_ == "sp_mat_t") {
-			if (re_model_sp_->gauss_likelihood_) {
-				re_model_sp_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
-					negll, false, false, false, true);
-			}
-			else {
-				re_model_sp_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
-					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done, true);
-			}
+			re_model_sp_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), negll,
+				fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
-			if (re_model_sp_rm_->gauss_likelihood_) {
-				re_model_sp_rm_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
-					negll, false, false, false, true);
-			}
-			else {
-				re_model_sp_rm_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
-					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done, true);
-			}
+			re_model_sp_rm_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), negll,
+				fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
 		}
 		else {
-			if (re_model_den_->gauss_likelihood_) {
-				re_model_den_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), fixed_effects, 
-					negll, false, false, false, true);
-			}
-			else {
-				re_model_den_->EvalLaplaceApproxNegLogLikelihood(y_data, cov_pars_trafo.data(), negll, 
-					fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done, true);
-			}
+			re_model_den_->EvalNegLogLikelihood(y_data, cov_pars_trafo.data(), negll,
+				fixed_effects, InitializeModeCovMat, CalcModePostRandEff_already_done);
 		}
 		covariance_matrix_has_been_factorized_ = false;
 		//set to false as otherwise the covariance is not factorized for prediction for Gaussian data and this can lead to problems 
@@ -930,6 +936,10 @@ namespace GPBoost {
 		bool predict_cov_mat,
 		bool predict_var,
 		bool predict_response,
+		bool sample_posterior,
+		bool sample_prior,
+		int num_post_samples,
+		int num_prior_samples,
 		const data_size_t* cluster_ids_data_pred,
 		const char* re_group_data_pred,
 		const double* re_group_rand_coef_data_pred,
@@ -991,6 +1001,10 @@ namespace GPBoost {
 				predict_cov_mat,
 				predict_var,
 				predict_response,
+				sample_posterior,
+				sample_prior,
+				num_post_samples,
+				num_prior_samples,
 				covariate_data_pred,
 				coef_.data(),
 				cluster_ids_data_pred,
@@ -1011,6 +1025,10 @@ namespace GPBoost {
 				predict_cov_mat,
 				predict_var,
 				predict_response,
+				sample_posterior,
+				sample_prior,
+				num_post_samples,
+				num_prior_samples,
 				covariate_data_pred,
 				coef_.data(),
 				cluster_ids_data_pred,
@@ -1031,6 +1049,10 @@ namespace GPBoost {
 				predict_cov_mat,
 				predict_var,
 				predict_response,
+				sample_posterior,
+				sample_prior,
+				num_post_samples,
+				num_prior_samples,
 				covariate_data_pred,
 				coef_.data(),
 				cluster_ids_data_pred,

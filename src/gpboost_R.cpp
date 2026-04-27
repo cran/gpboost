@@ -1131,6 +1131,10 @@ SEXP GPB_PredictREModel_R(SEXP handle,
 	SEXP predict_cov_mat,
 	SEXP predict_var,
 	SEXP predict_response,
+	SEXP sample_posterior,
+	SEXP sample_prior,
+	SEXP num_post_samples,
+	SEXP num_prior_samples,
 	SEXP cluster_ids_data_pred,
 	SEXP re_group_data_pred,
 	SEXP re_group_rand_coef_data_pred,
@@ -1151,6 +1155,10 @@ SEXP GPB_PredictREModel_R(SEXP handle,
 		Rf_asLogical(predict_cov_mat),
 		Rf_asLogical(predict_var),
 		Rf_asLogical(predict_response),
+		Rf_asLogical(sample_posterior),
+		Rf_asLogical(sample_prior),
+		Rf_asInteger(num_post_samples),
+		Rf_asInteger(num_prior_samples),
 		R_INT_PTR(cluster_ids_data_pred),
 		R_CHAR_PTR_FROM_RAW(re_group_data_pred),
 		R_REAL_PTR(re_group_rand_coef_data_pred),
@@ -1255,6 +1263,15 @@ SEXP GPB_GetNumCGStepsTridiag_R(SEXP handle,
 	SEXP num_cg_steps) {
 	R_API_BEGIN();
 	CHECK_CALL(GPB_GetNumCGStepsTridiag(R_ExternalPtrAddr(handle),
+		R_INT_PTR(num_cg_steps)));
+	R_API_END();
+	return R_NilValue;
+}
+
+SEXP GPB_GetNumModeFindingSteps_R(SEXP handle,
+	SEXP num_cg_steps) {
+	R_API_BEGIN();
+	CHECK_CALL(GPB_GetNumModeFindingSteps(R_ExternalPtrAddr(handle),
 		R_INT_PTR(num_cg_steps)));
 	R_API_END();
 	return R_NilValue;
@@ -1398,7 +1415,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"GPB_GetCoef_R"                    , (DL_FUNC)&GPB_GetCoef_R                    , 3},
   {"GPB_GetNumIt_R"                   , (DL_FUNC)&GPB_GetNumIt_R                   , 2},
   {"GPB_SetPredictionData_R"          , (DL_FUNC)&GPB_SetPredictionData_R          , 13},
-  {"GPB_PredictREModel_R"             , (DL_FUNC)&GPB_PredictREModel_R             , 17},
+  {"GPB_PredictREModel_R"             , (DL_FUNC)&GPB_PredictREModel_R             , 21},
   {"GPB_PredictREModelTrainingDataRandomEffects_R", (DL_FUNC)&GPB_PredictREModelTrainingDataRandomEffects_R, 6},
   {"GPB_GetLikelihoodName_R"          , (DL_FUNC)&GPB_GetLikelihoodName_R          , 1},
   {"GPB_GetOptimizerCovPars_R"        , (DL_FUNC)&GPB_GetOptimizerCovPars_R        , 1},
@@ -1406,6 +1423,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"GPB_GetCGPreconditionerType_R"    , (DL_FUNC)&GPB_GetCGPreconditionerType_R    , 1},
   {"GPB_GetNumCGSteps_R"              , (DL_FUNC)&GPB_GetNumCGSteps_R              , 2},
   {"GPB_GetNumCGStepsTridiag_R"       , (DL_FUNC)&GPB_GetNumCGStepsTridiag_R       , 2},
+  {"GPB_GetNumModeFindingSteps_R"     , (DL_FUNC)&GPB_GetNumModeFindingSteps_R     , 2},
   {"GPB_SetLikelihood_R"              , (DL_FUNC)&GPB_SetLikelihood_R              , 2},
   {"GPB_GetResponseData_R"            , (DL_FUNC)&GPB_GetResponseData_R            , 2},
   {"GPB_GetCovariateData_R"           , (DL_FUNC)&GPB_GetCovariateData_R           , 2},

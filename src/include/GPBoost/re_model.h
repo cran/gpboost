@@ -126,6 +126,12 @@ namespace GPBoost {
 		void SetLikelihood(const string_t& likelihood);
 
 		/*!
+		* \brief True if likelihood type is supported
+		* \return True if likelihood type is supported
+		*/
+		bool LikelihoodSupported(const string_t& likelihood) const;
+
+		/*!
 		* \brief Transform from the latent to the response variable scale (often this is the inverse link function)
 		*			This is only used by the 'ConvertOutput()' function in regression_objective.hpp
 		*/
@@ -146,6 +152,8 @@ namespace GPBoost {
 		* \brief Returns the number of CG steps when the CG method was last run for the SLQ method
 		*/
 		int GetNumCGStepsTridiag() const;
+
+		int GetNumModeFindingSteps() const;
 
 		/*!
 		* \brief Set configuration parameters for the optimizer
@@ -395,6 +403,10 @@ namespace GPBoost {
 		* \param predict_cov_mat If true, the predictive/conditional covariance matrix is calculated (default=false) (predict_var and predict_cov_mat cannot be both true
 		* \param predict_var If true, the predictive/conditional variances are calculated (default=false) (predict_var and predict_cov_mat cannot be both true)
 		* \param predict_response If true, the response variable (label) is predicted, otherwise the latent random effects
+		* \param sample_posterior If true, posterior samples are generated
+		* \param sample_prior If true, prior samples are generated
+		* \param num_post_samples Number of posterior samples
+		* \param num_prior_samples Number of prior samples
 		* \param cluster_ids_data_pred IDs / labels indicating independent realizations of Gaussian processes (same values = same process realization) for which predictions are to be made
 		* \param re_group_data_pred Labels of group levels for the grouped random effects in column-major format (i.e. first the levels for the first effect, then for the second, etc.). Every group label needs to end with the null character '\0'
 		* \param re_group_rand_coef_data_pred Covariate data for grouped random coefficients
@@ -413,6 +425,10 @@ namespace GPBoost {
 			bool predict_cov_mat,
 			bool predict_var,
 			bool predict_response,
+			bool sample_posterior,
+			bool sample_prior,
+			int num_post_samples,
+			int num_prior_samples,
 			const data_size_t* cluster_ids_data_pred,
 			const char* re_group_data_pred,
 			const double* re_group_rand_coef_data_pred,
@@ -515,7 +531,6 @@ namespace GPBoost {
 		/*! \brief List of covariance functions wtih compact support */
 		const std::set<string_t> COMPACT_SUPPORT_COVS_{ "wendland", "exponential_tapered" };
 		int num_it_ = 0; //Number of iterations done for covariance and linear regression parameter estimation
-		bool calc_std_dev_ = false;
 		// Covariance parameters related variables
 		vec_t cov_pars_; //Covariance parameters
 		vec_t init_cov_pars_; //Initial values for covariance parameters
@@ -531,7 +546,6 @@ namespace GPBoost {
 		// Linear regression coefficients related variables
 		vec_t coef_;//linear regression coefficients for fixed effects (in case there are any)
 		bool has_covariates_ = false;
-		bool init_coef_given_ = false;
 		bool coef_given_or_estimated_ = false;
 		vec_t std_dev_coef_;
 		bool std_dev_coef_calculated_ = false;
@@ -542,7 +556,6 @@ namespace GPBoost {
 		bool init_aux_pars_given_ = false;
 		bool model_has_been_estimated_ = false;
 		std::vector<double> init_score_boosting_;
-		bool init_score_boosting_calculated_ = false;
 	};
 
 }  // namespace GPBoost

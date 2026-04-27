@@ -5,8 +5,9 @@
 \title{Make predictions for a \code{GPModel}}
 \usage{
 \method{predict}{GPModel}(object, predict_response = TRUE,
-  predict_var = FALSE, predict_cov_mat = FALSE, y = NULL,
-  cov_pars = NULL, group_data_pred = NULL,
+  predict_var = FALSE, predict_cov_mat = FALSE, sample_posterior = FALSE,
+  sample_prior = FALSE, num_post_samples = 100, num_prior_samples = 100,
+  y = NULL, cov_pars = NULL, group_data_pred = NULL,
   group_rand_coef_data_pred = NULL, gp_coords_pred = NULL,
   gp_rand_coef_data_pred = NULL, cluster_ids_pred = NULL, X_pred = NULL,
   use_saved_data = FALSE, offset = NULL, offset_pred = NULL,
@@ -24,6 +25,14 @@ predictive variances are calculated}
 
 \item{predict_cov_mat}{A \code{boolean}. If TRUE, the (posterior) 
 predictive covariance is calculated in addition to the (posterior) predictive mean}
+
+\item{sample_posterior}{A \code{boolean}. If TRUE, samples from the posterior are drawn (currently very limited support)}
+
+\item{sample_prior}{A \code{boolean}. If TRUE, samples from the prior are drawn (currently very limited support)}
+
+\item{num_post_samples}{A \code{numeric} with the number of posterior samples to draw if 'sample_posterior=TRUE'}
+
+\item{num_prior_samples}{A \code{numeric} with the number of prior samples to draw if 'sample_prior=TRUE'}
 
 \item{y}{Observed data (can be NULL, e.g. when the model has been estimated 
 already and the same data is used for making predictions)}

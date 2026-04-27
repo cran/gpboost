@@ -183,14 +183,7 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 				if (config_.sigmoid != 1.0) {
 					Log::Fatal("The GPBoost algorithm currently does not support a sigmoid != 1.0 ");
 				}
-				if (config_.objective != std::string("regression") && config_.objective != std::string("bernoulli_probit") && 
-					config_.objective != std::string("bernoulli_logit") && config_.objective != std::string("binary") && 
-					config_.objective != std::string("binomial") && config_.objective != std::string("binomial_probit") && config_.objective != std::string("binomial_logit") &&
-					config_.objective != std::string("poisson") && config_.objective != std::string("gamma") && 
-					config_.objective != std::string("negative_binomial") && config_.objective != std::string("negative_binomial_1") &&
-					config_.objective != std::string("beta") && config_.objective != std::string("t") && config_.objective != std::string("t_fix_df") &&
-					config_.objective != std::string("gaussian_heteroscedastic") && config_.objective != std::string("lognormal") && config_.objective != std::string("beta_binomial") &&
-					config_.objective != std::string("zero_inflated_gamma") && config_.objective != std::string("zero_censored_power_transformed_normal")) {
+				if (config_.objective != std::string("regression") && !(re_model->LikelihoodSupported(config_.objective))) {
 					Log::Fatal("GPBoost currently does not support 'objective = %s' ", config_.objective.c_str());
 				}
 				// Make sure that objective for boosting and likelihood for re_model match, otherwise change them accordingly
@@ -2949,6 +2942,10 @@ int GPB_PredictREModel(REModelHandle handle,
 	bool predict_cov_mat,
 	bool predict_var,
 	bool predict_response,
+	bool sample_posterior,
+	bool sample_prior,
+	int num_post_samples,
+	int num_prior_samples,
 	const int32_t* cluster_ids_data_pred,
 	const char* re_group_data_pred,
 	const double* re_group_rand_coef_data_pred,
@@ -2967,6 +2964,10 @@ int GPB_PredictREModel(REModelHandle handle,
 		predict_cov_mat,
 		predict_var,
 		predict_response,
+		sample_posterior,
+		sample_prior,
+		num_post_samples,
+		num_prior_samples,
 		cluster_ids_data_pred,
 		re_group_data_pred,
 		re_group_rand_coef_data_pred,
@@ -3051,6 +3052,14 @@ int GPB_GetNumCGStepsTridiag(BoosterHandle handle,
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	num_cg_steps[0] = ref_remodel->GetNumCGStepsTridiag();
+	API_END();
+}
+
+int GPB_GetNumModeFindingSteps(BoosterHandle handle,
+	int* num_cg_steps) {
+	API_BEGIN();
+	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
+	num_cg_steps[0] = ref_remodel->GetNumModeFindingSteps();
 	API_END();
 }
 
