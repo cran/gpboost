@@ -1,12 +1,16 @@
 #############################################################
 # Examples on how to do use the GPBoost and LaGaBoost algorithms 
-# for various likelihoods:
-#   - "gaussian" (=regression)
-#   - "bernoulli" (=classification)
-#   - "poisson", "gamma", "negative_binomial" (= Poisson, gamma, and negative binomial regression)
-# and various random effects models:
+# for various likelihoods and different random effects models:
 #   - grouped (aka clustered) random effects models
 #   - Gaussian process (GP) models
+#
+# - Currently supported likelihoods: 
+#     see https://github.com/fabsig/GPBoost/blob/master/docs/Main_parameters.rst#likelihood 
+# - Currently supported covariance functions for GPs 
+#     including ARD, estimating the smoothness parameter, and space-time models: 
+#     see https://github.com/fabsig/GPBoost/blob/master/docs/Main_parameters.rst#cov-function
+# - Scalable GP approximations such as Vecchia and VIF approximations:
+#     https://github.com/fabsig/GPBoost/blob/master/docs/Main_parameters.rst#gp-approx
 # 
 # Author: Fabio Sigrist
 #############################################################
@@ -444,7 +448,7 @@ if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
 #--------------------Training----------------
 # Define Gaussian process model
 gp_model <- GPModel(gp_coords = coords_train, cov_function = "matern", cov_fct_shape = 1.5,
-                    likelihood = likelihood)
+                    likelihood = likelihood, gp_approx = "vecchia")
 # GPs become slow for large data sets -> use an approximation such as a Vecchia approximation:
 # gp_model <- GPModel(gp_coords = coords_train, cov_function = "matern", cov_fct_shape = 1.5,
 #                     likelihood = likelihood, gp_approx = "vecchia")
@@ -468,6 +472,9 @@ pred <- predict(bst, data = X_test, gp_coords_pred = coords_test,
 # pred[["fixed_effect"]]: predictions for the latent fixed effects / tree ensemble
 # pred[["random_effect_mean"]]: mean predictions for the random effects
 # pred[["random_effect_cov"]]: predictive (co-)variances (if predict_var=True) of the (latent) Gaussian process
+if (likelihood == "gaussian") {
+  sum(abs(pred_resp$response_mean - pred$random_effect_mean - pred$fixed_effect))
+}
 # 3. Can also calculate predictive covariances
 pred_cov = predict(bst, data=X_test[1:3,], gp_coords_pred=coords_test[1:3,],
                    predict_cov_mat=TRUE, pred_latent=TRUE)
@@ -500,13 +507,27 @@ plot2 <- ggplot(data = data.frame(s_1=coords_test[,1],s_2=coords_test[,2],b=pred
   geom_point(size=4, shape=15) + scale_color_viridis(option = "B") + ggtitle("Predicted latent GP mean")
 plot3 <- ggplot(data = data.frame(s_1=coords_test[,1],s_2=coords_test[,2],b=sqrt(pred$random_effect_cov)),aes(x=s_1,y=s_2,color=b)) +
   geom_point(size=4, shape=15) + scale_color_viridis(option = "B") + labs(title="Predicted latent GP standard deviation", subtitle=" = prediction uncertainty")
-plot4 <- ggplot(data=data.frame(x=X_test[,1],f=pred$fixed_effect), aes(x=x,y=f)) + geom_line(size=1) +
-  geom_line(data=data.frame(x=x,f=f1d(x)), aes(x=x,y=f), size=1.5, color="darkred") +
+plot4 <- ggplot(data=data.frame(x=X_test[,1],f=pred$fixed_effect), aes(x=x,y=f)) + geom_line(linewidth=1) +
+  geom_line(data=data.frame(x=x,f=f1d(x)), aes(x=x,y=f), linewidth=1.5, color="darkred") +
   ggtitle("Predicted and true F(X)") + xlab("X") + ylab("y")
 grid.arrange(plot1, plot2, plot3, plot4, ncol=2)
 
+# --------------------Posterior sampling----------------
+sample_post <- predict(bst, data = X_test, gp_coords_pred = coords_test,
+                       sample_posterior = TRUE, num_post_samples = 100, pred_latent = TRUE)
+posterior_samples <- sample_post$posterior_samples
+# Compare predictive means and variances
+mu_samp <- apply(posterior_samples,1,mean)
+var_samp <- apply(posterior_samples,1,var)
+par(mfrow=c(1,2))
+plot(pred$random_effect_mean + pred$fixed_effect, mu_samp, 
+     xlab ="analytic predictive mean", ylab = "sample predictive mean")
+plot(pred$random_effect_cov, var_samp, 
+     xlab ="analytic predictive variance", ylab = "sample predictive variance")
+par(mfrow=c(1,1))
+
 #--------------------Choosing tuning parameters----------------
-# Choosing tuning parameters carefully is important.
+# Carefully choosing tuning parameters is important.
 # See the above demo code for grouped random effects on how this can be done.
 # You just have to replace the gp_model. E.g.,    
 # gp_model <- GPModel(gp_coords = coords_train, cov_function = "matern", cov_fct_shape = 1.5, likelihood = likelihood)

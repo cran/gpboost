@@ -29,10 +29,10 @@ simulate_response_variable <- function (lp, rand_eff, likelihood) {
   if (likelihood == "gaussian") {
     xi <- sqrt(0.1) * rnorm(n) # error term, variance = 0.1
     y <- lp + rand_eff + xi
-  } else if (likelihood == "binary_probit") {
+  } else if (likelihood == "bernoulli_probit") {
     probs <- pnorm(lp + rand_eff)
     y <- as.numeric(runif(n) < probs)
-  } else if (likelihood == "binary_logit") {
+  } else if (likelihood == "bernoulli_logit") {
     probs <- 1/(1+exp(-(lp + rand_eff)))
     y <- as.numeric(runif(n) < probs)
   } else if (likelihood == "poisson") {
@@ -49,7 +49,7 @@ simulate_response_variable <- function (lp, rand_eff, likelihood) {
 }
 
 # Choose likelihood: either "gaussian" (=regression), 
-#                     "binary_probit", "binary_logit", (=classification)
+#                     "bernoulli_probit", "bernoulli_logit", (=classification)
 #                     "poisson", "gamma", or "negative_binomial"
 likelihood <- "gaussian"
 
@@ -245,7 +245,7 @@ coords_train <- matrix(runif(2)/2,ncol=2)
 while (dim(coords_train)[1]<ntrain) {
   coord_i <- runif(2) 
   # less data in one area
-  if (!(coord_i[1]>=0.3 & coord_i[1]<=0.7 & coord_i[2]>=0.3 & coord_i[2]<=0.7 & runif(1)>0.1)) {
+  if (!(coord_i[1]>=0.3 & coord_i[1]<=0.7 & coord_i[2]>=0.3 & coord_i[2]<=0.7)) {
     coords_train <- rbind(coords_train,coord_i)
   }
 }
@@ -299,7 +299,7 @@ pred <- predict(gp_model, gp_coords_pred = coords_test,
 # Predict response variable (label)
 pred_resp <- predict(gp_model, gp_coords_pred = coords_test,
                      predict_var = TRUE, predict_response = TRUE)
-if (likelihood %in% c("binary_probit","binary_logit")) {
+if (likelihood %in% c("bernoulli_probit","bernoulli_logit")) {
   print("Test error:")
   mean(as.numeric(pred_resp$mu>0.5) != y_test)
 } else {
@@ -334,12 +334,35 @@ plot(b_1_train, GP_smooth[,1], xlab="truth", ylab="predicted",
 # sum(abs(GP_smooth[,1] - GP_smooth2$mu))
 # sum(abs(GP_smooth[,2] - GP_smooth2$var))
 
+# --------------------Posterior sampling----------------
+sample_post <- predict(gp_model, gp_coords_pred = coords_test,
+                       sample_posterior = TRUE, num_post_samples = 100, predict_response = FALSE)
+# Compare predictive means and variances
+mu_samp <- apply(sample_post$posterior_samples,1,mean)
+var_samp <- apply(sample_post$posterior_samples,1,var)
+par(mfrow=c(1,2))
+plot(pred$mu, mu_samp, xlab ="analytic predictive variance", ylab = "sample predictive variance")
+plot(pred$var, var_samp, xlab ="analytic predictive variance", ylab = "sample predictive variance")
+par(mfrow=c(1,1))
+
 #--------------------Gaussian process model with linear mean function----------------
 # Include a liner regression term instead of assuming a zero-mean a.k.a. "universal Kriging"
 # Note: you need to include a column of 1's manually for an intercept term
 gp_model <- fitGPModel(gp_coords = coords_train, cov_function = "matern", cov_fct_shape = 1.5,
                        y = y_lin, X = X, likelihood = likelihood)
 summary(gp_model)
+
+# Prediction
+X_pred <- cbind(rep(1,ntest),runif(ntest)-0.5)
+pred <- predict(gp_model, gp_coords_pred = coords_test, X_pred = X_pred,
+                predict_var = TRUE, predict_response = FALSE)
+# Posterior sampling
+sample_post <- predict(gp_model, gp_coords_pred = coords_test, X_pred = X_pred,
+                       sample_posterior = TRUE, num_post_samples = 100, predict_response = FALSE)
+mu_samp <- apply(sample_post$posterior_samples,1,mean)
+var_samp <- apply(sample_post$posterior_samples,1,var)
+plot(pred$mu, mu_samp, xlab ="analytic predictive variance", ylab = "sample predictive variance")
+plot(pred$var, var_samp, xlab ="analytic predictive variance", ylab = "sample predictive variance")
 
 #--------------------Gaussian process model anisotropic ARD covariance function----------------
 gp_model <- fitGPModel(gp_coords = coords_train, cov_function = "matern_ard", cov_fct_shape = 1.5,
