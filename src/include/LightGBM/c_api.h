@@ -1400,34 +1400,37 @@ GPBOOST_C_EXPORT int GPB_REModelFree(REModelHandle handle);
 * \brief Set configuration parameters for the optimizer
 * \param handle Handle of REModel
 * \param init_cov_pars Initial values for covariance parameters of RE components
-* \param lr Learning rate for covariance parameters. If lr<= 0, internal default values are used (0.1 for "gradient_descent" and 1. for "fisher_scoring")
-* \param acc_rate_cov Acceleration rate for covariance parameters for Nesterov acceleration (only relevant if nesterov_schedule_version == 0)
-* \param max_iter Maximal number of iterations
-* \param delta_rel_conv Convergence tolerance. The algorithm stops if the relative change in eiher the log-likelihood or the parameters is below this value. For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood
+* \param lr Learning rate for covariance parameters. If lr = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise)
+* \param acc_rate_cov Acceleration rate for covariance parameters for Nesterov acceleration (only relevant if nesterov_schedule_version == 0). If acc_rate_cov = -999, internal default values are used
+* \param max_iter Maximal number of iterations. If max_iter = -999, internal default values are used
+* \param delta_rel_conv Convergence tolerance. The algorithm stops if the relative change in eiher the log-likelihood or the parameters is below this value. For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. If delta_rel_conv = -999, internal default values are used
 * \param use_nesterov_acc Indicates whether Nesterov acceleration is used in the gradient descent for finding the covariance parameters (only used for "gradient_descent")
-* \param nesterov_schedule_version Which version of Nesterov schedule should be used (only relevant if use_nesterov_acc)
+* \param nesterov_schedule_version Which version of Nesterov schedule should be used (only relevant if use_nesterov_acc). If nesterov_schedule_version = -999, internal default values are used
 * \param trace If true, the value of the gradient is printed for some iterations
 * \param optimizer Optimizer for covariance parameters
-* \param momentum_offset Number of iterations for which no mometum is applied in the beginning (only relevant if use_nesterov_acc)
-* \param convergence_criterion The convergence criterion used for terminating the optimization algorithm. Options: "relative_change_in_log_likelihood" or "relative_change_in_parameters"
+* \param momentum_offset Number of iterations for which no mometum is applied in the beginning (only relevant if use_nesterov_acc). If momentum_offset = -999, internal default values are used
+* \param convergence_criterion The convergence criterion used for terminating the optimization algorithm. Options: "relative_change_in_log_likelihood" or "relative_change_in_parameters". If convergence_criterion = "default", internal default values are used
 * \param num_covariates Number of covariates
 * \param init_coef Initial values for the regression coefficients
-* \param lr_coef Learning rate for fixed-effect linear coefficients
-* \param acc_rate_coef Acceleration rate for coefficients for Nesterov acceleration (only relevant if nesterov_schedule_version == 0)
+* \param lr_coef Learning rate for fixed-effect linear coefficients. If lr_coef = -999, internal default values are used
+* \param acc_rate_coef Acceleration rate for coefficients for Nesterov acceleration (only relevant if nesterov_schedule_version == 0). If acc_rate_coef = -999, internal default values are used
 * \param optimizer_coef Optimizer for linear regression coefficients
-* \param cg_max_num_it Maximal number of iterations for conjugate gradient algorithm
-* \param cg_max_num_it_tridiag Maximal number of iterations for conjugate gradient algorithm when being run as Lanczos algorithm for tridiagonalization
-* \param cg_delta_conv Tolerance level for L2 norm of residuals for checking convergence in conjugate gradient algorithm when being used for parameter estimation
-* \param num_rand_vec_trace Number of random vectors (e.g. Rademacher) for stochastic approximation of the trace of a matrix
+* \param cg_max_num_it Maximal number of iterations for conjugate gradient algorithm. If cg_max_num_it = -999, internal default values are used
+* \param cg_max_num_it_tridiag Maximal number of iterations for conjugate gradient algorithm when being run as Lanczos algorithm for tridiagonalization. If cg_max_num_it_tridiag = -999, internal default values are used
+* \param cg_delta_conv Tolerance level for L2 norm of residuals for checking convergence in conjugate gradient algorithm when being used for parameter estimation. If cg_delta_conv = -999, internal default values are used
+* \param num_rand_vec_trace Number of random vectors (e.g. Rademacher) for stochastic approximation of the trace of a matrix. If num_rand_vec_trace = -999, internal default values are used
 * \param reuse_rand_vec_trace If true, random vectors (e.g. Rademacher) for stochastic approximation of the trace of a matrix are sampled only once at the beginning and then reused in later trace approximations, otherwise they are sampled everytime a trace is calculated
 * \param cg_preconditioner_type Type of preconditioner used for the conjugate gradient algorithm
 * \param seed_rand_vec_trace Seed number to generate random vectors (e.g. Rademacher) for stochastic approximation of the trace of a matrix
-* \param piv_chol_rank Rank of the pivoted cholseky decomposition used as preconditioner of the conjugate gradient algorithm
+* \param piv_chol_rank Rank of the pivoted cholseky decomposition used as preconditioner of the conjugate gradient algorithm. If piv_chol_rank = -999, internal default values are used
 * \param init_aux_pars Initial values for values for aux_pars_ (e.g., shape parameter of gamma likelihood)
 * \param estimate_aux_pars If true, any additional parameters for non-Gaussian likelihoods are also estimated (e.g., shape parameter of gamma likelihood)
+* \param init_coef_aux_pars_from_iid_model If true, initialize regression coefficients and auxiliary parameters from an iid model.
+*        This option is ignored if init_coef is provided. If init_aux_pars is provided but init_coef is not,
+*        only regression coefficients are initialized from an iid model.
 * \param estimate_cov_par_index If estimate_cov_par_index[0] >= 0, some covariance parameters might not be estimated, estimate_cov_par_index[i] is then bool and indicates which ones are estimated
-* \param m_lbfgs Number of corrections to approximate the inverse Hessian matrix for the lbfgs optimizer
-* \param delta_conv_mode_finding Used for checking convergence in mode finding algorithm for non-Gaussian likelihoods
+* \param m_lbfgs Number of corrections to approximate the inverse Hessian matrix for the lbfgs optimizer. If m_lbfgs = -999, internal default values are used
+* \param delta_conv_mode_finding Used for checking convergence in mode finding algorithm for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
 * \return 0 when succeed, -1 when failure happens
 */
 GPBOOST_C_EXPORT int GPB_SetOptimConfig(REModelHandle handle,
@@ -1457,6 +1460,7 @@ GPBOOST_C_EXPORT int GPB_SetOptimConfig(REModelHandle handle,
     int piv_chol_rank,
     double* init_aux_pars,
     bool estimate_aux_pars,
+    bool init_coef_aux_pars_from_iid_model,
     const int* estimate_cov_par_index,
     int m_lbfgs,
     double delta_conv_mode_finding);
@@ -1513,6 +1517,9 @@ GPBOOST_C_EXPORT int GPB_GetCurrentNegLogLikelihood(REModelHandle handle,
     double* negll);
 
 GPBOOST_C_EXPORT int GPB_CanCalculateStandardErrorsCovPars(REModelHandle handle,
+    int* out);
+
+GPBOOST_C_EXPORT int GPB_CanCalculateStandardErrorsAuxPars(REModelHandle handle,
     int* out);
 
 /*!
@@ -1775,14 +1782,17 @@ GPBOOST_C_EXPORT int GPB_SetOffsetData(REModelHandle handle,
 
 /*!
 * \brief Get additional likelihood parameters (e.g., shape parameter for a gamma likelihood)
+*		 Note: You should pre-allocate memory for aux_pars. Its length equals the number of auxiliary parameters (GPB_GetNumAuxPars) or twice this if calc_std_dev = true
 * \param handle Handle of REModel
 * \param[out] aux_pars Additional likelihood parameters (aux_pars_). This vector needs to be pre-allocated
 * \param[out] out_str Name of the first parameter
+* \param calc_std_dev If true, standard deviations are also exported
 * \return 0 when succeed, -1 when failure happens
 */
 GPBOOST_C_EXPORT int GPB_GetAuxPars(REModelHandle handle,
     double* aux_pars,
-    char* out_str);
+    char* out_str,
+    bool calc_std_dev);
 
 /*!
 * \brief Get number of additional likelihood parameters (e.g., shape parameter for a gamma likelihood)

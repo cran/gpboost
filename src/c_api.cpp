@@ -2787,6 +2787,7 @@ int GPB_SetOptimConfig(REModelHandle handle,
 	int piv_chol_rank,
 	double* init_aux_pars,
 	bool estimate_aux_pars,
+	bool init_coef_aux_pars_from_iid_model,
 	const int* estimate_cov_par_index,
 	int m_lbfgs,
 	double delta_conv_mode_finding) {
@@ -2818,6 +2819,7 @@ int GPB_SetOptimConfig(REModelHandle handle,
 		piv_chol_rank,
 		init_aux_pars,
 		estimate_aux_pars,
+		init_coef_aux_pars_from_iid_model,
 		estimate_cov_par_index,
 		m_lbfgs, 
 		delta_conv_mode_finding);
@@ -2868,6 +2870,14 @@ int GPB_CanCalculateStandardErrorsCovPars(REModelHandle handle,
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	out[0] = (int)ref_remodel->CanCalculateStandardErrorsCovPars();
+	API_END();
+}
+
+int GPB_CanCalculateStandardErrorsAuxPars(REModelHandle handle,
+	int* out) {
+	API_BEGIN();
+	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
+	out[0] = (int)ref_remodel->CanCalculateStandardErrorsAuxPars();
 	API_END();
 }
 
@@ -3106,11 +3116,12 @@ int GPB_SetOffsetData(REModelHandle handle,
 
 int GPB_GetAuxPars(REModelHandle handle,
 	double* aux_pars,
-	char* out_str) {
+	char* out_str,
+	bool calc_std_dev) {
 	API_BEGIN();
 	std::string name;
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
-	ref_remodel->GetAuxPars(aux_pars, name);
+	ref_remodel->GetAuxPars(aux_pars, name, calc_std_dev);
 	std::memcpy(out_str, name.c_str(), name.size() + 1);
 	API_END();
 }

@@ -174,7 +174,7 @@ namespace GPBoost {
 					const_ = std::pow(2., 1 - shape_) / std::tgamma(shape_);
 #else
 					// Mathematical special functions are not supported in C++17 by Clang and some other compilers (see https://en.cppreference.com/w/cpp/compiler_support/17#C.2B.2B17_library_features) 
-					Log::REFatal("'shape' of %g is not supported for the '%s' covariance function (only 0.5, 1.5, and 2.5) when using this compiler (e.g., Clang on Mac). Use another compiler such as gcc or (a newer version of) MSVC instead. ", shape, cov_fct_type_.c_str());
+					Log::REFatal("The covariance function '%s' and 'shape' = %g requires the Bessel function std::cyl_bessel_k, but this compiler / standard library does not provide it. Use a compiler (e.g., gcc or MSVC) which supports this, or use a fixed smoothness 0.5, 1.5, or 2.5 ", cov_fct_type_.c_str(), shape);
 #endif
 				}
 				if (shape > LARGE_SHAPE_WARNING_THRESHOLD_) {
@@ -187,9 +187,9 @@ namespace GPBoost {
 				}
 			}
 			else if (cov_fct_type_ == "matern_estimate_shape" || cov_fct_type_ == "matern_ard_estimate_shape") {
-#if !defined(HAS_STD_CYL_BESSEL_K)
+#if !HAS_STD_CYL_BESSEL_K
 				// Mathematical special functions are not supported in C++17 by Clang and some other compilers (see https://en.cppreference.com/w/cpp/compiler_support/17#C.2B.2B17_library_features) 
-				Log::REFatal("The covariance function '%s' is not supported when using this compiler (e.g. Clang on Mac). Use another compiler such as gcc or (a newer version of) MSVC instead. ", cov_fct_type_.c_str());
+				Log::REFatal("The covariance function '%s' requires the Bessel function std::cyl_bessel_k, but this compiler / standard library does not provide it. Use a compiler (e.g., gcc or MSVC) which supports this, or use a fixed smoothness 0.5, 1.5, or 2.5 ", cov_fct_type_.c_str());
 #endif
 			}
 			if (cov_fct_type_ == "wendland" || apply_tapering) {
@@ -569,6 +569,7 @@ namespace GPBoost {
 			bool is_symmmetric) const {
 			// some checks
 			CHECK(pars.size() == num_cov_par_);
+			CheckBesselAvailableForSpaceTimeGneiting(pars);
 			if (use_precomputed_dist_for_calc_cov_) {
 				CHECK(dist.rows() > 0);
 				CHECK(dist.cols() > 0);
@@ -686,6 +687,7 @@ namespace GPBoost {
 			bool is_symmmetric) const {
 			// some checks
 			CHECK(pars.size() == num_cov_par_);
+			CheckBesselAvailableForSpaceTimeGneiting(pars);
 			CHECK(dist.rows() > 0);//dist is used to define sigma
 			CHECK(dist.cols() > 0);
 			if (is_symmmetric) {
@@ -802,6 +804,7 @@ namespace GPBoost {
 			const vec_t& coords_pred,
 			const vec_t& pars) const {
 			CHECK(pars.size() == num_cov_par_);
+			CheckBesselAvailableForSpaceTimeGneiting(pars);
 			if (need_coordinates_for_calculating_covariance_) {
 				if (coords.size() == 0 || coords_pred.size() == 0) {
 					Log::REFatal("'CalculateCovarianceOneEntry()' is not implemented when 'coords' or 'coords_pred' are empty for cov_fct_type_ == '%s'", cov_fct_type_.c_str());
@@ -1008,6 +1011,7 @@ namespace GPBoost {
 			int ind_par,
 			bool is_symmmetric) const {
 			CHECK(pars.size() == num_cov_par_);
+			CheckBesselAvailableForSpaceTimeGneitingGradient(pars, ind_par);
 			if (use_precomputed_dist_for_calc_cov_) {
 				CHECK(sigma.cols() == dist.cols());
 				CHECK(sigma.rows() == dist.rows());
@@ -1112,6 +1116,7 @@ namespace GPBoost {
 			int ind_par,
 			bool is_symmmetric) const {
 			CHECK(pars.size() == num_cov_par_);
+			CheckBesselAvailableForSpaceTimeGneitingGradient(pars, ind_par);
 			CHECK(sigma.cols() == sigma.rows());
 			if (use_precomputed_dist_for_calc_cov_) {
 				CHECK(sigma.cols() == dist.cols());
@@ -1222,6 +1227,7 @@ namespace GPBoost {
 			double nugget_var,
 			int ind_par) const {
 			CHECK(pars.size() == num_cov_par_);
+			CheckBesselAvailableForSpaceTimeGneitingGradient(pars, ind_par);
 			if (need_coordinates_for_calculating_covariance_) {
 				if (coords.size() == 0 || coords_pred.size() == 0) {
 					Log::REFatal("'CalculateGradientCovarianceOneEntry()' is not implemented when 'coords' or 'coords_pred' are empty for cov_fct_type_ == '%s'", cov_fct_type_.c_str());
@@ -1524,6 +1530,31 @@ namespace GPBoost {
 		}//end FindInitCovPar
 
 	private:
+
+		void CheckBesselAvailableForSpaceTimeGneiting(const vec_t& pars) const {
+#if !HAS_STD_CYL_BESSEL_K
+			if (cov_fct_type_ == "space_time_gneiting" &&
+				!(TwoNumbersAreEqual<double>(pars[4], 0.5) || TwoNumbersAreEqual<double>(pars[4], 1.5) || TwoNumbersAreEqual<double>(pars[4], 2.5))) {
+				Log::REFatal("The covariance function '%s' and 'shape' = %g requires the Bessel function std::cyl_bessel_k, but this compiler / standard library does not provide it. Use a compiler (e.g., gcc or MSVC) which supports this, or use a fixed smoothness 0.5, 1.5, or 2.5 ", cov_fct_type_.c_str(), pars[4]);
+			}
+#else
+			(void)pars;
+#endif
+		}
+
+		void CheckBesselAvailableForSpaceTimeGneitingGradient(const vec_t& pars,
+			int ind_par) const {
+#if !HAS_STD_CYL_BESSEL_K
+			if (cov_fct_type_ == "space_time_gneiting" &&
+				(ind_par == 3 ||
+					!(TwoNumbersAreEqual<double>(pars[4], 0.5) || TwoNumbersAreEqual<double>(pars[4], 1.5) || TwoNumbersAreEqual<double>(pars[4], 2.5)))) {
+				Log::REFatal("The covariance function '%s' and 'shape' = %g requires the Bessel function std::cyl_bessel_k for this gradient, but this compiler / standard library does not provide it. Use a compiler (e.g., gcc or MSVC) which supports this, or do not estimate the smoothness parameter and use a fixed smoothness 0.5, 1.5, or 2.5 ", cov_fct_type_.c_str(), pars[4]);
+			}
+#else
+			(void)pars;
+			(void)ind_par;
+#endif
+		}
 
 		/*!
 		* \brief Calculates Wendland correlation function if taper_shape == 0
@@ -2150,10 +2181,10 @@ namespace GPBoost {
 			return(cm * std::pow(dist_ij, shape_) * sigma.coeff(i, j));
 		}
 
-		inline double GradientRangeMaternGeneralShape(double cm,
-			const double dist_ij,
-			double cm_dist,
-			double shape) const {
+		inline double GradientRangeMaternGeneralShape([[maybe_unused]] double cm,
+			[[maybe_unused]] const double dist_ij,
+			[[maybe_unused]] double cm_dist,
+			[[maybe_unused]] double shape) const {
 #if HAS_STD_CYL_BESSEL_K
 			double range_dist = cm_dist * dist_ij;
 			return(cm * std::pow(range_dist, shape) * (2. * shape * std::cyl_bessel_k(shape, range_dist) - range_dist * std::cyl_bessel_k(shape + 1., range_dist)));
@@ -2162,21 +2193,20 @@ namespace GPBoost {
 #endif
 		}//end GradientRangeMaternGeneralShape
 
-		inline double GradientSmoothnessMaternEstimateShapeFiniteDifference(double cm,
-			double cm_num_deriv,
-			double dist_ij,
-			double par_aux,
-			double par_aux_up,
-			double par_aux_down,
-			double pars_2_up,
-			double pars_2_down,
-			double shape) const {
+		inline double GradientSmoothnessMaternEstimateShapeFiniteDifference([[maybe_unused]] double cm,
+			[[maybe_unused]] double cm_num_deriv,
+			[[maybe_unused]] double dist_ij,
+			[[maybe_unused]] double par_aux,
+			[[maybe_unused]] double par_aux_up,
+			[[maybe_unused]] double par_aux_down,
+			[[maybe_unused]] double pars_2_up,
+			[[maybe_unused]] double pars_2_down,
+			[[maybe_unused]] double shape) const {
 #if HAS_STD_CYL_BESSEL_K
 			double z = dist_ij * par_aux;
 			double z_up = dist_ij * par_aux_up;
 			double z_down = dist_ij * par_aux_down;
 			double bessel_num_deriv = (std::cyl_bessel_k(pars_2_up, z_up) - std::cyl_bessel_k(pars_2_down, z_down)) / (2. * delta_step_);
-
 			// for debugging
 			//double grad = std::pow(z, shape) * (cm * std::cyl_bessel_k(shape, z) * (std::log(z / 2.) + 0.5 - GPBoost::digamma(shape)) + cm_num_deriv * bessel_num_deriv);
 			//Log::REDebug("cm = %g, cm_num_deriv = %g, pars_2_up = %g, par_aux = %g, par_aux_up = %g, shape = %g",
@@ -2191,7 +2221,6 @@ namespace GPBoost {
 			//double grad_3 = (std::pow(2., 1 - pars_2_up) / std::tgamma(pars_2_up) * std::pow(z_up, pars_2_up) * std::cyl_bessel_k(pars_2_up, z_up) -
 			//	std::pow(2., 1 - pars_2_down) / std::tgamma(pars_2_down) * std::pow(z_down, pars_2_down) * std::cyl_bessel_k(pars_2_down, z_down)) / (2. * delta_step_);
 			//Log::REDebug("grad = %g, grad_2 = %g, grad_3 = %g ", grad, grad_2, grad_3);//for debugging
-
 			return (std::pow(z, shape) * (cm * std::cyl_bessel_k(shape, z) * (std::log(z / 2.) + 0.5 - GPBoost::digamma(shape)) + cm_num_deriv * bessel_num_deriv));
 #else
 			return(0.);
@@ -2310,13 +2339,13 @@ namespace GPBoost {
 			}
 		}//end GradientRangeMaternSpaceTimeShape2_5
 
-		inline double GradientRangeMaternSpaceTimeGeneralShape(double cm,
-			const double dist_ij,
-			const int ind_range,
-			const int i,
-			const int j,
-			const den_mat_t* coords_ptr,
-			const den_mat_t* coords_pred_ptr) const {
+		inline double GradientRangeMaternSpaceTimeGeneralShape([[maybe_unused]] double cm,
+			[[maybe_unused]] const double dist_ij,
+			[[maybe_unused]] const int ind_range,
+			[[maybe_unused]] const int i,
+			[[maybe_unused]] const int j,
+			[[maybe_unused]] const den_mat_t* coords_ptr,
+			[[maybe_unused]] const den_mat_t* coords_pred_ptr) const {
 #if HAS_STD_CYL_BESSEL_K
 			int dim_space = (int)(*coords_ptr).cols() - 1;
 			if (ind_range == 0) {
@@ -2375,15 +2404,15 @@ namespace GPBoost {
 			return(cm * dist_sq_ij_coord * (1 + dist_ij) * std::exp(-dist_ij));
 		}//end GradientRangeMaternARDShape2_5
 
-		inline double GradientRangeMaternARDGeneralShape(double cm,
-			const double dist_ij,
-			double cm_dist,
-			const int ind_range,
-			const int i,
-			const int j,
-			const den_mat_t* coords_ptr,
-			const den_mat_t* coords_pred_ptr,
-			const double shape) const {
+		inline double GradientRangeMaternARDGeneralShape([[maybe_unused]] double cm,
+			[[maybe_unused]] const double dist_ij,
+			[[maybe_unused]] double cm_dist,
+			[[maybe_unused]] const int ind_range,
+			[[maybe_unused]] const int i,
+			[[maybe_unused]] const int j,
+			[[maybe_unused]] const den_mat_t* coords_ptr,
+			[[maybe_unused]] const den_mat_t* coords_pred_ptr,
+			[[maybe_unused]] const double shape) const {
 #if HAS_STD_CYL_BESSEL_K
 			double range_dist = cm_dist * dist_ij;
 			double dist_sq_ij_coord = ((*coords_pred_ptr).coeff(i, ind_range) - (*coords_ptr).coeff(j, ind_range));
@@ -2456,7 +2485,6 @@ namespace GPBoost {
 					return(d_aux2 * std::pow(2., 1 - pars[4]) / std::tgamma(pars[4]) * std::pow(d_aux, pars[4]) * std::cyl_bessel_k(pars[4], d_aux));
 				}
 #else
-				Log::REFatal("'shape' of %g is not supported for the '%s' covariance function (only 0.5, 1.5, and 2.5) when using this compiler (e.g. Clang on Mac). Use gcc or (a newer version of) MSVC instead. ", pars[4], cov_fct_type_.c_str());
 				return(0.);
 #endif
 			}

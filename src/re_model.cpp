@@ -8,6 +8,7 @@
 */
 #include <GPBoost/re_model.h>
 #include <LightGBM/utils/log.h>
+#include <algorithm>
 using LightGBM::Log;
 using LightGBM::LogLevelRE;
 #include <LightGBM/meta.h>
@@ -50,6 +51,17 @@ namespace GPBoost {
 		bool has_weights,
 		const double* weights,
 		double likelihood_learning_rate) {
+		num_data_ = num_data;
+		likelihood_ = likelihood == nullptr ? "gaussian" : std::string(likelihood);
+		likelihood_additional_param_ = likelihood_additional_param;
+		seed_ = seed;
+		num_parallel_threads_ = num_parallel_threads;
+		GPU_use_ = GPU_use;
+		has_weights_ = has_weights;
+		if (has_weights_ && weights != nullptr) {
+			weights_ = std::vector<double>(weights, weights + num_data);
+		}
+		likelihood_learning_rate_ = likelihood_learning_rate;
 		string_t cov_fct_str = "none";
 		if (cov_fct != nullptr) {
 			cov_fct_str = std::string(cov_fct);
@@ -145,6 +157,7 @@ namespace GPBoost {
 				Log::REFatal("Cannot change likelihood after a model has been estimated ");
 			}
 		}
+		likelihood_ = likelihood;
 		if (matrix_format_ == "sp_mat_t") {
 			re_model_sp_->SetLikelihood(likelihood);
 			num_cov_pars_ = re_model_sp_->num_cov_par_;
@@ -281,6 +294,7 @@ namespace GPBoost {
 		int piv_chol_rank,
 		double* init_aux_pars,
 		bool estimate_aux_pars,
+		bool init_coef_aux_pars_from_iid_model,
 		const int* estimate_cov_par_index,
 		int m_lbfgs,
 		double delta_conv_mode_finding) {
@@ -307,7 +321,7 @@ namespace GPBoost {
 			coef_ = Eigen::Map<const vec_t>(init_coef, num_sets_fixed_effects_ * num_covariates);
 			num_covariates_ = num_covariates;
 			num_coef_ = num_covariates * num_sets_fixed_effects_;
-			coef_given_or_estimated_ = true;
+			init_coef_given_ = true;
 		}
 		// Initial aux_pars
 		if (init_aux_pars != nullptr) {
@@ -328,7 +342,9 @@ namespace GPBoost {
 		else {
 			init_aux_pars_given_ = false;
 		}
+		init_coef_aux_pars_from_iid_model_ = init_coef_aux_pars_from_iid_model;
 		// Logging level
+		trace_ = trace;
 		if (trace) {
 			Log::ResetLogLevelRE(LogLevelRE::Debug);
 		}
@@ -360,6 +376,107 @@ namespace GPBoost {
 		cov_pars_initialized_ = false;
 	}
 
+	template <typename T_mat, typename T_chol>
+	void REModel::InitCoefAuxParsFromIidModel(REModelTemplate<T_mat, T_chol>* re_model,
+		const double* y_data,
+		const double* covariate_data,
+		int num_covariates,
+		const double* fixed_effects) {
+		vec_t y_data_iid_vec;
+		const double* y_data_iid = y_data;
+		if (y_data == nullptr) {
+			y_data_iid_vec = vec_t(num_data_);
+			re_model->GetY(y_data_iid_vec.data());
+			y_data_iid = y_data_iid_vec.data();
+		}
+		std::vector<char> re_group_data_iid;
+		re_group_data_iid.reserve(2 * static_cast<size_t>(num_data_));
+		for (data_size_t i = 0; i < num_data_; ++i) {
+			re_group_data_iid.push_back('0');
+			re_group_data_iid.push_back('\0');
+		}
+		const double* weights_ptr = (has_weights_ && !weights_.empty()) ? weights_.data() : nullptr;
+		std::unique_ptr<REModelTemplate<den_mat_t, chol_den_mat_t>> re_model_iid =
+			std::unique_ptr<REModelTemplate<den_mat_t, chol_den_mat_t>>(new REModelTemplate<den_mat_t, chol_den_mat_t>(
+				num_data_, nullptr, re_group_data_iid.data(), 1, nullptr,
+				nullptr, 0, nullptr,
+				0, nullptr, 0, nullptr, 0, nullptr, 1.5, "none",
+				1., 1., -1, "random", -1, 1., "kmeans++",
+				likelihood_.c_str(), likelihood_additional_param_, "cholesky", seed_, num_parallel_threads_, GPU_use_,
+				weights_ptr != nullptr, weights_ptr, likelihood_learning_rate_));
+		const bool estimate_aux_pars_iid = !init_aux_pars_given_ && re_model->estimate_aux_pars_ && re_model_iid->NumAuxPars() > 0;
+		const bool learn_cov_aux_pars_iid = estimate_aux_pars_iid;
+		std::vector<int> estimate_cov_par_index_iid(re_model_iid->num_cov_par_, 0);
+		string_t optimizer_cov_iid = (!re_model->gauss_likelihood_ || estimate_aux_pars_iid) ? "lbfgs" : "gradient_descent";
+		string_t optimizer_coef_iid = re_model->gauss_likelihood_ ? "wls" : "lbfgs";
+		const int max_iter_iid = std::max(re_model->max_iter_, 1000);
+		struct LogLevelREGuard {
+			explicit LogLevelREGuard(bool active) : active_(active) {
+				if (active_) {
+					Log::ResetLogLevelRE(LogLevelRE::Info);
+				}
+			}
+			~LogLevelREGuard() {
+				if (active_) {
+					Log::ResetLogLevelRE(LogLevelRE::Debug);
+				}
+			}
+			bool active_;
+		} log_level_re_guard(trace_);
+		re_model_iid->SetOptimConfig(re_model->lr_cov_init_,
+			re_model->acc_rate_cov_,
+			max_iter_iid,
+			re_model->delta_rel_conv_init_,
+			re_model->use_nesterov_acc_,
+			re_model->nesterov_schedule_version_,
+			optimizer_cov_iid.c_str(),
+			re_model->momentum_offset_,
+			re_model->convergence_criterion_.c_str(),
+			re_model->lr_coef_init_,
+			re_model->acc_rate_coef_,
+			optimizer_coef_iid.c_str(),
+			re_model->cg_max_num_it_,
+			re_model->cg_max_num_it_tridiag_,
+			re_model->cg_delta_conv_,
+			re_model->num_rand_vec_trace_,
+			re_model->reuse_rand_vec_trace_,
+			re_model->cg_preconditioner_type_.c_str(),
+			re_model->seed_rand_vec_trace_,
+			re_model->fitc_piv_chol_preconditioner_rank_,
+			estimate_aux_pars_iid,
+			estimate_cov_par_index_iid.data(),
+			re_model->m_lbfgs_,
+			re_model->delta_conv_mode_finding_);
+		if (init_aux_pars_given_ && NumAuxPars() > 0) {
+			CHECK(re_model_iid->NumAuxPars() == NumAuxPars());
+			re_model_iid->SetAuxPars(re_model->GetAuxPars());
+		}
+		vec_t init_cov_pars_iid = vec_t::Ones(re_model_iid->num_cov_par_);
+		vec_t cov_pars_iid(re_model_iid->num_cov_par_);
+		vec_t coef_iid(num_sets_fixed_effects_ * num_covariates);
+		int num_it_iid = 0;
+		re_model_iid->OptimLinRegrCoefCovPar(y_data_iid,
+			covariate_data,
+			num_covariates,
+			cov_pars_iid.data(),
+			coef_iid.data(),
+			num_it_iid,
+			init_cov_pars_iid.data(),
+			nullptr,
+			fixed_effects,
+			/*learn_covariance_parameters = */ learn_cov_aux_pars_iid,
+			/*called_in_GPBoost_algorithm = */ false,
+			/*reuse_learning_rates_from_previous_call = */ false,
+			/*only_intercept_for_GPBoost_algo = */ false,
+			/*find_learning_rate_for_GPBoost_algo = */ false);
+		CHECK((int)coef_iid.size() == num_sets_fixed_effects_ * num_covariates);
+		coef_ = coef_iid;
+		if (!init_aux_pars_given_ && NumAuxPars() > 0 && re_model_iid->AuxParsHaveBeenSetOrEstimated()) {
+			CHECK(re_model_iid->NumAuxPars() == NumAuxPars());
+			SetAuxPars(re_model_iid->GetAuxPars());
+		}
+	}
+
 	void REModel::OptimCovPar(const double* y_data,
 		const double* fixed_effects,
 		bool called_in_GPBoost_algorithm,
@@ -379,11 +496,11 @@ namespace GPBoost {
 				cov_pars_.data(),
 				nullptr,
 				fixed_effects,
-				true,
-				called_in_GPBoost_algorithm,
-				reuse_learning_rates_from_previous_call,
-				false,
-				false);
+				/*learn_covariance_parameters = */ true,
+				/*called_in_GPBoost_algorithm = */ called_in_GPBoost_algorithm,
+				/*reuse_learning_rates_from_previous_call = */ reuse_learning_rates_from_previous_call,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->OptimLinRegrCoefCovPar(y_data,
@@ -395,11 +512,11 @@ namespace GPBoost {
 				cov_pars_.data(),
 				nullptr,
 				fixed_effects,
-				true,
-				called_in_GPBoost_algorithm,
-				reuse_learning_rates_from_previous_call,
-				false,
-				false);
+				/*learn_covariance_parameters = */ true,
+				/*called_in_GPBoost_algorithm = */ called_in_GPBoost_algorithm,
+				/*reuse_learning_rates_from_previous_call = */ reuse_learning_rates_from_previous_call,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(y_data,
@@ -411,17 +528,18 @@ namespace GPBoost {
 				cov_pars_.data(),
 				nullptr,
 				fixed_effects,
-				true,
-				called_in_GPBoost_algorithm,
-				reuse_learning_rates_from_previous_call,
-				false,
-				false);
+				/*learn_covariance_parameters = */ true,
+				/*called_in_GPBoost_algorithm = */ called_in_GPBoost_algorithm,
+				/*reuse_learning_rates_from_previous_call = */ reuse_learning_rates_from_previous_call,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 		has_covariates_ = false;
 		covariance_matrix_has_been_factorized_ = true;
 		model_has_been_estimated_ = true;
 		std_dev_cov_pars_calculated_ = false;
 		std_dev_coef_calculated_ = false;
+		std_dev_aux_pars_calculated_ = false;
 	}//end OptimCovPar
 
 	void REModel::OptimLinRegrCoefCovPar(const double* y_data,
@@ -432,7 +550,21 @@ namespace GPBoost {
 		double* init_coef_ptr;
 		num_covariates_ = num_covariates;
 		num_coef_ = num_covariates * num_sets_fixed_effects_;
-		if ((int)coef_.size() == num_covariates) {
+		if (init_coef_aux_pars_from_iid_model_ && !init_coef_given_ &&
+			((matrix_format_ == "sp_mat_t" && !re_model_sp_->IsIidModel()) ||
+			 (matrix_format_ == "sp_mat_rm_t" && !re_model_sp_rm_->IsIidModel()) ||
+			 (matrix_format_ == "den_mat_t" && !re_model_den_->IsIidModel()))) {
+			if (matrix_format_ == "sp_mat_t") {
+				InitCoefAuxParsFromIidModel(re_model_sp_.get(), y_data, covariate_data, num_covariates, fixed_effects);
+			}
+			else if (matrix_format_ == "sp_mat_rm_t") {
+				InitCoefAuxParsFromIidModel(re_model_sp_rm_.get(), y_data, covariate_data, num_covariates, fixed_effects);
+			}
+			else {
+				InitCoefAuxParsFromIidModel(re_model_den_.get(), y_data, covariate_data, num_covariates, fixed_effects);
+			}
+		}
+		if ((int)coef_.size() == num_coef_) {
 			init_coef_ptr = coef_.data();
 		}
 		else {
@@ -449,11 +581,11 @@ namespace GPBoost {
 				cov_pars_.data(),
 				init_coef_ptr,
 				fixed_effects,
-				true,
-				false,
-				false,
-				false,
-				false);
+				/*learn_covariance_parameters = */ true,
+				/*called_in_GPBoost_algorithm = */ false,
+				/*reuse_learning_rates_from_previous_call = */ false,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->OptimLinRegrCoefCovPar(y_data,
@@ -465,11 +597,11 @@ namespace GPBoost {
 				cov_pars_.data(),
 				init_coef_ptr,
 				fixed_effects,
-				true,
-				false,
-				false,
-				false,
-				false);
+				/*learn_covariance_parameters = */ true,
+				/*called_in_GPBoost_algorithm = */ false,
+				/*reuse_learning_rates_from_previous_call = */ false,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(y_data,
@@ -481,21 +613,22 @@ namespace GPBoost {
 				cov_pars_.data(),
 				init_coef_ptr,
 				fixed_effects,
-				true,
-				false,
-				false,
-				false,
-				false);
+				/*learn_covariance_parameters = */ true,
+				/*called_in_GPBoost_algorithm = */ false,
+				/*reuse_learning_rates_from_previous_call = */ false,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 		has_covariates_ = true;
-		coef_given_or_estimated_ = true;
+		coef_estimated_ = true;
 		covariance_matrix_has_been_factorized_ = true;
 		model_has_been_estimated_ = true;
 		std_dev_cov_pars_calculated_ = false;
 		std_dev_coef_calculated_ = false;
+		std_dev_aux_pars_calculated_ = false;
 	}//end OptimLinRegrCoefCovPar
 
-	void REModel::FindInitialValueBoosting() {
+	void REModel::FindInitialValueBoosting(const double* fixed_effects) {
 		CHECK(cov_pars_initialized_);
 		vec_t covariate_data(GetNumData());
 		covariate_data.setOnes();
@@ -512,12 +645,12 @@ namespace GPBoost {
 				num_it_,
 				cov_pars_.data(),
 				init_score_boosting_.data(),
-				nullptr,
-				false,//learn_covariance_parameters=false
-				true,
-				false,
-				true,
-				false);
+				fixed_effects,
+				/*learn_covariance_parameters = */ false,
+				/*called_in_GPBoost_algorithm = */ true,
+				/*reuse_learning_rates_from_previous_call = */ false,
+				/*only_intercept_for_GPBoost_algo = */ true,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->OptimLinRegrCoefCovPar(nullptr,
@@ -528,12 +661,12 @@ namespace GPBoost {
 				num_it_,
 				cov_pars_.data(),
 				init_score_boosting_.data(),
-				nullptr,
-				false,//learn_covariance_parameters=false
-				true,
-				false,
-				true,
-				false);
+				fixed_effects,
+				/*learn_covariance_parameters = */ false,
+				/*called_in_GPBoost_algorithm = */ true,
+				/*reuse_learning_rates_from_previous_call = */ false,
+				/*only_intercept_for_GPBoost_algo = */ true,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(nullptr,
@@ -544,12 +677,12 @@ namespace GPBoost {
 				num_it_,
 				cov_pars_.data(),
 				init_score_boosting_.data(),
-				nullptr,
-				false,//learn_covariance_parameters=false
-				true,
-				false,
-				true,
-				false);
+				fixed_effects,
+				/*learn_covariance_parameters = */ false,
+				/*called_in_GPBoost_algorithm = */ true,
+				/*reuse_learning_rates_from_previous_call = */ false,
+				/*only_intercept_for_GPBoost_algo = */ true,
+				/*find_learning_rate_for_GPBoost_algo = */ false);
 		}
 	}//end FindInitialValueBoosting
 
@@ -573,11 +706,11 @@ namespace GPBoost {
 				cov_pars_.data(),
 				&lr,
 				score,
-				false,//learn_covariance_parameters=false
-				true,
-				reuse_learning_rates_from_previous_call,
-				false,
-				true);
+				/*learn_covariance_parameters = */ false,
+				/*called_in_GPBoost_algorithm = */ true,
+				/*reuse_learning_rates_from_previous_call = */ reuse_learning_rates_from_previous_call,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ true);
 		}
 		else if (matrix_format_ == "sp_mat_rm_t") {
 			re_model_sp_rm_->OptimLinRegrCoefCovPar(nullptr,
@@ -589,11 +722,11 @@ namespace GPBoost {
 				cov_pars_.data(),
 				&lr,
 				score,
-				false,//learn_covariance_parameters=false
-				true,
-				reuse_learning_rates_from_previous_call,
-				false,
-				true);
+				/*learn_covariance_parameters = */ false,
+				/*called_in_GPBoost_algorithm = */ true,
+				/*reuse_learning_rates_from_previous_call = */ reuse_learning_rates_from_previous_call,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ true);
 		}
 		else {
 			re_model_den_->OptimLinRegrCoefCovPar(nullptr,
@@ -605,11 +738,11 @@ namespace GPBoost {
 				cov_pars_.data(),
 				&lr,
 				score,
-				false,//learn_covariance_parameters=false
-				true,
-				reuse_learning_rates_from_previous_call,
-				false,
-				true);
+				/*learn_covariance_parameters = */ false,
+				/*called_in_GPBoost_algorithm = */ true,
+				/*reuse_learning_rates_from_previous_call = */ reuse_learning_rates_from_previous_call,
+				/*only_intercept_for_GPBoost_algo = */ false,
+				/*find_learning_rate_for_GPBoost_algo = */ true);
 		}
 	}//end LineSearchLearningRate
 
@@ -767,6 +900,18 @@ namespace GPBoost {
 		}
 		else {
 			return re_model_den_->CanCalculateStandardErrorsCovPars();
+		}
+	}
+
+	bool REModel::CanCalculateStandardErrorsAuxPars() const {
+		if (matrix_format_ == "sp_mat_t") {
+			return re_model_sp_->CanCalculateStandardErrorsAuxPars();
+		}
+		else if (matrix_format_ == "sp_mat_rm_t") {
+			return re_model_sp_rm_->CanCalculateStandardErrorsAuxPars();
+		}
+		else {
+			return re_model_den_->CanCalculateStandardErrorsAuxPars();
 		}
 	}
 
@@ -987,7 +1132,7 @@ namespace GPBoost {
 			}
 		}// end use saved cov_pars
 		if (has_covariates_) {
-			CHECK(coef_given_or_estimated_ == true);
+			CHECK(coef_estimated_ || init_coef_given_);
 		}
 		if (suppress_calc_cov_factor) {
 			calc_cov_factor = false;
@@ -1096,7 +1241,7 @@ namespace GPBoost {
 			}
 		}// end use saved cov_pars
 		if (has_covariates_) {
-			CHECK(coef_given_or_estimated_ == true);
+			CHECK(coef_estimated_ || init_coef_given_);
 		}
 		if (matrix_format_ == "sp_mat_t") {
 			re_model_sp_->PredictTrainingDataRandomEffects(cov_pars_pred_trans.data(),
@@ -1214,8 +1359,10 @@ namespace GPBoost {
 	}
 
 	void REModel::GetAuxPars(double* aux_pars,
-		string_t& name) const {//only for exporting -> thus aux_pars on original scale
+		string_t& name,
+		bool calc_std_dev) {//only for exporting -> thus aux_pars on original scale
 		const double* aux_pars_temp;
+		int num_aux_pars = NumAuxPars();
 		if (matrix_format_ == "sp_mat_t") {
 			aux_pars_temp = re_model_sp_->GetAuxPars();
 			re_model_sp_->BackTransformAuxPars(aux_pars_temp, aux_pars);
@@ -1230,7 +1377,28 @@ namespace GPBoost {
 			aux_pars_temp = re_model_den_->GetAuxPars();
 			re_model_den_->BackTransformAuxPars(aux_pars_temp, aux_pars);
 			re_model_den_->GetNamesAuxPars(name);
-		}		
+		}
+		if (calc_std_dev) {
+			if (!std_dev_aux_pars_calculated_) {
+				std_dev_aux_pars_ = vec_t(num_aux_pars);
+				if (matrix_format_ == "sp_mat_t") {
+					re_model_sp_->CalculateStandardErrorsAuxPars(cov_pars_.data(), std_dev_aux_pars_.data());
+				}
+				else if (matrix_format_ == "sp_mat_rm_t") {
+					re_model_sp_rm_->CalculateStandardErrorsAuxPars(cov_pars_.data(), std_dev_aux_pars_.data());
+				}
+				else {
+					re_model_den_->CalculateStandardErrorsAuxPars(cov_pars_.data(), std_dev_aux_pars_.data());
+				}
+				std_dev_aux_pars_calculated_ = true;
+			}
+			else {
+				CHECK((int)std_dev_aux_pars_.size() == num_aux_pars);
+			}
+			for (int j = 0; j < num_aux_pars; ++j) {
+				aux_pars[j + num_aux_pars] = std_dev_aux_pars_[j];
+			}
+		}
 	}
 
 	void REModel::SetAuxPars(const double* aux_pars) {
@@ -1243,6 +1411,7 @@ namespace GPBoost {
 		else {
 			re_model_den_->SetAuxPars(aux_pars);
 		}
+		std_dev_aux_pars_calculated_ = false;
 	}
 
 	void REModel::GetInitAuxPars(double* aux_pars) const {

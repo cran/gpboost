@@ -60,8 +60,11 @@
 #' with point masses at 0 and 1 and a continuous distribution on (0,1). The model used is Y = min(max(Z - xi, 0), 1), 
 #' where Z follows a gamma distribution with mean mu = exp(F(X) + Zb) and shape k. The shape k and shift xi are 
 #' (auxiliary) parameters that are estimated. For more details on this model, see Sigrist and Stahel (2011) }
-#' \item{ "gaussian_heteroscedastic": Gaussian likelihood where both the mean and the variance 
+#' \item{ "gaussian_heteroscedastic_fixed_and_random": Gaussian likelihood where both the mean and the variance
 #' are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation }
+#' \item{ "gaussian_heteroscedastic": Gaussian likelihood where the mean is related to fixed and random effects and
+#' the log-error variance is related to fixed effects only (covariates and / or the GPBoost tree-boosting algorithm;
+#' no random effects / GPs for the variance) }
 #' \item{ Note: the first lines in the \href{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h}{likelihoods source file} contain additional comments on the specific parametrizations used }
 #' \item{ Note: other likelihoods can be implemented upon request }
 #' }
@@ -275,6 +278,9 @@
 #'                \item{init_aux_pars: \code{vector} with \code{numeric} elements (default = NULL). 
 #'                Initial values for additional parameters for non-Gaussian likelihoods 
 #'                (e.g., shape parameter of a gamma or negative_binomial likelihood) }
+#'                \item{init_coef_aux_pars_from_iid_model: \code{boolean} (default = TRUE).
+#'                If TRUE, regression coefficients and auxiliary parameters are initialized from an iid model (only for models with a linear regression term).
+#'                This option is ignored if init_coef is provided. If init_aux_pars is provided but init_coef is not, only regression coefficients are initialized from an iid model. }
 #'                \item{estimate_cov_par_index: \code{vector} with \code{integer} (default = -1). 
 #'                This allows for disabling the estimation of some (or all) covariance parameters. 
 #'                If 'estimate_cov_par_index' = -1, all covariance parameters are estimated. 
@@ -300,21 +306,26 @@
 #'                If 'optimizer_cov' is set to "nelder_mead" or "lbfgs", 
 #'                'optimizer_coef' is automatically also set to the same value.}
 #'                \item{maxit: \code{integer} (default = 1000). 
-#'                Maximal number of iterations for optimization algorithm }
+#'                Maximal number of iterations for optimization algorithm.
+#'                If maxit = -999, internal default values are used }
 #'                \item{delta_rel_conv: \code{numeric} (default = 1E-6 except for "nelder_mead" for which the default is 1E-8). 
 #'                Convergence tolerance. The algorithm stops if the relative change 
 #'                in either the (approximate) log-likelihood or the parameters is below this value. 
-#'                If < 0, internal default values are used }
+#'                If delta_rel_conv = -999, internal default values are used }
 #'                \item{cg_max_num_it: \code{integer} (default = 1000). 
-#'                Maximal number of iterations for conjugate gradient algorithms }
+#'                Maximal number of iterations for conjugate gradient algorithms.
+#'                If cg_max_num_it = -999, internal default values are used }
 #'                \item{cg_max_num_it_tridiag: \code{integer} (default = 1000). 
 #'                Maximal number of iterations for conjugate gradient algorithm 
-#'                when being run as Lanczos algorithm for tridiagonalization }
+#'                when being run as Lanczos algorithm for tridiagonalization.
+#'                If cg_max_num_it_tridiag = -999, internal default values are used }
 #'                \item{cg_delta_conv: \code{numeric} (default = 1E-2).
 #'                Tolerance level for L2 norm of residuals for checking convergence 
-#'                in conjugate gradient algorithm when being used for parameter estimation }
+#'                in conjugate gradient algorithm when being used for parameter estimation.
+#'                If cg_delta_conv = -999, internal default values are used }
 #'                \item{num_rand_vec_trace: \code{integer} (default = 50). 
-#'                Number of random vectors (e.g., Rademacher) for stochastic approximation of the trace of a matrix }
+#'                Number of random vectors (e.g., Rademacher) for stochastic approximation of the trace of a matrix.
+#'                If num_rand_vec_trace = -999, internal default values are used }
 #'                \item{reuse_rand_vec_trace: \code{boolean} (default = TRUE). 
 #'                If true, random vectors (e.g., Rademacher) for stochastic approximations 
 #'                of the trace of a matrix are sampled only once at the beginning of 
@@ -357,7 +368,7 @@
 #'                Rank of the FITC and pivoted Cholesky decomposition preconditioners for 
 #'                iterative methods for Vecchia and VIF approximations 
 #'                (for full_scale_tapering, the same inducing points as in the approximation as used).
-#'                Internal default values if NULL or < 0: 
+#'                If fitc_piv_chol_preconditioner_rank = -999, internal default values are used: 
 #'                \itemize{
 #'                      \item{ 200 for the FITC preconditioner }
 #'                      \item{ 50 for the pivoted Cholesky decomposition preconditioner }
@@ -365,32 +376,36 @@
 #'                  }
 #'                \item{convergence_criterion: \code{string} (default = "relative_change_in_log_likelihood", only relevant for "gradient_descent", "fisher_scoring", and "newton"). 
 #'                The convergence criterion used for terminating the optimization algorithm.
-#'                Options: "relative_change_in_log_likelihood" or "relative_change_in_parameters" }
+#'                Options: "relative_change_in_log_likelihood" or "relative_change_in_parameters".
+#'                If convergence_criterion = "default", internal default values are used }
 #'                \item{lr_cov: \code{numeric} (default = 0.1 for "gradient_descent" and 1. otherwise, only relevant for "gradient_descent", "fisher_scoring", and "newton"). 
 #'                Initial learning rate for covariance parameters if a gradient-based optimization method is used 
 #'                \itemize{
-#'                \item{If lr_cov < 0, internal default values are used (0.1 for "gradient_descent" and 1. otherwise) }
+#'                \item{If lr_cov = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise) }
 #'                \item{If there are additional auxiliary parameters for non-Gaussian likelihoods, 
 #'                'lr_cov' is also used for those }
 #'                \item{For "lbfgs", this is divided by the norm of the gradient in the first iteration }}}
 #'                \item{lr_coef: \code{numeric} (default = 0.1, only relevant for "gradient_descent", "fisher_scoring", and "newton"). 
-#'                Learning rate for fixed effect regression coefficients if gradient descent is used }
+#'                Learning rate for fixed effect regression coefficients if gradient descent is used.
+#'                If lr_coef = -999, internal default values are used }
 #'                \item{use_nesterov_acc: \code{boolean} (default = TRUE, only relevant for "gradient_descent"). 
 #'                If TRUE Nesterov acceleration is used.
 #'                This is used only for gradient descent }
+#'                \item{nesterov_schedule_version: \code{integer} (Default = 0, only relevant for "gradient_descent")}. 
+#'                Which version of Nesterov schedule should be used. If nesterov_schedule_version = -999, internal default values are used.
 #'                \item{acc_rate_coef: \code{numeric} (default = 0.5, only relevant for "gradient_descent"). 
 #'                Acceleration rate for regression coefficients (if there are any) 
-#'                for Nesterov acceleration }
+#'                for Nesterov acceleration. If acc_rate_coef = -999, internal default values are used }
 #'                \item{acc_rate_cov: \code{numeric} (default = 0.5, only relevant for "gradient_descent"). 
-#'                Acceleration rate for covariance parameters for Nesterov acceleration }
+#'                Acceleration rate for covariance parameters for Nesterov acceleration. If acc_rate_cov = -999, internal default values are used }
 #'                \item{momentum_offset: \code{integer} (Default = 2, only relevant for "gradient_descent")}. 
-#'                Number of iterations for which no momentum is applied in the beginning.
-#'                \item{m_lbfgs: \code{integer} (Default = 6)}. Number of corrections to approximate the inverse Hessian matrix for the "lbfgs" optimizer
-#'                \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8)}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods
+#'                Number of iterations for which no momentum is applied in the beginning. If momentum_offset = -999, internal default values are used.
+#'                \item{m_lbfgs: \code{integer} (Default = 6)}. Number of corrections to approximate the inverse Hessian matrix for the "lbfgs" optimizer. If m_lbfgs = -999, internal default values are used
+#'                \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8)}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
 #'            }
 #' @param offset A \code{numeric} \code{vector} with 
 #' additional fixed effects contributions that are added to the linear predictor (= offset). 
-#' The length of this vector needs to equal the number of training data points.
+#' The length of this vector needs to equal the number of training data points times the number of fixed-effect sets.
 #' @param fixed_effects This is discontinued. Use the renamed equivalent argument \code{offset} instead
 #' @param group_data_pred A \code{vector} or \code{matrix} with elements being group levels 
 #' for which predictions are made (if there are grouped random effects in the \code{GPModel})
@@ -583,8 +598,10 @@ gpb.GPModel <- R6::R6Class(
           private$iid_model <- TRUE
         }
       }
-      if (likelihood == "gaussian_heteroscedastic") {
+      if (likelihood == "gaussian_heteroscedastic_fixed_and_random") {
         private$num_sets_re = 2
+        private$num_sets_fe = 2
+      } else if (likelihood == "gaussian_heteroscedastic") {
         private$num_sets_fe = 2
       }
       private$cov_par_names <- c()
@@ -1172,7 +1189,7 @@ gpb.GPModel <- R6::R6Class(
       }
       if (length(cov_pars) != private$num_cov_pars) {
         add_message <- ""
-        if (private$gp_approx == "vecchia_latent") add_message <- ". The error variance should be provided via the 'aux_pars' argument"
+        if (private$gp_approx == "vecchia_latent" || self$get_likelihood_name() == "gaussian_latent") add_message <- ". The error variance should be provided via the 'aux_pars' argument"
         stop("GPModel.neg_log_likelihood: Size of ", sQuote("cov_pars"), 
              " does not correspond to the number of parameters", add_message)
       }
@@ -1276,6 +1293,7 @@ gpb.GPModel <- R6::R6Class(
         , private$params[["fitc_piv_chol_preconditioner_rank"]]
         , init_aux_pars
         , private$params[["estimate_aux_pars"]]
+        , private$params[["init_coef_aux_pars_from_iid_model"]]
         , private$params[["estimate_cov_par_index"]]
         , private$params[["m_lbfgs"]]
         , private$params[["delta_conv_mode_finding"]]
@@ -1359,6 +1377,9 @@ gpb.GPModel <- R6::R6Class(
       if (!is.logical(std_err)) {
         stop("GPModel: ", sQuote("std_err"), " needs to be of boolean type ")
       }
+      if (!self$can_calculate_standard_errors_coef()) {
+        std_err <- FALSE
+      }
       if (is.null(private$num_covariates)) {
         stop("GPModel: ", sQuote("fit"), " has not been called")
       }
@@ -1383,18 +1404,36 @@ gpb.GPModel <- R6::R6Class(
       return(coef)
     },
     
-    get_aux_pars = function() {
+    get_aux_pars = function(std_err = FALSE) {
+      if (!is.logical(std_err)) {
+        stop("GPModel: ", sQuote("std_err"), " needs to be of boolean type ")
+      }
+      if (!self$can_calculate_standard_errors_aux_pars()) {
+        std_err <- FALSE
+      }
       num_aux_pars <- self$get_num_aux_pars()
       if (num_aux_pars > 0) {
-        aux_pars <- numeric(num_aux_pars)
+        if (std_err) {
+          aux_pars <- numeric(2 * num_aux_pars)
+        } else {
+          aux_pars <- numeric(num_aux_pars)
+        }
         aux_pars_name_str <- .Call(
           GPB_GetAuxPars_R
           , private$handle
+          , std_err
           , aux_pars
         )
         aux_pars_name <- strsplit(aux_pars_name_str, "_SEP_")[[1]]
         if (length(aux_pars_name) != num_aux_pars) stop("get_aux_pars: wrong length of 'aux_par_name'")
-        names(aux_pars) <- aux_pars_name
+        if (std_err) {
+          aux_pars_std_err <- aux_pars[1:num_aux_pars + num_aux_pars]
+          aux_pars <- rbind(aux_pars[1:num_aux_pars], aux_pars_std_err)
+          colnames(aux_pars) <- aux_pars_name
+          rownames(aux_pars) <- c("Param.", "Std. err.")
+        } else {
+          names(aux_pars) <- aux_pars_name
+        }
       } else {
         aux_pars <- NULL
       }
@@ -1680,7 +1719,7 @@ gpb.GPModel <- R6::R6Class(
         }
         if (length(cov_pars) != private$num_cov_pars) {
           add_message <- ""
-          if (private$gp_approx == "vecchia_latent") add_message <- ". The error variance should be provided via the 'aux_pars' argument"
+          if (private$gp_approx == "vecchia_latent" || self$get_likelihood_name() == "gaussian_latent") add_message <- ". The error variance should be provided via the 'aux_pars' argument"
           stop("predict.GPModel: Size of ", sQuote("cov_pars"), " does not correspond to the number of parameters", add_message)
         }
       }
@@ -1901,7 +1940,14 @@ gpb.GPModel <- R6::R6Class(
           stop("predict.GPModel: Can only use ", sQuote("vector"), " as ", sQuote("offset_pred"))
         }
         if (length(offset_pred) != (num_data_pred * private$num_sets_fe)) {
-          stop("predict.GPModel: Length of ", sQuote("offset"), " does not match number of predicted data points")
+          stop("predict.GPModel: Length of ", sQuote("offset_pred"), " is incorrect. Expected ",
+               num_data_pred * private$num_sets_fe, " (= ", num_data_pred,
+               " prediction data point(s) * ", private$num_sets_fe,
+               " fixed-effect set(s)), but got ", length(offset_pred), ". ",
+               "For GPBoost predictions, this often means that the random-effect prediction data ",
+               "(e.g., ", sQuote("group_data_pred"), " or ", sQuote("gp_coords_pred"),
+               ") has a different number of rows than ", sQuote("data"),
+               " used for the tree ensemble.")
         }
       }# end offset_pred
       # Pre-allocate empty vector
@@ -1973,9 +2019,16 @@ gpb.GPModel <- R6::R6Class(
       return(list(mu=pred_mean,cov=pred_cov_mat,var=pred_var,posterior_samples=posterior_samples,prior_samples=prior_samples))
     },
     
-    predict_training_data_random_effects = function(predict_var = FALSE) {
+    predict_training_data_random_effects = function(predict_var = FALSE,
+                                                    offset = NULL) {
       if(isTRUE(private$model_has_been_loaded_from_saved_file)){
         stop("GPModel: 'predict_training_data_random_effects' is currently not implemented for models that have been loaded from a saved file. Use the 'predict' function instead ")
+      }
+      if (isTRUE(private$used_in_gpboost_algorithm) && is.null(offset)) {
+        stop("predict_training_data_random_effects.GPModel: This GPModel is used in a GPBoost model. ",
+             "Call ", sQuote("predict_training_data_random_effects"), " on the ", sQuote("gpb.Booster"),
+             " object instead, e.g. ", sQuote("predict_training_data_random_effects(bst)"), ". ",
+             "The Booster is needed to provide the training tree fixed effects as an offset.")
       }
       num_re_comps = (private$num_group_re + private$num_group_rand_coef + 
                         private$num_gp + private$num_gp_rand_coef) * private$num_sets_re
@@ -1985,6 +2038,27 @@ gpb.GPModel <- R6::R6Class(
       if (storage.mode(predict_var) != "logical") {
         stop("predict_training_data_random_effects.GPModel: Can only use ", 
              sQuote("logical"), " as ", sQuote("predict_var"))
+      }
+      if (!is.null(offset)) {
+        if (!is.vector(offset)) {
+          if (is.matrix(offset)) {
+            if (dim(offset)[2] != 1) {
+              stop("predict_training_data_random_effects.GPModel: Can only use ",
+                   sQuote("vector"), " as ", sQuote("offset"))
+            }
+          } else {
+            stop("predict_training_data_random_effects.GPModel: Can only use ",
+                 sQuote("vector"), " as ", sQuote("offset"))
+          }
+        }
+        if (storage.mode(offset) != "double") {
+          storage.mode(offset) <- "double"
+        }
+        offset <- as.vector(offset)
+        if (length(offset) != private$num_data * private$num_sets_fe) {
+          stop("predict_training_data_random_effects.GPModel: Length of ",
+               sQuote("offset"), " must be equal to the number of training data points times the number of fixed-effect sets")
+        }
       }
       if (predict_var) {
         re_preds <- numeric(private$num_data * num_re_comps * 2)
@@ -1997,7 +2071,7 @@ gpb.GPModel <- R6::R6Class(
         , private$handle
         , NULL
         , NULL
-        , NULL
+        , offset
         , predict_var
         , re_preds
       )
@@ -2095,16 +2169,19 @@ gpb.GPModel <- R6::R6Class(
         }
       }
       offset <- as.vector(offset)
-      if (length(offset) != (private$num_data *  private$num_sets_re)) {
-        stop("GPModel: Number of data points in ", sQuote("offset"), " does not match number of data points of initialized model")
+      if (length(offset) != (private$num_data *  private$num_sets_fe)) {
+        stop("GPModel: Length of ", sQuote("offset"), " is incorrect. Expected ",
+             private$num_data * private$num_sets_fe, " (= ", private$num_data,
+             " training data point(s) * ", private$num_sets_fe,
+             " fixed-effect set(s)), but got ", length(offset), ".")
       }
     },
-    
+
     get_offset_data = function() {
       if (!private$has_offset) {
         stop("GPModel: Model has no offset ")
       }
-      offset <- numeric(private$num_data * private$num_sets_re)
+      offset <- numeric(private$num_data * private$num_sets_fe)
       .Call(
         GPB_GetOffsetData_R
         , private$handle
@@ -2180,7 +2257,21 @@ gpb.GPModel <- R6::R6Class(
       )
       return(as.logical(out))
     },
-    
+
+    can_calculate_standard_errors_aux_pars = function() {
+      out <- integer(1)
+      .Call(
+        GPB_CanCalculateStandardErrorsAuxPars_R
+        , private$handle
+        , out
+      )
+      return(as.logical(out))
+    },
+
+    can_calculate_standard_errors_coef = function() {
+      return(self$get_likelihood_name() != "asymmetric_laplace")
+    },
+
     get_num_aux_pars = function() {
       num_aux_pars <- integer(1)
       .Call(
@@ -2325,7 +2416,35 @@ gpb.GPModel <- R6::R6Class(
     },
     
     summary = function(std_err = TRUE) {
+      # First, perform all calculations (some of which, e.g. standard deviation calculations,
+      # can trigger warning messages) before printing anything, so that warnings are
+      # not interleaved with the output below
       cov_pars <- self$get_cov_pars(std_err = std_err)
+      has_covariates <- private$has_covariates
+      if (has_covariates) {
+        coefs <- self$get_coef(std_err = std_err)
+        if (std_err) {
+          z_values <- coefs[1,] / coefs[2,]
+          p_values <- 2 * exp(pnorm(-abs(z_values), log.p = TRUE))
+        }
+      }
+      num_aux_pars <- self$get_num_aux_pars()
+      if (num_aux_pars > 0) {
+        aux_pars <- self$get_aux_pars(std_err = std_err)
+      }
+      model_fitted <- private$model_fitted
+      if (model_fitted) {
+        ll <- -self$get_current_neg_log_likelihood()
+        npar <- private$num_cov_pars
+        if (has_covariates) npar <- npar + private$num_coef
+        if (private$iid_model) npar <- npar - 1 # do not count variance component
+        aic <- 2*npar - 2*ll
+        bic <- npar*log(self$get_num_data()) - 2*ll
+      }
+      no_convergence <- (!private$model_has_been_loaded_from_saved_file) &&
+        (private$params$maxit == self$get_num_optim_iter())
+
+      # Now print everything
       cat("=====================================================\n")
       cat("Model summary:\n")
       cat(paste0("Nb. observations: ", self$get_num_data(),"\n"))
@@ -2341,13 +2460,7 @@ gpb.GPModel <- R6::R6Class(
         outstr <- paste0(outstr,"\n")
         cat(outstr)
       }
-      if (private$model_fitted) {
-        ll <- -self$get_current_neg_log_likelihood()
-        npar <- private$num_cov_pars
-        if (private$has_covariates) npar <- npar + private$num_coef
-        if (private$iid_model) npar <- npar - 1 # do not count variance component
-        aic <- 2*npar - 2*ll
-        bic <- npar*log(self$get_num_data()) - 2*ll
+      if (model_fitted) {
         print(round(c("Log-lik"=ll, "AIC"=aic, "BIC"=bic),digits=2))
         cat("-----------------------------------------------------\n")
       }
@@ -2372,13 +2485,10 @@ gpb.GPModel <- R6::R6Class(
         rownames(cov_pars_print) <- "Error_var"
         print(round(cov_pars_print,4))
       }
-      if (private$has_covariates) {
-        coefs <- self$get_coef(std_err = std_err)
+      if (has_covariates) {
         cat("-----------------------------------------------------\n")
         cat("Linear regression coefficients (fixed effects):\n")
         if (std_err) {
-          z_values <- coefs[1,] / coefs[2,]
-          p_values <- 2 * exp(pnorm(-abs(z_values), log.p = TRUE))
           coefs_summary <- cbind(t(coefs),"z value"=z_values,"P(>|z|)"=p_values)
           print(round(coefs_summary,4))
         } else {
@@ -2387,19 +2497,20 @@ gpb.GPModel <- R6::R6Class(
           print(round(coefs,4))
         }
       }
-      if (self$get_num_aux_pars() > 0) {
-        aux_pars <- self$get_aux_pars()
-        aux_pars <- t(t(aux_pars))
-        colnames(aux_pars) <- "Param."
+      if (num_aux_pars > 0) {
         cat("-----------------------------------------------------\n")
         cat("Additional parameters:\n")
-        print(round(aux_pars,4))
-      }
-      if (!private$model_has_been_loaded_from_saved_file) {
-        if (private$params$maxit == self$get_num_optim_iter()) {
-          cat("-----------------------------------------------------\n")
-          cat("Note: no convergence after the maximal number of iterations\n")
+        if (is.matrix(aux_pars)) {
+          print(round(t(aux_pars),4))
+        } else {
+          aux_pars <- t(t(aux_pars))
+          colnames(aux_pars) <- "Param."
+          print(round(aux_pars,4))
         }
+      }
+      if (no_convergence) {
+        cat("-----------------------------------------------------\n")
+        cat("Note: no convergence after the maximal number of iterations\n")
       }
       cat("=====================================================\n")
     }
@@ -2457,35 +2568,37 @@ gpb.GPModel <- R6::R6Class(
     coef_names = NULL,
     num_data_pred = NULL,
     model_has_been_loaded_from_saved_file = FALSE,
+    used_in_gpboost_algorithm = FALSE,
     y_loaded_from_file = NULL,
     cov_pars_loaded_from_file = NULL,
     coefs_loaded_from_file = NULL,
     X_loaded_from_file = NULL,
     model_fitted = FALSE,
     current_neg_log_likelihood_loaded_from_file = NULL,
-    params = list(maxit = 1000L,
-                  delta_rel_conv = -1., # default value is set in C++
-                  init_coef = NULL,
-                  lr_coef = 0.1,
-                  lr_cov = -1., # default value is set in C++
-                  use_nesterov_acc = TRUE,
-                  acc_rate_coef = 0.5,
-                  acc_rate_cov = 0.5,
-                  nesterov_schedule_version = 0L,
-                  momentum_offset = 2L,
-                  trace = FALSE,
-                  convergence_criterion = "relative_change_in_log_likelihood",
-                  cg_max_num_it = 1000L,
-                  cg_max_num_it_tridiag = 1000L,
-                  cg_delta_conv = 1e-2,
-                  num_rand_vec_trace = 50L,
-                  reuse_rand_vec_trace = TRUE,
-                  seed_rand_vec_trace = 1L,
-                  fitc_piv_chol_preconditioner_rank = -1L, # default value is set in C++
-                  estimate_aux_pars = TRUE,
-                  estimate_cov_par_index = -1L,
-                  m_lbfgs = -1L, # default value is set in C++
-                  delta_conv_mode_finding = -1 # default value is set in C++
+        params = list(maxit = -999L, # default value is set in C++
+          delta_rel_conv = -999., # default value is set in C++
+          init_coef = NULL,
+          lr_coef = -999., # default value is set in C++
+          lr_cov = -999., # default value is set in C++
+          use_nesterov_acc = TRUE,
+          acc_rate_coef = -999., # default value is set in C++
+          acc_rate_cov = -999., # default value is set in C++
+          nesterov_schedule_version = -999L, # default value is set in C++
+          momentum_offset = -999L, # default value is set in C++
+          trace = FALSE,
+          convergence_criterion = "default", # default value is set in C++
+          cg_max_num_it = -999L, # default value is set in C++
+          cg_max_num_it_tridiag = -999L, # default value is set in C++
+          cg_delta_conv = -999., # default value is set in C++
+          num_rand_vec_trace = -999L, # default value is set in C++
+          reuse_rand_vec_trace = TRUE,
+          seed_rand_vec_trace = 1L,
+          fitc_piv_chol_preconditioner_rank = -999L, # default value is set in C++
+          estimate_aux_pars = TRUE,
+          init_coef_aux_pars_from_iid_model = TRUE,
+          estimate_cov_par_index = -1L,
+          m_lbfgs = -999L, # default value is set in C++
+          delta_conv_mode_finding = -999 # default value is set in C++
     ),
     num_sets_re = 1,
     num_sets_fe = 1,
@@ -2550,7 +2663,7 @@ gpb.GPModel <- R6::R6Class(
       character_params <- c("optimizer_cov", "convergence_criterion",
                             "optimizer_coef", "cg_preconditioner_type")
       logical_params <- c("use_nesterov_acc", "trace",  
-                          "reuse_rand_vec_trace", "estimate_aux_pars")
+                          "reuse_rand_vec_trace", "estimate_aux_pars", "init_coef_aux_pars_from_iid_model")
       if (!is.null(params[["init_cov_pars"]])) {
         if (is.vector(params[["init_cov_pars"]])) {
           if (storage.mode(params[["init_cov_pars"]]) != "double") {
@@ -3036,7 +3149,7 @@ summary.GPModel <- function(object, std_err = TRUE, ...){
 #' is predicted, otherwise the latent random effects
 #' @param offset_pred A \code{numeric} \code{vector} with 
 #' additional fixed effects contributions that are added to the linear predictor for the prediction points (= offset). 
-#' The length of this vector needs to equal the number of prediction points.
+#' The length of this vector needs to equal the number of prediction points times the number of fixed-effect sets.
 #' @param fixed_effects_pred This is discontinued. Use the renamed equivalent argument \code{offset_pred} instead
 #' @param ... (not used, ignore this, simply here that there is no CRAN warning)
 #' @inheritParams GPModel_shared_params 
@@ -3272,7 +3385,7 @@ set_optim_params <- function(gp_model,
 #' gp_model <- GPModel(group_data = group_data, likelihood="gaussian")
 #' set_optim_params(gp_model, params=list(optimizer_cov="nelder_mead"))
 #' }
-#' @method set_optim_params GPModel 
+#' @method set_optim_params GPModel
 #' @rdname set_optim_params.GPModel
 #' @author Fabio Sigrist
 #' @export 
@@ -3336,7 +3449,7 @@ set_prediction_data <- function(gp_model,
 #' gp_model <- GPModel(group_data = group_data[train_ind,1], likelihood="gaussian")
 #' set_prediction_data(gp_model, group_data_pred = group_data[-train_ind,1])
 #' }
-#' @method set_prediction_data GPModel 
+#' @method set_prediction_data GPModel
 #' @rdname set_prediction_data.GPModel
 #' @author Fabio Sigrist
 #' @export 
@@ -3385,7 +3498,7 @@ set_prediction_data.GPModel <- function(gp_model
 #' Additional parameters for non-Gaussian likelihoods (e.g., shape parameter of a gamma or negative_binomial likelihood)
 #' @inheritParams GPModel_shared_params
 #' @param fixed_effects A \code{numeric} \code{vector} with fixed effects, e.g., containing a linear predictor. 
-#' The length of this vector needs to equal the number of training data points.
+#' The length of this vector needs to equal the number of training data points times the number of fixed-effect sets.
 #'
 #' @examples
 #' \donttest{
@@ -3419,7 +3532,7 @@ neg_log_likelihood <- function(gp_model
 #' Additional parameters for non-Gaussian likelihoods (e.g., shape parameter of a gamma or negative_binomial likelihood)
 #' @inheritParams GPModel_shared_params
 #' @param fixed_effects A \code{numeric} \code{vector} with fixed effects, e.g., containing a linear predictor. 
-#' The length of this vector needs to equal the number of training data points.
+#' The length of this vector needs to equal the number of training data points times the number of fixed-effect sets.
 #'
 #' @return A \code{GPModel}
 #'
@@ -3458,8 +3571,9 @@ neg_log_likelihood.GPModel <- function(gp_model
 #' 
 #' Predict ("estimate") training data random effects for a \code{GPModel}
 #' 
-#' @param gp_model A \code{GPModel}
+#' @param gp_model A \code{GPModel} or a \code{gpb.Booster} with a \code{GPModel}
 #' @inheritParams GPModel_shared_params
+#' @param ... Additional arguments passed to methods.
 #'
 #' @return A \code{GPModel}
 #'
@@ -3469,7 +3583,7 @@ neg_log_likelihood.GPModel <- function(gp_model
 #' # Add intercept column
 #' X1 <- cbind(rep(1,dim(X)[1]),X)
 #' X_test1 <- cbind(rep(1,dim(X_test)[1]),X_test)
-#' 
+#'
 #' gp_model <- fitGPModel(group_data = group_data[,1], y = y, X = X1, likelihood="gaussian")
 #' all_training_data_random_effects <- predict_training_data_random_effects(gp_model)
 #' first_occurences <- match(unique(group_data[,1]), group_data[,1])
@@ -3477,17 +3591,19 @@ neg_log_likelihood.GPModel <- function(gp_model
 #' head(unique_training_data_random_effects)
 #' }
 #' @author Fabio Sigrist
-#' @export 
-#' 
+#' @export
+#'
 predict_training_data_random_effects <- function(gp_model,
-                                                 predict_var = FALSE) UseMethod("predict_training_data_random_effects")
+                                                 predict_var = FALSE,
+                                                 ...) UseMethod("predict_training_data_random_effects")
 
 #' Predict ("estimate") training data random effects for a \code{GPModel}
-#' 
-#' Predict ("estimate") training data random effects for a \code{GPModel} 
-#' 
-#' @param gp_model A \code{GPModel}
+#'
+#' Predict ("estimate") training data random effects for a \code{GPModel}
+#'
+#' @param gp_model A \code{GPModel} or a \code{gpb.Booster} with a \code{GPModel}
 #' @inheritParams GPModel_shared_params
+#' @param ... Additional arguments passed to methods.
 #'
 #' @return A \code{GPModel}
 #'
@@ -3497,26 +3613,45 @@ predict_training_data_random_effects <- function(gp_model,
 #' # Add intercept column
 #' X1 <- cbind(rep(1,dim(X)[1]),X)
 #' X_test1 <- cbind(rep(1,dim(X_test)[1]),X_test)
-#' 
+#'
 #' gp_model <- fitGPModel(group_data = group_data[,1], y = y, X = X1, likelihood="gaussian")
 #' all_training_data_random_effects <- predict_training_data_random_effects(gp_model)
 #' first_occurences <- match(unique(group_data[,1]), group_data[,1])
 #' unique_training_data_random_effects <- all_training_data_random_effects[first_occurences]
 #' head(unique_training_data_random_effects)
 #' }
-#' @method predict_training_data_random_effects GPModel 
+#' @method predict_training_data_random_effects GPModel
 #' @rdname predict_training_data_random_effects.GPModel
 #' @author Fabio Sigrist
 #' @export 
 #' 
 predict_training_data_random_effects.GPModel <- function(gp_model,
-                                                         predict_var = FALSE) {
+                                                         predict_var = FALSE,
+                                                         offset = NULL,
+                                                         ...) {
   
   if (!gpb.check.r6.class(gp_model, "GPModel")) {
     stop("predict_training_data_random_effects.GPModel: gp_model needs to be a ", sQuote("GPModel"))
   }
   
-  return(gp_model$predict_training_data_random_effects(predict_var = predict_var))
+  return(gp_model$predict_training_data_random_effects(predict_var = predict_var,
+                                                       offset = offset))
+}
+
+#' @method predict_training_data_random_effects gpb.Booster
+#' @rdname predict_training_data_random_effects.GPModel
+#' @export
+#'
+predict_training_data_random_effects.gpb.Booster <- function(gp_model,
+                                                             predict_var = FALSE,
+                                                             ...) {
+
+  if (!gpb.check.r6.class(gp_model, "gpb.Booster")) {
+    stop("predict_training_data_random_effects.gpb.Booster: gp_model needs to be a ", sQuote("gpb.Booster"))
+  }
+
+  return(gp_model$predict_training_data_random_effects(predict_var = predict_var,
+                                                       ...))
 }
 
 #' Get (estimated) covariance parameters
@@ -3620,10 +3755,10 @@ get_coef.GPModel <- function(gp_model, std_err = FALSE) {
 }
 
 #' Get (estimated) auxiliary (additional) parameters of the likelihood
-#' 
+#'
 #' Get (estimated) auxiliary (additional) parameters of the likelihood such as the shape parameter of a gamma or
 #' a negative binomial distribution. Some likelihoods (e.g., bernoulli_logit or poisson) have no auxiliary parameters
-#' 
+#'
 #' @param gp_model A \code{GPModel}
 #' @inheritParams GPModel_shared_params
 #'
@@ -3635,17 +3770,17 @@ get_coef.GPModel <- function(gp_model, std_err = FALSE) {
 #' gp_model <- fitGPModel(group_data = group_data[,1], y = y_pos, X = X1, likelihood="gamma")
 #' get_aux_pars(gp_model)
 #' }
-#' 
+#'
 #' @author Fabio Sigrist
-#' @export 
-#' 
-get_aux_pars <- function(gp_model) UseMethod("get_aux_pars")
+#' @export
+#'
+get_aux_pars <- function(gp_model, std_err = FALSE) UseMethod("get_aux_pars")
 
 #' Get (estimated) auxiliary (additional) parameters of the likelihood
-#' 
+#'
 #' Get (estimated) auxiliary (additional) parameters of the likelihood such as the shape parameter of a gamma or
 #' a negative binomial distribution. Some likelihoods (e.g., bernoulli_logit or poisson) have no auxiliary parameters
-#' 
+#'
 #' @param gp_model A \code{GPModel}
 #' @inheritParams GPModel_shared_params
 #'
@@ -3659,18 +3794,18 @@ get_aux_pars <- function(gp_model) UseMethod("get_aux_pars")
 #' gp_model <- fitGPModel(group_data = group_data[,1], y = y_pos, X = X1, likelihood="gamma")
 #' get_aux_pars(gp_model)
 #' }
-#' @method get_aux_pars GPModel 
+#' @method get_aux_pars GPModel
 #' @rdname get_aux_pars.GPModel
 #' @author Fabio Sigrist
-#' @export 
-#' 
-get_aux_pars.GPModel <- function(gp_model) {
-  
+#' @export
+#'
+get_aux_pars.GPModel <- function(gp_model, std_err = FALSE) {
+
   if (!gpb.check.r6.class(gp_model, "GPModel")) {
     stop("get_aux_pars.GPModel: gp_model needs to be a ", sQuote("GPModel"))
   }
-  
-  gp_model$get_aux_pars()
+
+  gp_model$get_aux_pars(std_err)
 }
 
 #' Auxiliary function to create categorical variables for nested grouped random effects
