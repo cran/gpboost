@@ -1,7 +1,7 @@
-be4d11925846fff50fcafdf11c6b49f8 *DESCRIPTION
+da8557549168657bb97dc81c8646483f *DESCRIPTION
 62aa7e7a29985341875a00e6ac33d872 *LICENSE
 4afba45e4f9fccfadd08609928132d7a *NAMESPACE
-aa4dafce533dc2fe41e4b22f5cc1049c *R/GPModel.R
+8e56f386434a53d99859d729ca4068e6 *R/GPModel.R
 3b7b9061f6b11f00c895c95085a9f062 *R/aliases.R
 f85a799975f4a1b3750524eff69b25b0 *R/callback.R
 b445c5a2d05e7494c6677fbb3dcf1899 *R/gpb.Booster.R
@@ -23,8 +23,8 @@ e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 21dac1d955139f4c08cbff5d3e033ba3 *R/utils.R
 22f8721a4e23f8192a4185dc461fc72b *README.md
 6071edd604dbeb75308cfbedc7790398 *cleanup
-f1d6fe171befb313103dc47543c59926 *configure
-53ad791990f4a825bd27d094d646b7b4 *configure.ac
+6857b3bb4dbeafb7051c9deda8f550a5 *configure
+a6013a5fbd6c57561344b249a71779ab *configure.ac
 07e48765eaf61544ba7b8f41c8e94dab *configure.win
 0276a7e04cef5f86e4146107bfb24e98 *data/GPBoost_data.RData
 05e29359ef24243df589703588987c0e *data/agaricus.test.rda
@@ -38,8 +38,8 @@ f1d6fe171befb313103dc47543c59926 *configure
 11c432f5ad6bd4585a08de503184f276 *demo/generalized_linear_Gaussian_process_mixed_effects_models.R
 0c0fab0a92321a57aa6c0d805f43c50d *inst/CITATION
 50f6a801475c97df6e049e77b2dcfe6d *man/GPBoost_data.Rd
-e25fc525b45e31a1134c5d28c3d09357 *man/GPModel.Rd
-a29ecadd515805974be79d2d20f2c750 *man/GPModel_shared_params.Rd
+92132997e2a2212948efd84f94b4f75f *man/GPModel.Rd
+40c061c7fe0d4f3284d13549711ee809 *man/GPModel_shared_params.Rd
 57f407f177703d3f24e6894f52ddf14e *man/X.Rd
 60c6e2f9c677d2db0d7fd969cb139a82 *man/X_test.Rd
 d8090c6a1b1411e93a41ee7ed389373b *man/agaricus.test.Rd
@@ -52,7 +52,7 @@ ed23b7220c019f117ce8238b538da152 *man/dimnames.gpb.Dataset.Rd
 24f5f980213ffc9a81c12ef9e8d58afc *man/figures/logo.svg
 cab863b4af57c5096874f3c8c72af306 *man/fit.GPModel.Rd
 a3b0bee44a18779de98f9e991cf89bfb *man/fit.Rd
-9debe2dfc051241d385d17eb1fbc1667 *man/fitGPModel.Rd
+0597896e04234215a87ed8339686fbc7 *man/fitGPModel.Rd
 8bc81bd863cd8158aec6637036b7584c *man/get_aux_pars.GPModel.Rd
 ad15b5940e091d6ad2dd0aa85e875323 *man/get_aux_pars.Rd
 db77c71af72016b3cb9914f623324575 *man/get_coef.GPModel.Rd
@@ -447,11 +447,11 @@ c2c96628d2be989f2809f8d90919c483 *src/include/Eigen/src/plugins/MatrixCwiseUnary
 c7eef640f237b52355d68d5530034786 *src/include/GPBoost/GP_utils.h
 87297340041f69f7dc4313c26085a496 *src/include/GPBoost/Vecchia_utils.h
 516c9d4ffc63fbdfbf100e5f8cbae307 *src/include/GPBoost/cov_fcts.h
-018d589f0cd7b86d5380e12d14b8334b *src/include/GPBoost/likelihoods.h
+d598043b5133712daa556e41218cae17 *src/include/GPBoost/likelihoods.h
 9956cfc7cbdc32087c1d66a3b5a0b2ba *src/include/GPBoost/optim_utils.h
 ac270bab9dd11b1308c1dd3f31cafbbc *src/include/GPBoost/re_comp.h
-5da3b68374679351f100f5ffabe96ee6 *src/include/GPBoost/re_model.h
-309227bcae1c99996cefa14baf02a273 *src/include/GPBoost/re_model_template.h
+120c79e83b24fffb0261e1ee6bf85078 *src/include/GPBoost/re_model.h
+205f97824453bd8c0f37d23a8090d796 *src/include/GPBoost/re_model_template.h
 133e7b42e1306d238a66eba852e67381 *src/include/GPBoost/sparse_matrix_utils.h
 9e098957d1b24e9d19e4982efdecc451 *src/include/GPBoost/type_defs.h
 258d1f09fe038e89d565beec919289d3 *src/include/GPBoost/utils.h
@@ -470,7 +470,7 @@ d0a9bf47be93f5d02a885a6c027f8b62 *src/include/LBFGSB.h
 6ef6f7fa65bcc5c6890851176811feab *src/include/LICENSE.md
 28114040e82d922bba49e3792a6d7974 *src/include/LightGBM/bin.h
 ff94bb32c1d39abcebbc9ace80aa891f *src/include/LightGBM/boosting.h
-0d0f751829fbc85f09d652b4f62d69c4 *src/include/LightGBM/c_api.h
+01b6bec0b6c672e9e574eaef6700eef7 *src/include/LightGBM/c_api.h
 dbd977acc243284c394d4f5e6cf4e0ac *src/include/LightGBM/config.h
 65e5e09852dffc150e842cf4506bf2b2 *src/include/LightGBM/cuda/cuda_utils.h
 98c3211af86bb2f88658230fad55fe64 *src/include/LightGBM/cuda/vector_cudahost.h
@@ -627,7 +627,7 @@ db36006dbc3820d4acd2c54a747aa10f *src/objective/objective_function.cpp
 54e149615bd5c2dd79d6a16224d2c4fc *src/objective/rank_objective.hpp
 56ba39eb21310c0db9dc8fa715793863 *src/objective/regression_objective.hpp
 1b1235c9765a409a0cccee2e98637f8d *src/objective/xentropy_objective.hpp
-75dbf85b170f360d164db9ec61016c4b *src/re_model.cpp
+329084001d759e1b8f7d7543a4d4347a *src/re_model.cpp
 8c4ef023c4fd2f025f88f7dbc1e8e164 *src/sparse_matrix_utils.cpp
 9a1828d1089f1609ee9569eea7b756ad *src/treelearner/col_sampler.hpp
 915f3928641bfc3adb8a22db16975a04 *src/treelearner/cost_effective_gradient_boosting.hpp
