@@ -22,6 +22,11 @@
 *       - mu = mean(y) = exp(location_par), lambda = gamma / mu, gamma \in (0,\infty) (= aux_pars_[0])
 *		- Note: var(y) = mu^2 / gamma, lambda = rate, gamma = shape
 *
+* For "tweedie" and "tweedie_fixed_p", Y follows a compound Poisson--Gamma Tweedie law:
+*       - mu = exp(location_par), Var(Y | location_par) = phi * mu^p, 1.01 < p < 1.99
+*       - aux_pars_[0] = phi; aux_pars_[1] is a positive transformed power for "tweedie"
+*         and the fixed power on its original scale for "tweedie_fixed_p"
+*
 * For a "lognormal" likelihood, the following density is used:
 *   f(y) = 1 / ( y * sqrt(2*pi*sigma2) ) * exp( - ( log(y) - (eta - 0.5*sigma2) )^2 / (2*sigma2) ),  for y > 0
 *       - mu = mean(y) = exp(location_par) = exp(eta)
@@ -53,16 +58,47 @@
 *       - mu = mean(y) = exp(location_par), r = mu / phi, p = 1 / (1 + phi), phi \in (0,\infty) (= aux_pars_[0])
 *       - Note: var(y) = mu * (1 + phi), p = success probability, r = shape, phi = dispersion
 *
+* For a "tweedie" (compound Poisson-gamma, 1 < p < 2) likelihood, the following density is used:
+*   f(y) = a(y,phi,p) * exp( ( y * mu^(1-p)/(1-p) - mu^(2-p)/(2-p) ) / phi ),  with a point mass P(Y=0) = exp(-mu^(2-p)/(phi*(2-p)))
+*       - mu = mean(y) = exp(location_par), phi \in (0,\infty) (= aux_pars_[0], dispersion), p \in (1,2) (= aux_pars_[1], variance power)
+*       - Note: var(y) = phi * mu^p. "tweedie_fixed_p" fixes p (given via 'likelihood_additional_param') and estimates only phi
+*
 * For a "beta-binomial" likelihood, the following density is used:
 *	f(y) = C(n, y * n) * Beta(y * n + mu * phi, n - y * n + (1-mu) * phi) / Beta(mu * phi, (1-mu) * phi)
 *		- y = (number of successes) / (number of trials), n = number of trials
 *		- mu = mean(p) = 1 / (1 + exp(-location_par)), phi \in (0,\infty) (= aux_pars_[0])
 *		- Note: phi = precision
 *
-* For a "zero_inflated_gamma" likelihood, the following density is used:
+* For a "hurdle_gamma" likelihood, the following density is used:
 *   f(y) = p0 * 1_{y=0} + (1-p0) * 1_{y>0} * lambda^gamma / Gamma(gamma) * y^(gamma - 1) * exp(-lambda * y)
-*       - mu = mean(y) = exp(location_par), lambda = (1-p0) * gamma / mu, gamma \in (0,\infty) (= aux_pars_[0]), p0 \in (0,1) (= aux_pars_[1] / (aux_pars_[1] + 1) )
+*       - mu = mean(y | y > 0) = exp(location_par), lambda = gamma / mu, gamma \in (0,\infty) (= aux_pars_[0]), p0 \in (0,1) (= aux_pars_[1] / (aux_pars_[1] + 1) )
 *		- Note: lambda = rate, gamma = shape, p0 = zero-inflation probability
+*
+* The "hurdle_<base>" likelihoods generalize "hurdle_gamma" to other positive-continuous bases (two-part density: point
+*	mass p0 at y=0, base density on y>0; exp(location_par) = base mean or GPD scale): "hurdle_lognormal" (aux: log_variance,
+*	p0) and the extreme-value bases "hurdle_gpd" / "hurdle_egpd_power" / "hurdle_egpd_power_mixture" / "hurdle_egpd_beta" /
+*	"hurdle_egpd_power_beta" (same aux parameters as the gpd/egpd likelihood below, plus p0).
+*
+* The "zero_inflated_<base>" count likelihoods (the base can itself generate zeros) use:
+*   f(y) = p0 * 1_{y=0} + (1-p0) * f_base(y),   mu = mean of base = exp(location_par),   E(y) = (1-p0)*mu
+*       - "zero_inflated_poisson" (aux: p0), "zero_inflated_negative_binomial" (NB2; aux: shape, p0),
+*         "zero_inflated_negative_binomial_1" (NB1; aux: dispersion, p0)
+*       - The unsuffixed name defaults to combined Fisher-Laplace: exact score and (quasi-)Fisher curvature for mode finding,
+*         followed by the observed-Hessian determinant and its derivatives. "_laplace" uses observed curvature throughout;
+*         "_fisher_laplace" uses (quasi-)Fisher curvature throughout.
+*
+* The "hurdle_regression_<base>" and "zero_inflated_regression_<base>" variants replace the constant p0 by a logistic
+*	regression pi_i = 1 / (1 + exp(-x_i'alpha)) on a second, fixed-effects-only location-parameter block (zeta = X*alpha); the
+*	response predictor (eta) carries the random effects, the structural-zero predictor (zeta) does not.
+*
+* For the "gpd" and "egpd_*" (generalized / extended generalized Pareto) likelihoods (positive, heavy-tailed):
+*   the base is a GPD with density h(y) = 1/sigma * (1 + xi*y/sigma)^(-1/xi - 1), sigma = exp(location_par) (scale),
+*   xi = tail shape (= aux "shape"; the mean exists only for xi < 1). The extended families compose a carrier CDF G on [0,1]
+*   with the GPD CDF H via f(y) = G'(H(y)) * h(y), adding lower-tail flexibility:
+*       - "gpd": G(u) = u (aux: shape);   "egpd_power": G(u) = u^kappa (aux: shape, kappa)
+*       - "egpd_power_mixture": G(u) = p*u^kappa1 + (1-p)*u^(kappa1+delta_kappa) (aux: shape, kappa1, delta_kappa, p)
+*       - "egpd_beta": incomplete-Beta-type carrier with shape delta (aux: shape, delta)
+*       - "egpd_power_beta": power-composed Beta carrier (aux: shape, delta, kappa)
 *
 * For a "zero_censored_power_transformed_normal" likelihood, the following density is used:
 *   f(y) = Phi(a_0) * 1_{y=0} + 1_{y>0} * 1 / sigma * phi((y^(1/lambda) - mu) / sigma) * 1 / lambda * y^(1/lambda - 1)
@@ -73,9 +109,11 @@
 * For a "asymmetric_laplace" (aka "quantile_regression") likelihood, the following density is used:
 *	f(y) = q * (1-q) * exp((y - location_par) * (I_{y < location_par} - q)
 *		- q = quantile, location_par = random + fixed effects
+*		- The default approximation is Fisher-Laplace (Fisher information for both mode finding and determinant evaluation)
+*		- Enable triangular-kernel curvature with the suffix "_triangular_kernel_curvature" or "_tkc"
 * 
 * For a "zoctn" likelihood (censored logit-transformed normal) (Qiang and Sigrist, 2026):
-*   Z ~ N(mu, sigma^2), W = max(min(Z,1),0), Y = g(W), g(x) = expit(a + b * logit(x)),  x in (0,1),  a \in R, b > 0
+*   T ~ N(mu, sigma^2), W = max(min(T,1),0), Y = g(W), g(x) = expit(a + b * logit(x)),  x in (0,1),  a \in R, b > 0
 *		- mu = location_par, sigma in (0,inf) (= aux_pars_[0]), a in (-inf,inf) (= log(aux_pars_[1])), b in (0,inf) (= aux_pars_[2])
 *		- expit(t) = 1 / (1 + exp(-t)), logit(u) = log(u) - log(1-u)
 *   The resulting distribution of Y is a mixture:
@@ -102,6 +140,7 @@
 *       - mu = location_par (first block), sigma2 = exp(location_par2) (second block, i.e., log(sigma2) = location_par2)
 *       - mu = random + fixed effects; log(sigma2) = fixed effects only (covariates and / or the GPBoost tree-boosting
 *         algorithm; no random effects / GPs for the variance)
+*       - Fisher-Laplace is the default and currently the only implemented approximation for both Gaussian heteroscedastic likelihoods
 *
 */
 #ifndef GPB_LIKELIHOODS_
@@ -115,6 +154,8 @@
 #include <GPBoost/DF_utils.h>
 #include <GPBoost/utils.h>
 #include <GPBoost/CG_utils.h>
+#include <GPBoost/tweedie_utils.h>
+#include <GPBoost/egpd_utils.h>
 
 #include <string>
 #include <set>
@@ -213,32 +254,64 @@ namespace GPBoost {
 				Log::REFatal("Likelihood of type '%s' is not supported ", likelihood.c_str());
 			}
 			if (LIKELIHOODS_ONLY_LAPLACE_.find(likelihood) != LIKELIHOODS_ONLY_LAPLACE_.end() && approximation_type_ != "laplace") {
-				Log::REFatal("'approximation_type' = '%s' is not supported for 'likelihood' = '%s' ", approximation_type_.c_str(), likelihood_type_.c_str());
+				Log::REFatal("'approximation_type' = '%s' is not supported for 'likelihood' = '%s' ", approximation_type_.c_str(), likelihood.c_str());
 			}
 			if (use_fisher_for_mode_finding_) {
-				if (likelihood != "t" && likelihood != "asymmetric_laplace") {
-					Log::REFatal("The Fisher-Laplace approximation for mode finding is not supported for 'likelihood' = '%s' ", likelihood_type_.c_str());
+				if (LIKELIHOODS_SUPPORTS_FISHER_MODE_FINDING_.find(likelihood) == LIKELIHOODS_SUPPORTS_FISHER_MODE_FINDING_.end()) {
+					Log::REFatal("The Fisher-Laplace approximation for mode finding is not supported for 'likelihood' = '%s' ", likelihood.c_str());
 				}
 			}
 			likelihood_type_ = likelihood;
 			if (user_defined_approximation_type_ != "none") {
 				approximation_type_ = user_defined_approximation_type_;
 			}
-			if (likelihood_type_ == "gamma") {
+			if (likelihood_type_ == "gpd") {
+				aux_pars_ = { 0.5 };
+				names_aux_pars_ = { "shape" };
+				num_aux_pars_ = num_aux_pars_estim_ = 1;
+			}
+			else if (likelihood_type_ == "egpd_power") {
+				aux_pars_ = { 0.5, 1. };
+				names_aux_pars_ = { "shape", "kappa" };
+				num_aux_pars_ = num_aux_pars_estim_ = 2;
+				information_ll_can_be_negative_ = true;
+			}
+			else if (likelihood_type_ == "egpd_power_mixture") {
+				aux_pars_ = { 0.5, 1., 1., 1. };
+				names_aux_pars_ = { "shape", "kappa1", "delta_kappa", "p" };
+				num_aux_pars_ = num_aux_pars_estim_ = 4;
+				information_ll_can_be_negative_ = true;
+			}
+			else if (likelihood_type_ == "egpd_beta") {
+				aux_pars_ = { 0.5, 1. };
+				names_aux_pars_ = { "shape", "delta" };
+				num_aux_pars_ = num_aux_pars_estim_ = 2;
+			}
+			else if (likelihood_type_ == "egpd_power_beta") {
+				aux_pars_ = { 0.5, 1., 1. };
+				names_aux_pars_ = { "shape", "delta", "kappa" };
+				num_aux_pars_ = num_aux_pars_estim_ = 3;
+				information_ll_can_be_negative_ = true;
+			}
+			else if (likelihood_type_ == "gamma") {
 				aux_pars_ = { 1. };//shape parameter
 				names_aux_pars_ = { "shape" };
 				num_aux_pars_ = 1;
 				num_aux_pars_estim_ = 1;
 			}//end "gamma"
-			else if (likelihood_type_ == "gamma_zero_inflated") {
-				if (approximation_type_ != "laplace") {
-					Log::REFatal("'approximation_type' = '%s' is not supported for 'likelihood' = '%s' ", approximation_type_.c_str(), likelihood_type_.c_str());
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+				double p = 1.5;
+				if (likelihood_type_ == "tweedie_fixed_p") {
+					ValidateFixedTweediePower(additional_param);
+					p = additional_param;
 				}
-				aux_pars_ = { 1., 0. };//shape parameter
-				names_aux_pars_ = { "shape", "p0" };
+				aux_pars_ = { 1., likelihood_type_ == "tweedie" ? 1. : p };
+				names_aux_pars_ = { "dispersion", "power" };
 				num_aux_pars_ = 2;
-				num_aux_pars_estim_ = 2;
-			}//end "gamma_zero_inflated"
+				num_aux_pars_estim_ = likelihood_type_ == "tweedie" ? 2 : 1;
+				information_ll_can_be_exact_zero_ = true;
+				grad_information_wrt_mode_can_be_zero_for_some_points_ = true;
+			}
 			else if (likelihood_type_ == "negative_binomial") {
 				aux_pars_ = { 1. };//shape parameter (aka size, theta, or "number of successes")
 				names_aux_pars_ = { "shape" };
@@ -250,7 +323,56 @@ namespace GPBoost {
 				names_aux_pars_ = { "dispersion" };
 				num_aux_pars_ = 1;
 				num_aux_pars_estim_ = 1;
+				// NB1 has NO closed-form exact Fisher information wrt eta, so a QUASI-Fisher (GLM expected information mu/(1+phi))
+				// is used. Default: use the quasi-Fisher only for MODE FINDING (positive -> stable, allows iterative mode finding)
+				// but the observed HESSIAN for the DETERMINANT (marginal-likelihood approximation), since the quasi-Fisher is not
+				// the true expected information ('combined'). Append '_laplace' (pure Hessian) or '_fisher_laplace' to override.
+				if (user_defined_approximation_type_ == "none") {
+					approximation_type_ = "laplace";
+					if (!user_defined_mode_finding_approach_) use_fisher_for_mode_finding_ = true;
+				}
+				SetCountApproximationTypeFlags();
 			}//end "negative_binomial_1"
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				// Zero-inflated Poisson (constant structural-zero probability).
+				// aux_pars_[0] = transformed structural-zero odds A = p0 / (1 - p0)  (-> p0 = 0.5), optimized on log(A) = logit(p0)
+				aux_pars_ = { 1. };
+				names_aux_pars_ = { "p0" };
+				num_aux_pars_ = 1;
+				num_aux_pars_estim_ = 1;
+				// Default combined Fisher-Laplace: exact score and Fisher curvature for mode finding, observed Hessian for the determinant.
+				if (user_defined_approximation_type_ == "none") {
+					approximation_type_ = "laplace";
+					if (!user_defined_mode_finding_approach_) use_fisher_for_mode_finding_ = true;
+				}
+				SetCountApproximationTypeFlags();
+			}//end "zero_inflated_poisson"
+			else if (likelihood_type_ == "zero_inflated_negative_binomial") {
+				aux_pars_ = { 1., 1. };// shape (kappa), transformed p0/(1-p0) (-> p0 = 0.5)
+				names_aux_pars_ = { "shape", "p0" };
+				num_aux_pars_ = 2;
+				num_aux_pars_estim_ = 2;
+				// Default combined Fisher-Laplace: exact score and Fisher curvature for mode finding, observed Hessian for the determinant.
+				if (user_defined_approximation_type_ == "none") {
+					approximation_type_ = "laplace";
+					if (!user_defined_mode_finding_approach_) use_fisher_for_mode_finding_ = true;
+				}
+				SetCountApproximationTypeFlags();
+			}//end "zero_inflated_negative_binomial"
+			else if (likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				aux_pars_ = { 0.5, 1. };// dispersion (phi), transformed p0/(1-p0) (-> p0 = 0.5)
+				names_aux_pars_ = { "dispersion", "p0" };
+				num_aux_pars_ = 2;
+				num_aux_pars_estim_ = 2;
+				// The NB1 base has no closed-form exact Fisher information wrt eta, so a QUASI-Fisher (mu/(1+phi) inside the
+				// mixture) is used. Default 'combined': quasi-Fisher for MODE FINDING (positive, stable) but the observed
+				// HESSIAN for the DETERMINANT. Append '_laplace' (pure Hessian) or '_fisher_laplace' (quasi-Fisher throughout).
+				if (user_defined_approximation_type_ == "none") {
+					approximation_type_ = "laplace";
+					if (!user_defined_mode_finding_approach_) use_fisher_for_mode_finding_ = true;
+				}
+				SetCountApproximationTypeFlags();
+			}//end "zero_inflated_negative_binomial_1"
 			else if (likelihood_type_ == "beta") {
 				aux_pars_ = { 1. };//precision
 				names_aux_pars_ = { "precision" };
@@ -260,6 +382,9 @@ namespace GPBoost {
 			else if (likelihood_type_ == "t") {
 				if (user_defined_approximation_type_ == "none") {
 					approximation_type_ = "fisher_laplace"; // default approximation
+					// approximation_type_ = "laplace"; can crash due to non-concavity / negative Hessian W
+					// Some simulations (maybe redo?) found no significant performance difference from ordinary Fisher–Laplace,
+					//		while a combined version (approximation_type_ = "laplace" and use_fisher_for_mode_finding_ = true;) tended to be slower and less computationally stable
 				}
 				if (TwoNumbersAreEqual<double>(additional_param, -999.)) {
 					aux_pars_ = { 1., 2. }; // internal default value for df
@@ -295,15 +420,8 @@ namespace GPBoost {
 				}
 			}//end "t"
 			else if (likelihood_type_ == "asymmetric_laplace") {
-				if (TwoNumbersAreEqual<double>(additional_param, -999.)) {
-					quantile_ = 0.5; // internal default value 
-				}
-				else if (additional_param <= 0. || additional_param >= 1.) {
-					Log::REFatal("The 'likelihood_additional_param' (quantile) is not between 0 and 1, found = %g ", additional_param);
-				}
-				else {
-					quantile_ = additional_param;
-				}
+				ValidateAsymmetricLaplaceQuantile(additional_param);
+				quantile_ = additional_param;
 				can_use_first_deriv_log_like_for_pred_mean_ = false;
 				aux_pars_ = { 1. };
 				names_aux_pars_ = { "scale" };
@@ -397,14 +515,80 @@ namespace GPBoost {
 				num_aux_pars_ = 1;
 				num_aux_pars_estim_ = 1;
 			}//end "beta_binomial"
-			else if (likelihood_type_ == "zero_inflated_gamma") {
-				aux_pars_ = { 1., 1. };//shape and transforned p0/(1-p0) (-> p0 = 0.5)
+			else if (likelihood_type_ == "hurdle_gamma") {
+				aux_pars_ = { 1., 1. };//shape and transformed p0/(1-p0) (-> p0 = 0.5)
 				names_aux_pars_ = { "shape", "p0" };
 				num_aux_pars_ = 2;
 				num_aux_pars_estim_ = 2;
 				grad_information_wrt_mode_can_be_zero_for_some_points_ = true;
 				information_ll_can_be_exact_zero_ = true;
-			}//end "zero_inflated_gamma"
+			}//end "hurdle_gamma"
+			else if (likelihood_type_ == "hurdle_lognormal") {
+				aux_pars_ = { 0.5, 1. };// log-scale variance (sigma2) and transformed p0/(1-p0) (-> p0 = 0.5)
+				names_aux_pars_ = { "log_variance", "p0" };
+				num_aux_pars_ = 2;
+				num_aux_pars_estim_ = 2;
+				information_changes_during_mode_finding_ = false;
+				information_changes_after_mode_finding_ = false;
+				grad_information_wrt_mode_non_zero_ = false;
+				information_ll_can_be_exact_zero_ = true;
+			}//end "hurdle_lognormal"
+			else if (IsHurdleEGPD()) {
+				// Base EGPD auxiliary parameters (see the non-hurdle variants) followed by the structural-zero p0 (odds).
+				if (likelihood_type_ == "hurdle_gpd") { aux_pars_ = { 0.5, 1. }; names_aux_pars_ = { "shape", "p0" }; }
+				else if (likelihood_type_ == "hurdle_egpd_power") { aux_pars_ = { 0.5, 1., 1. }; names_aux_pars_ = { "shape", "kappa", "p0" }; information_ll_can_be_negative_ = true; }
+				else if (likelihood_type_ == "hurdle_egpd_power_mixture") { aux_pars_ = { 0.5, 1., 1., 1., 1. }; names_aux_pars_ = { "shape", "kappa1", "delta_kappa", "p", "p0" }; information_ll_can_be_negative_ = true; }
+				else if (likelihood_type_ == "hurdle_egpd_beta") { aux_pars_ = { 0.5, 1., 1. }; names_aux_pars_ = { "shape", "delta", "p0" }; }
+				else { aux_pars_ = { 0.5, 1., 1., 1. }; names_aux_pars_ = { "shape", "delta", "kappa", "p0" }; information_ll_can_be_negative_ = true; }// hurdle_egpd_power_beta
+				num_aux_pars_ = (int)aux_pars_.size();
+				num_aux_pars_estim_ = num_aux_pars_;
+				grad_information_wrt_mode_can_be_zero_for_some_points_ = true;
+				information_ll_can_be_exact_zero_ = true;
+			}//end hurdle EGPD variants
+			else if (IsHurdleRegression()) {
+				// Regression (fixed-effects) structural-zero model: pi_i = logit^{-1}(x_i^T alpha), modeled through a second
+				// fixed-effects-only location-parameter block (zeta), so there is no structural-zero auxiliary parameter here.
+				// The auxiliary parameters are exactly those of the underlying positive base likelihood. eta (block 0) carries the
+				// random effects; zeta (block 1) is fixed effects only. The positive base and the zero model decouple (l_{eta,zeta}=0).
+				const string_t base = HurdleRegressionBaseType();
+				if (base == "hurdle_gamma") { aux_pars_ = { 1. }; names_aux_pars_ = { "shape" }; }
+				else if (base == "hurdle_lognormal") { aux_pars_ = { 0.5 }; names_aux_pars_ = { "log_variance" }; information_changes_during_mode_finding_ = false; information_changes_after_mode_finding_ = false; grad_information_wrt_mode_non_zero_ = false; }
+				else if (base == "hurdle_gpd") { aux_pars_ = { 0.5 }; names_aux_pars_ = { "shape" }; }
+				else if (base == "hurdle_egpd_power") { aux_pars_ = { 0.5, 1. }; names_aux_pars_ = { "shape", "kappa" }; information_ll_can_be_negative_ = true; }
+				else if (base == "hurdle_egpd_power_mixture") { aux_pars_ = { 0.5, 1., 1., 1. }; names_aux_pars_ = { "shape", "kappa1", "delta_kappa", "p" }; information_ll_can_be_negative_ = true; }
+				else if (base == "hurdle_egpd_beta") { aux_pars_ = { 0.5, 1. }; names_aux_pars_ = { "shape", "delta" }; }
+				else { aux_pars_ = { 0.5, 1., 1. }; names_aux_pars_ = { "shape", "delta", "kappa" }; information_ll_can_be_negative_ = true; }// hurdle_egpd_power_beta
+				num_aux_pars_ = (int)aux_pars_.size();
+				num_aux_pars_estim_ = num_aux_pars_;
+				num_sets_fixed_effects_ = 2;// eta (response) and zeta (structural-zero logit)
+				num_sets_re_ = 1;// random effects only on the response predictor eta
+				grad_information_wrt_mode_can_be_zero_for_some_points_ = true;
+				information_ll_can_be_exact_zero_ = true;
+			}//end hurdle regression variants
+			else if (IsZeroInflatedCountRegression()) {
+				// Zero-inflated count with a regression structural-zero model (pi_i = logit^{-1}(x_i^T alpha)). The auxiliary parameters are those of the
+				// base count component (none for Poisson, shape for NB2, dispersion for NB1). eta (block 0) carries the random effects; zeta (block 1) is
+				// fixed effects only. Unlike the hurdle case, eta and zeta COUPLE at zero counts (l_{eta,zeta} != 0, dJ_eta/dzeta != 0).
+				const string_t base = ZICountRegressionBaseType();
+				if (base == "zero_inflated_negative_binomial") { aux_pars_ = { 1. }; names_aux_pars_ = { "shape" }; }
+				else if (base == "zero_inflated_negative_binomial_1") { aux_pars_ = { 0.5 }; names_aux_pars_ = { "dispersion" }; }
+				else { aux_pars_ = {}; names_aux_pars_ = {}; }// zero_inflated_poisson: no base auxiliary parameter
+				num_aux_pars_ = (int)aux_pars_.size();
+				num_aux_pars_estim_ = num_aux_pars_;
+				num_sets_fixed_effects_ = 2;
+				num_sets_re_ = 1;
+				// Default combined (quasi-)Fisher-Laplace: exact score and (quasi-)Fisher eta curvature for mode finding,
+				// observed eta curvature and its derivatives for the determinant. Eta and zeta remain coupled at zero observations.
+				if (user_defined_approximation_type_ == "none") {
+					approximation_type_ = "laplace";
+					if (!user_defined_mode_finding_approach_) use_fisher_for_mode_finding_ = true;
+				}
+				SetCountApproximationTypeFlags();
+				// The (Fisher/observed) information's derivative wrt the mode can vanish at isolated eta values (local extrema of
+				// the information as a function of eta); enable the zero-guard used by the iterative ratio-trick diagonal
+				// SigmaI_plus_W_inv_diag = d_log_det / deriv_information_diag_loc_par (0/0 -> set to 0 instead of NaN).
+				grad_information_wrt_mode_can_be_zero_for_some_points_ = true;
+			}//end zero-inflated count regression variants
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 				aux_pars_ = { 1., 1. };//sigma and lambda
 				names_aux_pars_ = { "sigma", "lambda" };
@@ -502,6 +686,15 @@ namespace GPBoost {
 				}
 				weights_ = weights_learning_rate_.data();
 			}//end likelihood_learning_rate_ != 1.
+			if (HasEGPDBase() && has_weights_) {
+				bool any_positive_weight = false;
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					if (!std::isfinite(weights_[i]) || weights_[i] < 0.) Log::REFatal("For likelihood='%s', all effective weights must be finite and nonnegative, found %g ", likelihood_type_.c_str(), weights_[i]);
+					any_positive_weight = any_positive_weight || weights_[i] > 0.;
+					information_ll_can_be_exact_zero_ = information_ll_can_be_exact_zero_ || weights_[i] == 0.;
+				}
+				if (!any_positive_weight) Log::REFatal("For likelihood='%s', at least one effective weight must be strictly positive ", likelihood_type_.c_str());
+			}
 			has_int_label_ = label_type() == "int";
 			if (iid_model_) {
 				maxit_mode_newton_ = 0;
@@ -514,7 +707,49 @@ namespace GPBoost {
 			if (kink_cliping_) {
 				armijo_condition_ = false;// kink-clipping changes the candidate point (projection), so it’s not on the line anymore where the Armijo condition thinks it is
 			}
+			// Response-scale conversion can be called concurrently without SetAuxPars() having been called
+			// first (e.g. when default auxiliary parameters are kept fixed). Populate the cache eagerly so
+			// all response-scale consumers are read-only from the start.
+			if (HasEGPDBase()) RefreshEGPDMomentsCache();
 		}//end constructor
+
+		void ValidateFixedTweediePower(double p) const {
+			if (TwoNumbersAreEqual<double>(p, -999.)) {
+				Log::REFatal("No value was provided for 'likelihood_additional_param'. For likelihood='tweedie_fixed_p', provide a fixed power p with %g < p < %g ", TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_);
+			}
+			if (!std::isfinite(p)) {
+				Log::REFatal("For likelihood='tweedie_fixed_p', 'likelihood_additional_param' must be a finite power p with %g < p < %g. Found p = %g ", TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_, p);
+			}
+			if (p <= 1. || p >= 2.) Log::REFatal("For likelihood='tweedie_fixed_p', only the compound Poisson--Gamma family with 1 < p < 2 is supported. Found p = %g ", p);
+			if (p <= TWEEDIE_POWER_LOWER_) Log::REFatal("For likelihood='tweedie_fixed_p', p = %g is too close to 1 for stable Tweedie density evaluation. Choose p > %g. Use likelihood='poisson' explicitly if appropriate ", p, TWEEDIE_POWER_LOWER_);
+			if (p >= TWEEDIE_POWER_UPPER_) Log::REFatal("For likelihood='tweedie_fixed_p', p = %g is too close to 2 for stable Tweedie density evaluation. Choose p < %g. Use likelihood='gamma' explicitly if appropriate ", p, TWEEDIE_POWER_UPPER_);
+		}
+
+		void ValidateAsymmetricLaplaceQuantile(double quantile) const {
+			if (TwoNumbersAreEqual<double>(quantile, -999.)) {
+				Log::REFatal("No value was provided for 'likelihood_additional_param'. For likelihood='asymmetric_laplace' (aliases 'quantile' and 'quantile_regression'), provide a quantile q with 0 < q < 1 ");
+			}
+			if (!std::isfinite(quantile)) {
+				Log::REFatal("For likelihood='asymmetric_laplace', 'likelihood_additional_param' must be a finite quantile q with 0 < q < 1. Found q = %g ", quantile);
+			}
+			if (quantile <= 0. || quantile >= 1.) {
+				Log::REFatal("For likelihood='asymmetric_laplace', 'likelihood_additional_param' must be a quantile q with 0 < q < 1. Found q = %g ", quantile);
+			}
+		}
+
+		inline double GetTweediePower() const {
+			if (likelihood_type_ == "tweedie_fixed_p") return aux_pars_[1];
+			return TransformTweediePowerFromQ(aux_pars_[1], TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_).p;
+		}
+
+		void WarnIfTweediePowerAtBoundary() const {
+			if (likelihood_type_ != "tweedie" || tweedie_boundary_warning_issued_) return;
+			const auto power = TransformTweediePowerFromQ(aux_pars_[1], TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_);
+			if (power.p - TWEEDIE_POWER_LOWER_ < 1e-3 || TWEEDIE_POWER_UPPER_ - power.p < 1e-3) {
+				Log::REWarning("The Tweedie power optimizer saturated near the configured boundary (%g, %g), p = %g and dp/dtheta = %g. The estimate may be boundary-sensitive. Inspect a 'tweedie_fixed_p' likelihood and, if appropriate, use 'poisson' (if p close to 1) or 'gamma' (if p close to 2) likelihoods ", TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_, power.p, power.dp_dtheta);
+				tweedie_boundary_warning_issued_ = true;
+			}
+		}
 
 		/*!
 		* \brief Transform aux_pars such that they are in (0,infty)
@@ -526,14 +761,75 @@ namespace GPBoost {
 			for (int i = 0; i < num_aux_pars_; ++i) {
 				aux_pars_trans[i] = aux_pars_orig[i];
 			}
-			if (likelihood_type_ == "zero_inflated_gamma") {
+			if (IsEGPDLikelihood()) {
+				if (!(std::isfinite(aux_pars_orig[0]) && aux_pars_orig[0] > -0.5)) Log::REFatal("For likelihood='%s', the 'shape' parameter must be finite and larger than -0.5, found %g ", likelihood_type_.c_str(), aux_pars_orig[0]);
+				aux_pars_trans[0] = aux_pars_orig[0] + 0.5;
+				for (int i = 1; i < num_aux_pars_; ++i) {
+					if (likelihood_type_ == "egpd_power_mixture" && i == 3) continue;
+					if (!(std::isfinite(aux_pars_orig[i]) && aux_pars_orig[i] > 0.)) Log::REFatal("For likelihood='%s', the '%s' parameter must be finite and larger than 0, found %g ", likelihood_type_.c_str(), names_aux_pars_[i].c_str(), aux_pars_orig[i]);
+				}
+				if (likelihood_type_ == "egpd_power_mixture") {
+					const double p = aux_pars_orig[3];
+					if (!(std::isfinite(p) && p > 0. && p < 1.)) Log::REFatal("For likelihood='egpd_power_mixture', the 'p' parameter must be finite and strictly between 0 and 1, found %g ", p);
+					const double log_odds = std::log(p) - std::log1p(-p);
+					aux_pars_trans[3] = std::exp(log_odds);
+					if (!(std::isfinite(aux_pars_trans[3]) && aux_pars_trans[3] > 0.)) Log::REFatal("For likelihood='egpd_power_mixture', the transformed 'p' parameter is not representable ");
+				}
+			}
+			else if (IsHurdleEGPD()) {
+				// Base EGPD transform on the leading NumEGPDBaseAuxPars() parameters, plus the structural-zero p0 (odds) at the end.
+				const int nb = NumEGPDBaseAuxPars();
+				const int ip0 = num_aux_pars_ - 1;
+				if (!(std::isfinite(aux_pars_orig[0]) && aux_pars_orig[0] > -0.5)) Log::REFatal("For likelihood='%s', the 'shape' parameter must be finite and larger than -0.5, found %g ", likelihood_type_.c_str(), aux_pars_orig[0]);
+				aux_pars_trans[0] = aux_pars_orig[0] + 0.5;
+				for (int i = 1; i < nb; ++i) {
+					if (likelihood_type_ == "hurdle_egpd_power_mixture" && i == 3) continue;// the mixture weight 'p' is handled below
+					if (!(std::isfinite(aux_pars_orig[i]) && aux_pars_orig[i] > 0.)) Log::REFatal("For likelihood='%s', the '%s' parameter must be finite and larger than 0, found %g ", likelihood_type_.c_str(), names_aux_pars_[i].c_str(), aux_pars_orig[i]);
+				}
+				if (likelihood_type_ == "hurdle_egpd_power_mixture") {
+					const double p = aux_pars_orig[3];
+					if (!(std::isfinite(p) && p > 0. && p < 1.)) Log::REFatal("For likelihood='hurdle_egpd_power_mixture', the 'p' parameter must be finite and strictly between 0 and 1, found %g ", p);
+					aux_pars_trans[3] = std::exp(std::log(p) - std::log1p(-p));
+				}
+				if (!(aux_pars_orig[ip0] > 0. && aux_pars_orig[ip0] < 1.)) Log::REFatal("The '%s' parameter (= %g) needs to be larger than 0 and smaller than 1 ", names_aux_pars_[ip0].c_str(), aux_pars_orig[ip0]);
+				aux_pars_trans[ip0] = aux_pars_orig[ip0] / (1. - aux_pars_orig[ip0]);
+			}//end hurdle EGPD variants
+			else if (IsHurdleRegression() && HasEGPDBase()) {
+				// Regression hurdle EGPD: the auxiliary parameters are exactly the base EGPD parameters (no structural-zero p0).
+				if (!(std::isfinite(aux_pars_orig[0]) && aux_pars_orig[0] > -0.5)) Log::REFatal("For likelihood='%s', the 'shape' parameter must be finite and larger than -0.5, found %g ", likelihood_type_.c_str(), aux_pars_orig[0]);
+				aux_pars_trans[0] = aux_pars_orig[0] + 0.5;
+				const bool mix = EGPDBaseType() == "egpd_power_mixture";
+				for (int i = 1; i < num_aux_pars_; ++i) {
+					if (mix && i == 3) continue;
+					if (!(std::isfinite(aux_pars_orig[i]) && aux_pars_orig[i] > 0.)) Log::REFatal("For likelihood='%s', the '%s' parameter must be finite and larger than 0, found %g ", likelihood_type_.c_str(), names_aux_pars_[i].c_str(), aux_pars_orig[i]);
+				}
+				if (mix) {
+					const double p = aux_pars_orig[3];
+					if (!(std::isfinite(p) && p > 0. && p < 1.)) Log::REFatal("For likelihood='%s', the 'p' parameter must be finite and strictly between 0 and 1, found %g ", likelihood_type_.c_str(), p);
+					aux_pars_trans[3] = std::exp(std::log(p) - std::log1p(-p));
+				}
+			}//end hurdle regression EGPD
+			else if (likelihood_type_ == "hurdle_gamma" || likelihood_type_ == "hurdle_lognormal" || likelihood_type_ == "zero_inflated_negative_binomial" ||
+				likelihood_type_ == "zero_inflated_negative_binomial_1") {
 				if (!(aux_pars_orig[1] > 0. && aux_pars_orig[1] < 1.)) {
 					Log::REFatal("The '%s' parameter (= %g) needs to be larger than 0 and smaller than 1 ", names_aux_pars_[1].c_str(), aux_pars_orig[1]);
 				}
 				aux_pars_trans[1] = aux_pars_orig[1] / (1. - aux_pars_orig[1]);
-			}//end likelihood_type_ == "zero_inflated_gamma"
+			}//end hurdle_gamma / hurdle_lognormal / zero_inflated_negative_binomial(_1)
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				if (!(aux_pars_orig[0] > 0. && aux_pars_orig[0] < 1.)) {
+					Log::REFatal("The '%s' parameter (= %g) needs to be larger than 0 and smaller than 1 ", names_aux_pars_[0].c_str(), aux_pars_orig[0]);
+				}
+				aux_pars_trans[0] = aux_pars_orig[0] / (1. - aux_pars_orig[0]);
+			}//end likelihood_type_ == "zero_inflated_poisson"
 			else if (likelihood_type_ == "zoctn") {
 				aux_pars_trans[1] = std::exp(aux_pars_orig[1]);
+			}
+			else if (likelihood_type_ == "tweedie") {
+				if (!(aux_pars_orig[1] > TWEEDIE_POWER_LOWER_ && aux_pars_orig[1] < TWEEDIE_POWER_UPPER_) || !std::isfinite(aux_pars_orig[1])) {
+					Log::REFatal("For likelihood='tweedie', the initial power must satisfy %g < p < %g. Found p = %g.", TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_, aux_pars_orig[1]);
+				}
+				aux_pars_trans[1] = (aux_pars_orig[1] - TWEEDIE_POWER_LOWER_) / (TWEEDIE_POWER_UPPER_ - aux_pars_orig[1]);
 			}
 		}
 
@@ -547,17 +843,66 @@ namespace GPBoost {
 			for (int i = 0; i < num_aux_pars_; ++i) {
 				aux_pars_orig[i] = aux_pars_trans[i];
 			}
-			if (likelihood_type_ == "zero_inflated_gamma") {
+			if (IsEGPDLikelihood()) {
+				for (int i = 0; i < num_aux_pars_; ++i) if (!(std::isfinite(aux_pars_trans[i]) && aux_pars_trans[i] > 0.)) Log::REFatal("BackTransformAuxPars: transformed '%s' parameter must be finite and larger than 0, found %g ", names_aux_pars_[i].c_str(), aux_pars_trans[i]);
+				aux_pars_orig[0] = aux_pars_trans[0] - 0.5;
+				if (!(aux_pars_orig[0] > -0.5)) Log::REFatal("BackTransformAuxPars: transformed 'shape' rounded onto the forbidden -0.5 boundary ");
+				if (likelihood_type_ == "egpd_power_mixture") {
+					const double odds = aux_pars_trans[3];
+					aux_pars_orig[3] = odds >= 1. ? 1. / (1. + 1. / odds) : odds / (1. + odds);
+					if (!(aux_pars_orig[3] > 0. && aux_pars_orig[3] < 1.) || !std::isfinite(aux_pars_trans[1] + aux_pars_trans[2])) Log::REFatal("BackTransformAuxPars: EGPD mixture parameters overflowed or rounded onto a boundary ");
+				}
+			}
+			else if (IsHurdleEGPD()) {
+				const int ip0 = num_aux_pars_ - 1;
+				for (int i = 0; i < num_aux_pars_; ++i) if (!(std::isfinite(aux_pars_trans[i]) && aux_pars_trans[i] > 0.)) Log::REFatal("BackTransformAuxPars: transformed '%s' parameter must be finite and larger than 0, found %g ", names_aux_pars_[i].c_str(), aux_pars_trans[i]);
+				aux_pars_orig[0] = aux_pars_trans[0] - 0.5;
+				if (!(aux_pars_orig[0] > -0.5)) Log::REFatal("BackTransformAuxPars: transformed 'shape' rounded onto the forbidden -0.5 boundary ");
+				if (likelihood_type_ == "hurdle_egpd_power_mixture") {
+					const double odds = aux_pars_trans[3];
+					aux_pars_orig[3] = odds >= 1. ? 1. / (1. + 1. / odds) : odds / (1. + odds);
+					if (!(aux_pars_orig[3] > 0. && aux_pars_orig[3] < 1.)) Log::REFatal("BackTransformAuxPars: EGPD mixture 'p' overflowed or rounded onto a boundary ");
+				}
+				aux_pars_orig[ip0] = aux_pars_trans[ip0] / (1. + aux_pars_trans[ip0]);// p0 from odds
+			}//end hurdle EGPD variants
+			else if (IsHurdleRegression() && HasEGPDBase()) {
+				for (int i = 0; i < num_aux_pars_; ++i) if (!(std::isfinite(aux_pars_trans[i]) && aux_pars_trans[i] > 0.)) Log::REFatal("BackTransformAuxPars: transformed '%s' parameter must be finite and larger than 0, found %g ", names_aux_pars_[i].c_str(), aux_pars_trans[i]);
+				aux_pars_orig[0] = aux_pars_trans[0] - 0.5;
+				if (!(aux_pars_orig[0] > -0.5)) Log::REFatal("BackTransformAuxPars: transformed 'shape' rounded onto the forbidden -0.5 boundary ");
+				if (EGPDBaseType() == "egpd_power_mixture") {
+					const double odds = aux_pars_trans[3];
+					aux_pars_orig[3] = odds >= 1. ? 1. / (1. + 1. / odds) : odds / (1. + odds);
+					if (!(aux_pars_orig[3] > 0. && aux_pars_orig[3] < 1.)) Log::REFatal("BackTransformAuxPars: EGPD mixture 'p' overflowed or rounded onto a boundary ");
+				}
+			}//end hurdle regression EGPD
+			else if (likelihood_type_ == "hurdle_gamma") {
 				if (!(aux_pars_trans[1] > 0.)) {
 					Log::REFatal("BackTransformAuxPars: the transformed '%s' parameter (= %g) needs to be larger than 0 ", names_aux_pars_[1].c_str(), aux_pars_trans[1]);
 				}
 				aux_pars_orig[1] = aux_pars_trans[1] / (1. + aux_pars_trans[1]);
-			}//end likelihood_type_ == "zero_inflated_gamma"
+			}//end likelihood_type_ == "hurdle_gamma"
+			else if (likelihood_type_ == "hurdle_lognormal" || likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				if (!(aux_pars_trans[1] > 0.)) {
+					Log::REFatal("BackTransformAuxPars: the transformed '%s' parameter (= %g) needs to be larger than 0 ", names_aux_pars_[1].c_str(), aux_pars_trans[1]);
+				}
+				aux_pars_orig[1] = aux_pars_trans[1] / (1. + aux_pars_trans[1]);
+			}//end hurdle_lognormal / zero_inflated_negative_binomial(_1)
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				if (!(aux_pars_trans[0] > 0.)) {
+					Log::REFatal("BackTransformAuxPars: the transformed '%s' parameter (= %g) needs to be larger than 0 ", names_aux_pars_[0].c_str(), aux_pars_trans[0]);
+				}
+				aux_pars_orig[0] = aux_pars_trans[0] / (1. + aux_pars_trans[0]);
+			}//end likelihood_type_ == "zero_inflated_poisson"
 			else if (likelihood_type_ == "zoctn") {
 				if (!(aux_pars_trans[1] > 0.)) {
 					Log::REFatal("BackTransformAuxPars: the transformed '%s' parameter (= %g) needs to be larger than 0 ", names_aux_pars_[1].c_str(), aux_pars_trans[1]);
 				}
 				aux_pars_orig[1] = std::log(aux_pars_trans[1]);
+			}
+			else if (likelihood_type_ == "tweedie") {
+				const auto transform = TransformTweediePowerFromQ(aux_pars_trans[1], TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_);
+				if (!std::isfinite(transform.p)) Log::REFatal("BackTransformAuxPars: transformed Tweedie power parameter must be finite and > 0, found %g.", aux_pars_trans[1]);
+				aux_pars_orig[1] = transform.p;
 			}
 		}
 
@@ -602,9 +947,9 @@ namespace GPBoost {
 		* \brief Determine cap_change_mode_newton_
 		*/
 		void DetermineWhetherToCapChangeModeNewton() {
-			if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
+			if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" || IsEGPDLikelihood() ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
-				likelihood_type_ == "lognormal" || likelihood_type_ == "zero_inflated_gamma") {
+				likelihood_type_ == "lognormal" || IsHurdlePositive() || IsZeroInflatedCount()) {
 				cap_change_mode_newton_ = true;
 			}
 			else {
@@ -665,6 +1010,161 @@ namespace GPBoost {
 		*/
 		string_t GetLikelihood() const {
 			return(likelihood_type_);
+		}
+
+		/*! \brief True if the information (W) used for the determinant can be negative (observed Hessian). False for the
+		* fisher_laplace approximation (nonnegative Fisher information), which is required for the iterative matrix-inversion methods. */
+		bool InformationLogLikCanBeNegative() const {
+			return information_ll_can_be_negative_;
+		}
+
+		bool IsEGPDLikelihood() const {
+			return likelihood_type_ == "gpd" || likelihood_type_ == "egpd_power" || likelihood_type_ == "egpd_power_mixture" || likelihood_type_ == "egpd_beta" || likelihood_type_ == "egpd_power_beta";
+		}
+
+		/*! \brief True for constant-zero hurdle likelihoods whose positive base is a GPD/EGPD family (auxiliary layout: base EGPD parameters followed by p0). */
+		bool IsHurdleEGPD() const {
+			return likelihood_type_ == "hurdle_gpd" || likelihood_type_ == "hurdle_egpd_power" || likelihood_type_ == "hurdle_egpd_power_mixture" ||
+				likelihood_type_ == "hurdle_egpd_beta" || likelihood_type_ == "hurdle_egpd_power_beta";
+		}
+
+		/*! \brief True if the positive base is a GPD/EGPD family (covers constant-zero hurdle EGPD, regression hurdle EGPD, and plain EGPD). */
+		bool HasEGPDBase() const {
+			if (IsEGPDLikelihood() || IsHurdleEGPD()) return true;
+			if (IsHurdleRegression()) {
+				const string_t b = EGPDBaseType();
+				return b == "gpd" || b == "egpd_power" || b == "egpd_power_mixture" || b == "egpd_beta" || b == "egpd_power_beta";
+			}
+			return false;
+		}
+
+		/*! \brief True for hurdle positive likelihoods with a regression (fixed-effects) structural-zero model: the zero
+		* probability is modeled as pi_i = logit^{-1}(x_i^T alpha) via a second fixed-effects-only location-parameter block
+		* (zeta = X*alpha), instead of a constant p0. The positive base and the zero model fully decouple (l_{eta,zeta} = 0). */
+		bool IsHurdleRegression() const {
+			return likelihood_type_ == "hurdle_regression_gamma" || likelihood_type_ == "hurdle_regression_lognormal" ||
+				likelihood_type_ == "hurdle_regression_gpd" || likelihood_type_ == "hurdle_regression_egpd_power" ||
+				likelihood_type_ == "hurdle_regression_egpd_power_mixture" || likelihood_type_ == "hurdle_regression_egpd_beta" ||
+				likelihood_type_ == "hurdle_regression_egpd_power_beta";
+		}
+
+		/*! \brief True for any regression (fixed-effects) structural-zero model (hurdle positive or zero-inflated count). */
+		bool IsRegressionZeroModel() const {
+			return IsHurdleRegression() || IsZeroInflatedCountRegression();
+		}
+
+		/*! \brief Recover the underlying constant-zero base likelihood name from a regression zero-model name by removing the
+		* "regression_" token that follows the family prefix, e.g. "hurdle_regression_gamma" -> "hurdle_gamma" and
+		* "zero_inflated_regression_poisson" -> "zero_inflated_poisson". Returns the input unchanged if the token is absent. */
+		static string_t StripRegressionInfix(const string_t& name) {
+			const string_t infix = "_regression_";
+			const size_t pos = name.find(infix);
+			if (pos == string_t::npos) return name;
+			return name.substr(0, pos) + "_" + name.substr(pos + infix.size());
+		}
+
+		/*! \brief For a hurdle regression likelihood, the underlying constant-zero hurdle type (with the "regression_" token removed). */
+		string_t HurdleRegressionBaseType() const {
+			return StripRegressionInfix(likelihood_type_);
+		}
+
+		/*! \brief True for hurdle likelihoods with a positive continuous base (point mass at zero + positive density; the zero part fully decouples from the response predictor eta). Includes both the constant-zero and the regression (fixed-effects) zero models. */
+		bool IsHurdlePositive() const {
+			return likelihood_type_ == "hurdle_gamma" || likelihood_type_ == "hurdle_lognormal" || IsHurdleEGPD() || IsHurdleRegression();
+		}
+
+		/*! \brief The underlying EGPD base type of a (possibly hurdle / hurdle-regression) EGPD likelihood, i.e. with any "hurdle_" prefix and "regression_" token stripped. */
+		string_t EGPDBaseType() const {
+			string_t t = StripRegressionInfix(likelihood_type_);
+			const string_t prefix = "hurdle_";
+			if (t.size() > prefix.size() && t.compare(0, prefix.size(), prefix) == 0) t = t.substr(prefix.size());
+			return t;
+		}
+
+		/*! \brief True for zero-inflated count likelihoods (constant or regression structural-zero model). The base count component can itself generate zeros. */
+		bool IsZeroInflatedCount() const {
+			return likelihood_type_ == "zero_inflated_poisson" || likelihood_type_ == "zero_inflated_regression_poisson" ||
+				likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_regression_negative_binomial" ||
+				likelihood_type_ == "zero_inflated_negative_binomial_1" || likelihood_type_ == "zero_inflated_regression_negative_binomial_1";
+		}
+
+		/*! \brief True for zero-inflated COUNT likelihoods with a regression (fixed-effects) structural-zero model: pi_i = logit^{-1}(x_i^T alpha)
+		* via a second fixed-effects-only location-parameter block (zeta). Unlike the hurdle case, the count base and the zero model COUPLE at
+		* zero counts (l_{eta,zeta} != 0, dJ_eta/dzeta != 0). */
+		bool IsZeroInflatedCountRegression() const {
+			return likelihood_type_ == "zero_inflated_regression_poisson" || likelihood_type_ == "zero_inflated_regression_negative_binomial" ||
+				likelihood_type_ == "zero_inflated_regression_negative_binomial_1";
+		}
+
+		/*! \brief The underlying constant-zero count type for a zero-inflated count regression likelihood (with the "regression_" token removed). */
+		string_t ZICountRegressionBaseType() const {
+			return StripRegressionInfix(likelihood_type_);
+		}
+
+		/*! \brief Stable log(exp(a) + exp(b)) */
+		static inline double LogAddExpStable(double a, double b) {
+			const double m = a > b ? a : b;
+			if (!std::isfinite(m)) return m;
+			return m + std::log1p(std::exp(-std::fabs(a - b)));
+		}
+
+		EGPDVariant GetEGPDVariant() const {
+			const string_t base = EGPDBaseType();
+			if (base == "gpd") return EGPDVariant::kGPD;
+			if (base == "egpd_power") return EGPDVariant::kPower;
+			if (base == "egpd_power_mixture") return EGPDVariant::kPowerMixture;
+			if (base == "egpd_beta") return EGPDVariant::kBeta;
+			return EGPDVariant::kPowerBeta;
+		}
+
+		EGPDParams GetEGPDParams() const {
+			const string_t base = EGPDBaseType();
+			EGPDParams pars;
+			pars.shape_shift = aux_pars_[0];
+			if (base == "egpd_power") pars.kappa = aux_pars_[1];
+			else if (base == "egpd_power_mixture") {
+				pars.kappa1 = aux_pars_[1]; pars.delta_kappa = aux_pars_[2]; pars.odds = aux_pars_[3];
+			}
+			else if (base == "egpd_beta") pars.delta = aux_pars_[1];
+			else if (base == "egpd_power_beta") { pars.delta = aux_pars_[1]; pars.kappa = aux_pars_[2]; }
+			return pars;
+		}
+
+		/*! \brief Number of base (non-structural-zero) auxiliary parameters for a hurdle EGPD likelihood. */
+		int NumEGPDBaseAuxPars() const {
+			const string_t base = EGPDBaseType();
+			if (base == "gpd") return 1;
+			if (base == "egpd_power" || base == "egpd_beta") return 2;
+			if (base == "egpd_power_beta") return 3;
+			return 4;// egpd_power_mixture
+		}
+
+		EGPDDerivatives EvaluateEGPD(double y, double eta) const {
+			EGPDDerivatives result;
+			CalcEGPDLogLikAndDerivatives(y, eta, GetEGPDParams(), GetEGPDVariant(), &result);
+			return result;
+		}
+
+		// The EGPD unit-scale moments depend only on the auxiliary parameters, not on the location or the
+		// data, but they require numerical quadrature. Refresh this cache only in single-threaded parameter
+		// update paths; response-scale consumers can then safely read it concurrently.
+		bool EGPDMomentsCacheMatchesAuxPars() const {
+			if (!egpd_moments_cache_initialized_) return false;
+			for (int i = 0; i < num_aux_pars_; ++i) {
+				if (egpd_moments_cache_aux_[i] != aux_pars_[i]) return false;
+			}
+			return true;
+		}
+
+		void RefreshEGPDMomentsCache() {
+			egpd_moments_cache_ = CalcEGPDUnitScaleMoments(GetEGPDParams(), GetEGPDVariant());
+			for (int i = 0; i < num_aux_pars_; ++i) egpd_moments_cache_aux_[i] = aux_pars_[i];
+			egpd_moments_cache_initialized_ = true;
+		}
+
+		const EGPDMoments& GetEGPDMoments() const {
+			CHECK(EGPDMomentsCacheMatchesAuxPars());
+			return egpd_moments_cache_;
 		}
 
 		bool IsGaussianLikelihood() const {
@@ -751,7 +1251,8 @@ namespace GPBoost {
 		*/
 		string_t label_type() const {
 			if (likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "bernoulli_logit" ||
-				likelihood_type_ == "poisson" || likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1") {
+				likelihood_type_ == "poisson" || likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
+				IsZeroInflatedCount()) {
 				return("int");
 			}
 			else {
@@ -814,7 +1315,8 @@ namespace GPBoost {
 					}
 				}
 			}
-			else if (likelihood_type_ == "poisson" || likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1") {
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
+				IsZeroInflatedCount()) {
 				for (data_size_t i = 0; i < num_data; ++i) {
 					if (y_data[i] < 0.) {
 						Log::REFatal(" Must have y >= 0 for the response variable ('y') for likelihood = '%s', found %g ", likelihood_type_.c_str(), y_data[i]);
@@ -826,17 +1328,40 @@ namespace GPBoost {
 						}
 					}
 				}
+				if (IsZeroInflatedCount()) {
+					double sw = 0., avg_zero = 0.;
+#pragma omp parallel for schedule(static) reduction(+:sw, avg_zero)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data[i] <= 0.) avg_zero += w;
+						sw += w;
+					}
+					avg_zero /= sw;
+					if (TwoNumbersAreEqual<double>(avg_zero, 1.)) {
+						Log::REFatal("Only 0's in the response variable 'y' but used likelihood = '%s' ", likelihood_type_.c_str());
+					}
+				}
 			}
-			else if (likelihood_type_ == "gamma" || likelihood_type_ == "lognormal") {
+			else if (likelihood_type_ == "gamma" || likelihood_type_ == "lognormal" || IsEGPDLikelihood()) {
 				for (data_size_t i = 0; i < num_data; ++i) {
-					if (y_data[i] <= 0.) {
+					if (!std::isfinite(y_data[i]) || y_data[i] <= 0.) {
 						Log::REFatal(" Must have y > 0 for the response variable ('y') for likelihood = '%s', found %g ", likelihood_type_.c_str(), y_data[i]);
 					}
 				}
 			}
-			else if (likelihood_type_ == "zero_inflated_gamma" || likelihood_type_ == "zero_censored_power_transformed_normal") {
-				if (GPBoost::HasNegativeValues<T>(y_data, num_data)) {
-					Log::REFatal(" Must have y >= 0 for the response variable ('y') for likelihood = '%s', found negative value ", likelihood_type_.c_str());
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+				bool any_positive = false;
+				for (data_size_t i = 0; i < num_data; ++i) {
+					if (!std::isfinite(y_data[i]) || y_data[i] < 0.) Log::REFatal("The response variable ('y') must be finite and nonnegative for likelihood = '%s', found %g.", likelihood_type_.c_str(), y_data[i]);
+					any_positive = any_positive || y_data[i] > 0.;
+				}
+				if (!any_positive) Log::REFatal("The response variable ('y') contains only zeros for likelihood = '%s'; at least one positive value is required.", likelihood_type_.c_str());
+			}
+			else if (IsHurdlePositive() || likelihood_type_ == "zero_censored_power_transformed_normal") {
+				for (data_size_t i = 0; i < num_data; ++i) {
+					if (!std::isfinite(y_data[i]) || y_data[i] < 0.) {
+						Log::REFatal(" Must have finite y >= 0 for the response variable ('y') for likelihood = '%s', found %g ", likelihood_type_.c_str(), y_data[i]);
+					}
 				}
 				double sw = 0., avg_zero = 0.;
 #pragma omp parallel for schedule(static) reduction(+:sw, avg_zero)
@@ -942,9 +1467,37 @@ namespace GPBoost {
 				}
 				init_intercept = std::min(std::max(init_intercept, -3.0), 3.0); // avoid too small / large initial intercepts for better numerical stability
 			}
-			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
+			else if (IsHurdlePositive()) {
+				double sw = 0.0, avg = 0.;
+				if (fixed_effects == nullptr) {
+#pragma omp parallel for schedule(static) reduction(+:avg, sw)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						if (y_data[i] > 0.) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							avg += w * y_data[i];
+							sw += w;
+						}
+					}
+				}
+				else {
+#pragma omp parallel for schedule(static) reduction(+:avg, sw)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						if (y_data[i] > 0.) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							avg += w * y_data[i] / std::exp(fixed_effects[i]);
+							sw += w;
+						}
+					}
+				}
+				avg /= sw;
+				avg = std::max(avg, 1e-12);
+				init_intercept = std::log(avg) - 0.5 * rand_eff_var;
+			}
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" || IsEGPDLikelihood() ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
-				likelihood_type_ == "lognormal" || likelihood_type_ == "zero_inflated_gamma") {
+				likelihood_type_ == "lognormal" || IsZeroInflatedCount()) {
+				// For zero-inflated counts, mean(y) = (1 - p0) * mu, so this underestimates the count-component mean mu;
+				// this is only a finite starting value and is refined by the optimizer.
 				double sw = 0.0, avg = 0.;
 				if (fixed_effects == nullptr) {
 #pragma omp parallel for schedule(static) reduction(+:avg, sw)
@@ -1248,10 +1801,10 @@ namespace GPBoost {
 			double rand_eff_var,
 			const double* fixed_effects) const {
 			bool ret_val = false;
-			if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
-				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
-				IsGaussianHeteroscedastic() || likelihood_type_ == "lognormal" ||
-				likelihood_type_ == "zero_inflated_gamma" || likelihood_type_ == "zero_censored_power_transformed_normal" ||
+			if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" || IsEGPDLikelihood() ||
+				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" || IsZeroInflatedCount() ||
+				IsGaussianHeteroscedastic() || likelihood_type_ == "lognormal" || IsHurdlePositive() ||
+				likelihood_type_ == "zero_censored_power_transformed_normal" ||
 				likelihood_type_ == "zoctn" || likelihood_type_ == "zero_one_censored_transformed_beta" ||
 				likelihood_type_ == "zero_one_censored_shifted_gamma" ||
 				likelihood_type_ == "asymmetric_laplace") {
@@ -1329,8 +1882,31 @@ namespace GPBoost {
 				log_avg /= sw;
 				log_avg = std::log(log_avg);
 				avg_log /= sw;
-				double s = log_avg - avg_log;
+				const double s = std::max(log_avg - avg_log, 1e-8);
 				aux_pars_[0] = (3. - s + std::sqrt((s - 3.) * (s - 3.) + 24. * s)) / (12. * s);
+			}
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+				const double p = GetTweediePower();
+				double sum_y = 0., sum_w = 0.;
+				for (data_size_t i = 0; i < num_data; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.;
+					sum_y += w * y_data[i] / (fixed_effects == nullptr ? 1. : std::exp(fixed_effects[i]));
+					sum_w += w;
+				}
+				const double base_mean = std::max(sum_y / sum_w, 1e-12);
+				double pearson = 0.;
+				for (data_size_t i = 0; i < num_data; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.;
+					const double mu = std::max(base_mean * (fixed_effects == nullptr ? 1. : std::exp(fixed_effects[i])), 1e-12);
+					const double residual = y_data[i] - mu;
+					pearson += w * residual * residual / std::pow(mu, p);
+				}
+				double phi = pearson / sum_w;
+				if (!(phi > 0.) || !std::isfinite(phi)) phi = 1.;
+				aux_pars_[0] = std::min(std::max(phi, 1e-6), 1e6);
+			}
+			else if (IsEGPDLikelihood()) {
+				aux_pars_[0] = 0.5; // shape = 0 (exponential GPD base)
 			}
 			else if (likelihood_type_ == "negative_binomial") {
 				// Use a method of moments estimator				
@@ -1495,11 +2071,11 @@ namespace GPBoost {
 				}
 				aux_pars_[0] = phi_init;
 			}//end "beta_binomial"
-			else if (likelihood_type_ == "zero_inflated_gamma") {
+			else if (likelihood_type_ == "hurdle_gamma") {
 				sw = 0.0;
-				double log_avg = 0., avg_log = 0., avg_zero = 0.;
+				double log_avg = 0., avg_log = 0., avg_zero = 0., sw_pos = 0.;
 				if (fixed_effects == nullptr) {
-#pragma omp parallel for schedule(static) reduction(+:log_avg, avg_log, sw, avg_zero)
+#pragma omp parallel for schedule(static) reduction(+:log_avg, avg_log, sw, avg_zero, sw_pos)
 					for (data_size_t i = 0; i < num_data; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
 						const double yi = y_data[i];
@@ -1509,12 +2085,13 @@ namespace GPBoost {
 						else {
 							log_avg += w * yi;
 							avg_log += w * std::log(yi);
+							sw_pos += w;
 						}
 						sw += w;
 					}
 				}
 				else {
-#pragma omp parallel for schedule(static) reduction(+:log_avg, avg_log, sw, avg_zero)
+#pragma omp parallel for schedule(static) reduction(+:log_avg, avg_log, sw, avg_zero, sw_pos)
 					for (data_size_t i = 0; i < num_data; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
 						const double yi = y_data[i];
@@ -1524,18 +2101,166 @@ namespace GPBoost {
 						else {
 							log_avg += w * yi / std::exp(fixed_effects[i]);
 							avg_log += w * (std::log(yi) - fixed_effects[i]);
+							sw_pos += w;
 						}
 						sw += w;
 					}
 				}
-				log_avg /= sw;
+				log_avg /= sw_pos;
 				log_avg = std::log(log_avg);
-				avg_log /= sw;
+				avg_log /= sw_pos;
 				avg_zero /= sw;
+				avg_zero = std::min(std::max(avg_zero, 1e-3), 1. - 1e-3);
 				double s = log_avg - avg_log;
 				aux_pars_[0] = (3. - s + std::sqrt((s - 3.) * (s - 3.) + 24. * s)) / (12. * s);//same as for "gamma"
 				aux_pars_[1] = avg_zero / (1. - avg_zero);
-			}//end likelihood_type_ == "zero_inflated_gamma"
+			}//end likelihood_type_ == "hurdle_gamma"
+			else if (likelihood_type_ == "hurdle_lognormal") {
+				// sigma2 = variance of log(y) over positive observations; p0 = weighted zero fraction.
+				sw = 0.;
+				double sw_pos = 0., avg_zero = 0., mean_log = 0., mean_log_sq = 0.;
+#pragma omp parallel for schedule(static) reduction(+:sw, sw_pos, avg_zero, mean_log, mean_log_sq)
+				for (data_size_t i = 0; i < num_data; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					if (y_data[i] <= 0.) { avg_zero += w; }
+					else {
+						const double ly = (fixed_effects == nullptr) ? std::log(y_data[i]) : (std::log(y_data[i]) - fixed_effects[i]);
+						mean_log += w * ly;
+						mean_log_sq += w * ly * ly;
+						sw_pos += w;
+					}
+					sw += w;
+				}
+				mean_log /= sw_pos;
+				mean_log_sq /= sw_pos;
+				avg_zero /= sw;
+				avg_zero = std::min(std::max(avg_zero, 1e-3), 1. - 1e-3);
+				aux_pars_[0] = std::max(mean_log_sq - mean_log * mean_log, 1e-6);
+				aux_pars_[1] = avg_zero / (1. - avg_zero);
+			}//end likelihood_type_ == "hurdle_lognormal"
+			else if (IsHurdleRegression()) {
+				// Initialize only the base auxiliary parameters (there is no structural-zero p0 here). EGPD bases keep their constructor defaults.
+				const string_t base = HurdleRegressionBaseType();
+				if (base == "hurdle_gamma") {
+					double log_avg = 0., avg_log = 0., sw_pos = 0.;
+#pragma omp parallel for schedule(static) reduction(+:log_avg, avg_log, sw_pos)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						if (y_data[i] > 0.) { const double w = has_weights_ ? weights_[i] : 1.0; const double yr = (fixed_effects == nullptr) ? y_data[i] : y_data[i] / std::exp(fixed_effects[i]); log_avg += w * yr; avg_log += w * ((fixed_effects == nullptr) ? std::log(y_data[i]) : (std::log(y_data[i]) - fixed_effects[i])); sw_pos += w; }
+					}
+					log_avg = std::log(log_avg / sw_pos); avg_log /= sw_pos;
+					const double s = std::max(log_avg - avg_log, 1e-8);
+					aux_pars_[0] = (3. - s + std::sqrt((s - 3.) * (s - 3.) + 24. * s)) / (12. * s);
+				}
+				else if (base == "hurdle_lognormal") {
+					double mean_log = 0., mean_log_sq = 0., sw_pos = 0.;
+#pragma omp parallel for schedule(static) reduction(+:mean_log, mean_log_sq, sw_pos)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						if (y_data[i] > 0.) { const double w = has_weights_ ? weights_[i] : 1.0; const double ly = (fixed_effects == nullptr) ? std::log(y_data[i]) : (std::log(y_data[i]) - fixed_effects[i]); mean_log += w * ly; mean_log_sq += w * ly * ly; sw_pos += w; }
+					}
+					mean_log /= sw_pos; mean_log_sq /= sw_pos;
+					aux_pars_[0] = std::max(mean_log_sq - mean_log * mean_log, 1e-6);
+				}
+			}//end hurdle regression
+			else if (IsHurdleEGPD()) {
+				// Keep the base EGPD auxiliary parameters at their (constructor) defaults; initialize only the structural-zero p0.
+				sw = 0.;
+				double avg_zero = 0.;
+#pragma omp parallel for schedule(static) reduction(+:sw, avg_zero)
+				for (data_size_t i = 0; i < num_data; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					if (y_data[i] <= 0.) avg_zero += w;
+					sw += w;
+				}
+				avg_zero = std::min(std::max(avg_zero / sw, 1e-3), 1. - 1e-3);
+				aux_pars_[num_aux_pars_ - 1] = avg_zero / (1. - avg_zero);
+			}//end hurdle EGPD variants
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				// Rough excess-zero start: p0 approx (dbar - f0bar) / (1 - f0bar), with f0bar approx exp(-mean(y)).
+				// mean(y) underestimates the count-component mean, so this is only a finite deterministic start.
+				sw = 0.;
+				double avg_zero = 0., mean_y = 0.;
+				if (fixed_effects == nullptr) {
+#pragma omp parallel for schedule(static) reduction(+:sw, avg_zero, mean_y)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data[i] <= 0.) avg_zero += w;
+						mean_y += w * y_data[i];
+						sw += w;
+					}
+				}
+				else {
+#pragma omp parallel for schedule(static) reduction(+:sw, avg_zero, mean_y)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data[i] <= 0.) avg_zero += w;
+						mean_y += w * y_data[i] / std::exp(fixed_effects[i]);
+						sw += w;
+					}
+				}
+				avg_zero /= sw;
+				mean_y = std::max(mean_y / sw, 1e-8);
+				const double f0 = std::exp(-mean_y);
+				double p0 = (avg_zero - f0) / std::max(1. - f0, 1e-6);
+				p0 = std::min(std::max(p0, 1e-3), 1. - 1e-3);
+				aux_pars_[0] = p0 / (1. - p0);
+			}//end likelihood_type_ == "zero_inflated_poisson"
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				// Moment-based start for shape/dispersion from the full (inflated) sample and an excess-zero start for p0.
+				sw = 0.;
+				double avg_zero = 0., mean_y = 0., sec_mom = 0.;
+				if (fixed_effects == nullptr) {
+#pragma omp parallel for schedule(static) reduction(+:sw, avg_zero, mean_y, sec_mom)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data[i] <= 0.) avg_zero += w;
+						mean_y += w * y_data[i];
+						sec_mom += w * y_data[i] * y_data[i];
+						sw += w;
+					}
+				}
+				else {
+#pragma omp parallel for schedule(static) reduction(+:sw, avg_zero, mean_y, sec_mom)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double yr = y_data[i] / std::exp(fixed_effects[i]);
+						if (y_data[i] <= 0.) avg_zero += w;
+						mean_y += w * yr;
+						sec_mom += w * yr * yr;
+						sw += w;
+					}
+				}
+				avg_zero /= sw;
+				mean_y = std::max(mean_y / sw, 1e-8);
+				const double var_y = std::max(sec_mom / sw - mean_y * mean_y, mean_y * 1.0001);// ensure overdispersion
+				if (likelihood_type_ == "zero_inflated_negative_binomial") {
+					const double kappa = mean_y * mean_y / std::max(var_y - mean_y, 1e-6);
+					aux_pars_[0] = std::min(std::max(kappa, 1e-2), 1e6);
+				}
+				else {
+					const double phi = var_y / mean_y - 1.;
+					aux_pars_[0] = std::min(std::max(phi, 1e-3), 1e6);
+				}
+				const double f0 = std::exp(-mean_y);
+				double p0 = (avg_zero - f0) / std::max(1. - f0, 1e-6);
+				p0 = std::min(std::max(p0, 1e-3), 1. - 1e-3);
+				aux_pars_[1] = p0 / (1. - p0);
+			}//end zero_inflated_negative_binomial(_1)
+			else if (IsZeroInflatedCountRegression()) {
+				// Initialize only the base count auxiliary parameter (Poisson has none); moment-based from the full sample.
+				const string_t base = ZICountRegressionBaseType();
+				if (base != "zero_inflated_poisson") {
+					sw = 0.;
+					double mean_y = 0., sec_mom = 0.;
+#pragma omp parallel for schedule(static) reduction(+:sw, mean_y, sec_mom)
+					for (data_size_t i = 0; i < num_data; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0; const double yr = (fixed_effects == nullptr) ? y_data[i] : y_data[i] / std::exp(fixed_effects[i]);
+						mean_y += w * yr; sec_mom += w * yr * yr; sw += w;
+					}
+					mean_y = std::max(mean_y / sw, 1e-8); const double var_y = std::max(sec_mom / sw - mean_y * mean_y, mean_y * 1.0001);
+					if (base == "zero_inflated_negative_binomial") aux_pars_[0] = std::min(std::max(mean_y * mean_y / std::max(var_y - mean_y, 1e-6), 1e-2), 1e6);
+					else aux_pars_[0] = std::min(std::max(var_y / mean_y - 1., 1e-3), 1e6);
+				}
+			}//end zero-inflated count regression
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 				//Estimating (sigma, lambda) using two moment conditions that are exact for the latent  X ~ N(mu,sigma^2) truncated at 0
 				 // Notation: For y_i > 0, define u_i(lambda) = y_i^(1/lambda) = exp((1/lambda) * log y_i), a_i = -mu_i / sigma, tau(a) = phi(a) / (1 - Phi(a))
@@ -1848,7 +2573,7 @@ namespace GPBoost {
 			}//end "asymmetric_laplace"
 			else if (likelihood_type_ != "bernoulli_probit" && likelihood_type_ != "bernoulli_logit" &&
 				likelihood_type_ != "binomial_probit" && likelihood_type_ != "binomial_logit" &&
-				likelihood_type_ != "poisson" && !IsGaussianHeteroscedastic() &&
+				likelihood_type_ != "poisson" && !IsGaussianHeteroscedastic() && !IsEGPDLikelihood() &&
 				likelihood_type_ != "quasi_bernoulli_probit" && likelihood_type_ != "quasi_bernoulli_logit") {
 				Log::REFatal("FindInitialAuxPars: Likelihood of type '%s' is not supported ", likelihood_type_.c_str());
 			}
@@ -1878,9 +2603,25 @@ namespace GPBoost {
 				C_mu = 1.;
 				C_sigma2 = 1.;
 			}
-			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
+			else if (IsHurdlePositive()) {
+				double sw = 0.0, mean = 0., sec_mom = 0.;
+#pragma omp parallel for schedule(static) reduction(+:mean, sec_mom, sw)
+				for (data_size_t i = 0; i < num_data; ++i) {
+					if (y_data[i] > 0.) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						mean += w * y_data[i];
+						sec_mom += w * y_data[i] * y_data[i];
+						sw += w;
+					}
+				}
+				mean /= sw;
+				sec_mom /= sw;
+				C_mu = std::abs(SafeLog(mean));
+				C_sigma2 = std::abs(SafeLog(sec_mom - mean * mean));
+			}
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" || IsEGPDLikelihood() ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
-				likelihood_type_ == "lognormal" || likelihood_type_ == "zero_inflated_gamma") {
+				likelihood_type_ == "lognormal" || IsZeroInflatedCount()) {
 				double sw = 0.0, mean = 0., sec_mom = 0;
 #pragma omp parallel for schedule(static) reduction(+:mean, sec_mom, sw)
 				for (data_size_t i = 0; i < num_data; ++i) {
@@ -1998,10 +2739,14 @@ namespace GPBoost {
 						"Will use the value provided in 'likelihood_additional_param' ", names_aux_pars_[1].c_str(), aux_pars[1], aux_pars_[1]);
 				}
 			}
-			if (IsGaussianLikelihood() || likelihood_type_ == "gamma" ||
+			if (likelihood_type_ == "tweedie_fixed_p" && !aux_pars_have_been_set_ && !TwoNumbersAreEqual<double>(aux_pars[1], aux_pars_[1])) {
+				Log::REWarning("The 'power' parameter provided in 'init_aux_pars' (= %g) and 'likelihood_additional_param' (= %g) are not equal. Will use the value provided in 'likelihood_additional_param'.", aux_pars[1], aux_pars_[1]);
+			}
+			if (IsGaussianLikelihood() || IsEGPDLikelihood() || likelihood_type_ == "gamma" ||
+				likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
 				likelihood_type_ == "beta" || likelihood_type_ == "t" || likelihood_type_ == "lognormal" ||
-				likelihood_type_ == "beta_binomial" || likelihood_type_ == "zero_inflated_gamma" ||
+				likelihood_type_ == "beta_binomial" || IsHurdlePositive() || IsZeroInflatedCount() ||
 				likelihood_type_ == "zero_censored_power_transformed_normal" || likelihood_type_ == "zoctn" ||
 				likelihood_type_ == "zero_one_censored_transformed_beta" || likelihood_type_ == "zero_one_censored_shifted_gamma" ||
 				likelihood_type_ == "asymmetric_laplace") {
@@ -2022,6 +2767,10 @@ namespace GPBoost {
 			aux_pars_original_ = aux_pars_;
 			BackTransformAuxPars(aux_pars_.data(), aux_pars_original_.data());
 			normalizing_constant_has_been_calculated_ = false;
+			if (likelihood_type_ == "tweedie") tweedie_boundary_warning_issued_ = false;
+			// Refresh in this single-threaded update path only when the parameters actually changed. Later
+			// response-scale transforms (e.g. boosting ConvertOutput) only read the cache.
+			if (HasEGPDBase() && !EGPDMomentsCacheMatchesAuxPars()) RefreshEGPDMomentsCache();
 			aux_pars_have_been_set_ = true;
 		}
 
@@ -2105,8 +2854,9 @@ namespace GPBoost {
 				if (it == 0 || information_changes_during_mode_finding_) {
 					CalcInformationLogLik(y_data, y_data_int, location_par_ptr, true);
 					if (HasNegativeValueInformationLogLik()) {
-						Log::REFatal("FindModePostRandEffCalcMLLStable: Negative values found in the (diagonal) Hessian (or Fisher information) of the negative log-likelihood. "
-							"Cannot have negative values when using the numerically stable version of Rasmussen and Williams (2006) for mode finding ");
+						LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in the (diagonal) Hessian (or Fisher information) "
+							"of the negative log-likelihood. Cannot have negative values when using the numerically stable "
+							"version of Rasmussen and Williams(2006) for mode finding ");
 					}
 					diag_Wsqrt.array() = information_ll_.array().sqrt();
 					Id_plus_Wsqrt_Sigma_Wsqrt.setIdentity();
@@ -2168,8 +2918,10 @@ namespace GPBoost {
 				if (information_changes_after_mode_finding_) {
 					CalcInformationLogLik(y_data, y_data_int, location_par_ptr, false);
 					if (HasNegativeValueInformationLogLik()) {
-						Log::REFatal("FindModePostRandEffCalcMLLStable: Negative values found in the (diagonal) Hessian (or Fisher information) of the negative log-likelihood. "
-							"Cannot have negative values when using the numerically stable version of Rasmussen and Williams (2006) for mode finding ");
+						LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in the (diagonal) Hessian (or Fisher information) "
+							"of the negative log-likelihood. Cannot have negative values when using the numerically stable "
+							"version of Rasmussen and Williams (2006) for calculating the log-determinant in the log-marginal likelihood "
+							"");
 					}
 					diag_Wsqrt.array() = information_ll_.array().sqrt();
 					Id_plus_Wsqrt_Sigma_Wsqrt.setIdentity();
@@ -2301,6 +3053,10 @@ namespace GPBoost {
 							chol_fact_pattern_analyzed_ = true;
 						}
 						chol_fact_SigmaI_plus_ZtWZ_grouped_.factorize(SigmaI_plus_ZtWZ);
+						if (chol_fact_SigmaI_plus_ZtWZ_grouped_.info() != Eigen::Success) {
+							LogFatalWithPotentialFisherLaplaceHint(__func__, "Cholesky factorization of Sigma^(-1) + Z^T W Z failed. "
+								"The complete mode-finding curvature matrix is not positive definite ");
+						}
 					}
 					// Update mode and do backtracking line search
 					mode_update = chol_fact_SigmaI_plus_ZtWZ_grouped_.solve(rhs);
@@ -2357,6 +3113,11 @@ namespace GPBoost {
 						if (information_changes_after_mode_finding_) {
 							//upadate with latest W
 							CalcInformationLogLik(y_data, y_data_int, location_par.data(), false);
+							if (HasNegativeValueInformationLogLikOnDataScale()) {
+								LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in W (the diagonal Hessian or Fisher "
+									"information of the negative log-likelihood). Iterative evaluation of the Laplace determinant requires "
+									"nonnegative W ");
+							}
 							SigmaI_plus_ZtWZ_rm_ = sp_mat_rm_t((*SigmaI_ptr)) + sp_mat_rm_t((*Zt_) * information_ll_.asDiagonal() * (*Zt_).transpose());
 							if (cg_preconditioner_type_ == "incomplete_cholesky") {
 								ZeroFillInIncompleteCholeskyFactorization(SigmaI_plus_ZtWZ_rm_, L_SigmaI_plus_ZtWZ_rm_);
@@ -2431,6 +3192,11 @@ namespace GPBoost {
 						SigmaI_plus_ZtWZ = (*SigmaI_ptr) + (sp_mat_t)((*Zt_) * information_ll_.asDiagonal() * (*Zt_).transpose());
 						SigmaI_plus_ZtWZ.makeCompressed();
 						chol_fact_SigmaI_plus_ZtWZ_grouped_.factorize(SigmaI_plus_ZtWZ);
+						if (chol_fact_SigmaI_plus_ZtWZ_grouped_.info() != Eigen::Success) {
+							LogFatalWithPotentialFisherLaplaceHint(__func__, "Cholesky factorization of Sigma^(-1) + Z^T W Z failed when "
+								"calculating the Laplace determinant. The observed-Hessian matrix is not positive definite (negative "
+								"individual entries of W are permitted) ");
+						}
 					}
 					approx_marginal_ll += -((sp_mat_t)chol_fact_SigmaI_plus_ZtWZ_grouped_.matrixL()).diagonal().array().log().sum() + 0.5 * SigmaI.diagonal().array().log().sum();
 					if (has_vecchia_gp) {
@@ -2535,6 +3301,9 @@ namespace GPBoost {
 					if (information_changes_after_mode_finding_) {
 						CalcInformationLogLik(y_data, y_data_int, location_par.data(), false);
 						diag_SigmaI_plus_ZtWZ_ = (information_ll_.array() + 1. / sigma2).matrix();
+						if ((diag_SigmaI_plus_ZtWZ_.array() <= 0.).any()) {
+							LogFatalWithPotentialFisherLaplaceHint(__func__, "negative values found in diag_SigmaI_plus_ZtWZ, must be positive for log-determinant ");
+						}
 					}
 					approx_marginal_ll -= 0.5 * diag_SigmaI_plus_ZtWZ_.array().log().sum() + 0.5 * dim_mode_ * std::log(sigma2);
 				}
@@ -2688,6 +3457,7 @@ namespace GPBoost {
 								GPBoost::matmul(B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov.transpose(), B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov, B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov_dot, GPU_use);
 								sigma_woodbury_woodbury = sigma_woodbury - B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov_dot;
 								chol_fact_sigma_woodbury_woodbury.compute(sigma_woodbury_woodbury);
+								CheckCholeskyFactorization(chol_fact_sigma_woodbury_woodbury, "FindModePostRandEffCalcMLLFSVA iterative VIF preconditioner");
 							}
 						}
 						if ((information_ll_.array() > 1e10).any()) {
@@ -2701,6 +3471,15 @@ namespace GPBoost {
 					else if (cg_preconditioner_type_ == "fitc") {
 						const den_mat_t* cross_cov_preconditioner = re_comps_cross_cov_preconditioner_cluster_i[0]->GetSigmaPtr();
 						if (it == 0 || information_changes_during_mode_finding_) {
+							if (HasNegativeValueInformationLogLik()) {
+								LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in W (the diagonal Hessian or Fisher "
+									"information of the negative log-likelihood). The iterative FITC preconditioner is based on the "
+									"positive-definite W^(-1) formulation. Try another preconditioner or the Cholesky decomposition ");
+							}
+							if (HasZeroValueInformationLogLik()) {
+								Log::REFatal("FindModePostRandEffCalcMLLFSVA: 0's found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+									"The iterative FITC preconditioner requires W to be invertible. Try using another preconditioner or the Cholesky decomposition ");
+							}
 							information_ll_inv.array() = information_ll_.array().inverse();
 #pragma omp parallel for schedule(static)   
 							for (int i = 0; i < dim_mode_; ++i) {
@@ -2712,6 +3491,7 @@ namespace GPBoost {
 							//den_mat_t sigma_woodbury_preconditioner = ((*cross_cov_preconditioner).transpose() * diagonal_approx_inv_preconditioner_.asDiagonal()) * (*cross_cov_preconditioner);
 							sigma_woodbury_preconditioner += (sigma_ip_preconditioner);
 							chol_fact_woodbury_preconditioner_.compute(sigma_woodbury_preconditioner);
+							CheckCholeskyFactorization(chol_fact_woodbury_preconditioner_, "FindModePostRandEffCalcMLLFSVA iterative FITC preconditioner");
 						}
 						rhs_part1 = (B_rm_.transpose().template triangularView<Eigen::UpLoType::UnitUpper>()).solve(rhs);
 						rhs_part = D_inv_B_rm_.triangularView<Eigen::UpLoType::Lower>().solve(rhs_part1);
@@ -2735,9 +3515,11 @@ namespace GPBoost {
 							chol_fact_pattern_analyzed_ = true;
 						}
 						chol_fact_SigmaI_plus_ZtWZ_vecchia_.factorize(SigmaI_plus_W);//This is the bottleneck for large data
+						CheckCholeskyFactorization(chol_fact_SigmaI_plus_ZtWZ_vecchia_, "FindModePostRandEffCalcMLLFSVA mode update");
 					}
 					sigma_woodbury_2 = (sigma_woodbury) - Bt_D_inv_B_cross_cov.transpose() * chol_fact_SigmaI_plus_ZtWZ_vecchia_.solve(Bt_D_inv_B_cross_cov);
 					chol_fact_sigma_woodbury_2.compute(sigma_woodbury_2);
+					CheckCholeskyFactorization(chol_fact_sigma_woodbury_2, "FindModePostRandEffCalcMLLFSVA Woodbury mode update");
 					vec_t Sigma_I_rhs = chol_fact_SigmaI_plus_ZtWZ_vecchia_.solve(rhs);
 					vec_t Bt_D_inv_B_cross_cov_T_Sigma_I_rhs = Bt_D_inv_B_cross_cov.transpose() * Sigma_I_rhs;
 					vec_t woodI_Bt_D_inv_B_cross_cov_T_Sigma_I_rhs = chol_fact_sigma_woodbury_2.solve(Bt_D_inv_B_cross_cov_T_Sigma_I_rhs);
@@ -2800,6 +3582,11 @@ namespace GPBoost {
 					CalcInformationLogLik(y_data, y_data_int, location_par_ptr, false);
 				}
 				if (matrix_inversion_method_ == "iterative") {
+					if (HasNegativeValueInformationLogLikOnDataScale()) {
+						LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in W (the diagonal Hessian or Fisher "
+							"information of the negative log-likelihood). Iterative evaluation of the Laplace determinant requires "
+							"nonnegative W ");
+					}
 					if (calc_mll) {//calculate determinant term for approx_marginal_ll
 						//Generate random vectors (r_1, r_2, r_3, ...) with Cov(r_i) = I
 						if (!saved_rand_vec_trace_) {
@@ -2822,6 +3609,11 @@ namespace GPBoost {
 							}
 						}
 						if (cg_preconditioner_type_ == "vifdu") {
+							if (HasNegativeValueInformationLogLik()) {
+								LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in W (the diagonal Hessian or Fisher "
+									"information of the negative log-likelihood). Stochastic evaluation of the Laplace determinant with the "
+									"'vifdu' preconditioner requires the square root of W ");
+							}
 							// B^T * W^1/2 * rand_vec
 							den_mat_t Bt_W_sqrt_rand_vec_trace(dim_mode_, num_rand_vec_trace_);
 							vec_t information_ll_sqrt = information_ll_.cwiseSqrt();
@@ -2865,6 +3657,7 @@ namespace GPBoost {
 								GPBoost::matmul(B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov.transpose(), B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov, B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov_dot, GPU_use);
 								sigma_woodbury_woodbury_ = sigma_woodbury - B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov_dot;
 								chol_fact_sigma_woodbury_woodbury_.compute(sigma_woodbury_woodbury_);
+								CheckCholeskyFactorization(chol_fact_sigma_woodbury_woodbury_, "FindModePostRandEffCalcMLLFSVA iterative determinant preconditioner");
 							}
 						}
 						double log_det_Sigma_W_plus_I;
@@ -2891,11 +3684,16 @@ namespace GPBoost {
 							chol_fact_pattern_analyzed_ = true;
 						}
 						chol_fact_SigmaI_plus_ZtWZ_vecchia_.factorize(SigmaI_plus_W);
+						if (chol_fact_SigmaI_plus_ZtWZ_vecchia_.info() != Eigen::Success) {
+							LogFatalWithPotentialFisherLaplaceHint(__func__, "Cholesky factorization failed because the matrix is not positive "
+								"definite or contains non-finite values ");
+						}
 					}
 					TriangularSolveGivenCholesky<chol_sp_mat_t, sp_mat_t, den_mat_t, den_mat_t>(chol_fact_SigmaI_plus_ZtWZ_vecchia_,
 						Bt_D_inv_B_cross_cov, chol_fact_SigmaI_plus_ZtWZ_vecchia_cross_cov, false);
 					sigma_woodbury_woodbury_ = sigma_woodbury - chol_fact_SigmaI_plus_ZtWZ_vecchia_cross_cov.transpose() * chol_fact_SigmaI_plus_ZtWZ_vecchia_cross_cov;
 					chol_fact_sigma_woodbury_woodbury_.compute(sigma_woodbury_woodbury_);
+					CheckCholeskyFactorization(chol_fact_sigma_woodbury_woodbury_, "FindModePostRandEffCalcMLLFSVA Woodbury determinant");
 					approx_marginal_ll += -((sp_mat_t)chol_fact_SigmaI_plus_ZtWZ_vecchia_.matrixL()).diagonal().array().log().sum() + 0.5 * D_inv.diagonal().array().log().sum();
 					approx_marginal_ll += ((den_mat_t)chol_fact_sigma_ip.matrixL()).diagonal().array().log().sum();
 					approx_marginal_ll -= ((den_mat_t)chol_fact_sigma_woodbury_woodbury_.matrixL()).diagonal().array().log().sum();
@@ -3073,6 +3871,7 @@ namespace GPBoost {
 							chol_fact_pattern_analyzed_ = true;
 						}
 						chol_fact_SigmaI_plus_ZtWZ_vecchia_.factorize(SigmaI_plus_W);//This is the bottleneck for large data
+						CheckCholeskyFactorization(chol_fact_SigmaI_plus_ZtWZ_vecchia_, "FindModePostRandEffCalcMLLVecchia mode update");
 					}
 					//Log::REInfo("SigmaI_plus_W: number non zeros = %d", (int)SigmaI_plus_W.nonZeros());//only for debugging
 					//Log::REInfo("chol_fact_SigmaI_plus_ZtWZ: Number non zeros = %d", (int)((sp_mat_t)chol_fact_SigmaI_plus_ZtWZ_vecchia_.matrixL()).nonZeros());//only for debugging
@@ -3137,6 +3936,11 @@ namespace GPBoost {
 					CalcInformationLogLik(y_data, y_data_int, location_par_ptr, false);
 				}
 				if (matrix_inversion_method_ == "iterative") {
+					if (HasNegativeValueInformationLogLikOnDataScale()) {
+						LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in W (the diagonal Hessian or Fisher "
+							"information of the negative log-likelihood). Iterative evaluation of the Laplace determinant requires "
+							"nonnegative W ");
+					}
 					if (calc_mll) {//calculate determinant term for approx_marginal_ll
 						//Generate random vectors (r_1, r_2, r_3, ...) with Cov(r_i) = I
 						if (!saved_rand_vec_trace_) {
@@ -3190,6 +3994,10 @@ namespace GPBoost {
 							chol_fact_pattern_analyzed_ = true;
 						}
 						chol_fact_SigmaI_plus_ZtWZ_vecchia_.factorize(SigmaI_plus_W);
+						if (chol_fact_SigmaI_plus_ZtWZ_vecchia_.info() != Eigen::Success) {
+							LogFatalWithPotentialFisherLaplaceHint(__func__, " (determinant) Cholesky factorization failed because the matrix is "
+								"not positive definite or contains non-finite values ");
+						}
 					}
 					approx_marginal_ll += -((sp_mat_t)chol_fact_SigmaI_plus_ZtWZ_vecchia_.matrixL()).diagonal().array().log().sum();
 					for (int igp = 0; igp < num_sets_re_; ++igp) {
@@ -3257,7 +4065,7 @@ namespace GPBoost {
 				M.diagonal().array() *= JITTER_MULT_IP_FITC_FSA;
 				M.noalias() += (*cross_cov).transpose() * Dinv.asDiagonal() * (*cross_cov);
 				chol_M_woodbury.compute(M);
-				CHECK(chol_M_woodbury.info() == Eigen::Success);
+				CheckCholeskyFactorization(chol_M_woodbury, "FindModePostRandEffCalcMLLFITC covariance Woodbury matrix");
 			}
 			vec_t location_par;//location parameter = mode of random effects + fixed effects
 			double* location_par_ptr;
@@ -3278,8 +4086,9 @@ namespace GPBoost {
 				if (it == 0 || information_changes_during_mode_finding_) {
 					CalcInformationLogLik(y_data, y_data_int, location_par_ptr, true);
 					if (HasNegativeValueInformationLogLik()) {
-						Log::REFatal("FindModePostRandEffCalcMLLFITC: Negative values found in the (diagonal) Hessian (or Fisher information) of the negative log-likelihood. "
-							"Cannot have negative values when using the numerically stable version of Rasmussen and Williams (2006) for mode finding ");
+						LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in the (diagonal) Hessian (or Fisher "
+							"information) of the negative log-likelihood. Cannot have negative values when using the numerically stable "
+							"version of Rasmussen and Williams (2006) for mode finding ");
 					}
 					Wsqrt_diag.array() = information_ll_.array().sqrt();
 					DW_plus_I_inv_diag = (information_ll_.array() * fitc_resid_diag.array() + 1.).matrix().cwiseInverse();
@@ -3295,6 +4104,7 @@ namespace GPBoost {
 					GPBoost::matmul((*cross_cov).transpose(), W_times_DW_plus_I_inv_diag_cross_cov, cross_cov_t_W_times_DW_plus_I_inv_diag_cross_cov, GPU_use);
 					M_aux_Woodbury += cross_cov_t_W_times_DW_plus_I_inv_diag_cross_cov;
 					chol_fact_dense_Newton_.compute(M_aux_Woodbury);//Cholesky factor of sigma_ip + Sigma_nm^T * Wsqrt * DW_plus_I_inv_diag * Wsqrt * Sigma_nm
+					CheckCholeskyFactorization(chol_fact_dense_Newton_, "FindModePostRandEffCalcMLLFITC mode update");
 				}
 				rhs.array() = information_ll_.array() * mode_.array() + first_deriv_ll_.array();
 				// Update mode and SigmaI_mode_
@@ -3361,6 +4171,10 @@ namespace GPBoost {
 				CalcFirstDerivLogLik(y_data, y_data_int, location_par_ptr);//first derivative is not used here anymore but since it is reused in gradient calculation and in prediction, we calculate it once more
 				vec_t D_plus_WI_inv_diag;
 				if (information_changes_after_mode_finding_) CalcInformationLogLik(y_data, y_data_int, location_par_ptr, false);
+				if (HasNegativeValueInformationLogLikOnDataScale()) {
+					LogFatalWithPotentialFisherLaplaceHint(__func__, "Negative values found in W (the diagonal Hessian or Fisher "
+						"information of the negative log-likelihood). This is not permitted when using the FITC approximation ");
+				}
 				if (HasZeroValueInformationLogLik()) {
 					Log::REFatal("FindModePostRandEffCalcMLLFITC: 0's found in the (diagonal) Hessian (or Fisher information) of the negative log-likelihood. "
 						"This is not permitted when using the FITC approximation ");
@@ -3375,6 +4189,7 @@ namespace GPBoost {
 					GPBoost::matmul((*cross_cov).transpose(), D_plus_WI_inv_diag_cross_cov, cross_cov_t_D_plus_WI_inv_diag_cross_cov, GPU_use);
 					M_aux_Woodbury += cross_cov_t_D_plus_WI_inv_diag_cross_cov;
 					chol_fact_dense_Newton_.compute(M_aux_Woodbury);//Cholesky factor of (sigma_ip + Sigma_nm^T * D_plus_WI_inv_diag * Sigma_nm)
+					CheckCholeskyFactorization(chol_fact_dense_Newton_, "FindModePostRandEffCalcMLLFITC determinant");
 				}
 				else {
 					D_plus_WI_inv_diag = (fitc_resid_diag + information_ll_.cwiseInverse()).cwiseInverse();
@@ -3448,6 +4263,10 @@ namespace GPBoost {
 			CHECK(num_sets_re_ == 1);
 			if (grad_information_wrt_mode_non_zero_) {
 				CalcFirstDerivInformationLocPar(y_data, y_data_int, location_par_ptr, deriv_information_diag_loc_par, deriv_information_diag_loc_par_data_scale);
+			}
+			if (HasNegativeValueInformationLogLik()) {
+				Log::REFatal("CalcGradNegMargLikelihoodLaplaceApproxStable: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+					"This gradient calculation requires the square root of W ");
 			}
 			T_mat L_inv_Wsqrt(dim_mode_, dim_mode_);//L_inv_Wsqrt = L\ZtWZsqrt if use_random_effects_indices_of_data_ or L\Wsqrt if !use_random_effects_indices_of_data_ where L is a Cholesky factor of Id_plus_Wsqrt_Sigma_Wsqrt
 			L_inv_Wsqrt.setIdentity();
@@ -3532,6 +4351,26 @@ namespace GPBoost {
 								0.5 * information_ll_data_scale_[i] * SigmaI_plus_W_inv_diag[random_effects_indices_of_data_[i]];
 						}
 					}
+					else if (IsRegressionZeroModel()) {
+						// Structural-zero block (zeta). Hurdle: direct score only (decoupled). Zero-inflated counts couple at zero counts:
+						// add log-det (via dJ_eta/dzeta) and implicit-through-mode (via l_eta_zeta), mirroring the eta block with W -> l_eta_zeta.
+						if (IsHurdleRegression()) {
+#pragma omp parallel for schedule(static)
+							for (data_size_t i = 0; i < num_data_; ++i) {
+								const double w = has_weights_ ? weights_[i] : 1.0;
+								fixed_effect_grad[i + num_data_] = -w * RegressionZeroModel_dZeta(y_data, y_data_int, i, location_par_ptr[i], location_par_ptr[i + num_data_]);
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (data_size_t i = 0; i < num_data_; ++i) {
+								const double w = has_weights_ ? weights_[i] : 1.0;
+								const data_size_t idx = random_effects_indices_of_data_[i];
+								ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[i], location_par_ptr[i], location_par_ptr[i + num_data_], o);
+								fixed_effect_grad[i + num_data_] = -w * o.dZeta + 0.5 * (w * RegressionZeroModel_dInfodZeta(location_par_ptr[i], location_par_ptr[i + num_data_], o)) * SigmaI_plus_W_inv_diag[idx] + (w * o.lEtaZeta) * SigmaI_plus_W_inv_d_mll_d_mode[idx];
+							}
+						}
+					}
 				}
 				else {
 					fixed_effect_grad = -first_deriv_ll_;
@@ -3549,6 +4388,24 @@ namespace GPBoost {
 							double dummy_mean_deriv, deriv_log_var;
 							FirstDerivLogLikGaussianHeteroscedastic(y_data[i], location_par_ptr[i], location_par_ptr[i + num_data_], dummy_mean_deriv, deriv_log_var);
 							fixed_effect_grad[i + num_data_] = -w * deriv_log_var - 0.5 * information_ll_[i] * SigmaI_plus_W_inv_diag[i];
+						}
+					}
+					else if (IsRegressionZeroModel()) {
+						fixed_effect_grad.conservativeResize(dim_location_par_);
+						if (IsHurdleRegression()) {
+#pragma omp parallel for schedule(static)
+							for (data_size_t i = 0; i < num_data_; ++i) {
+								const double w = has_weights_ ? weights_[i] : 1.0;
+								fixed_effect_grad[i + num_data_] = -w * RegressionZeroModel_dZeta(y_data, y_data_int, i, location_par_ptr[i], location_par_ptr[i + num_data_]);
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (data_size_t i = 0; i < num_data_; ++i) {
+								const double w = has_weights_ ? weights_[i] : 1.0;
+								ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[i], location_par_ptr[i], location_par_ptr[i + num_data_], o);
+								fixed_effect_grad[i + num_data_] = -w * o.dZeta + 0.5 * (w * RegressionZeroModel_dInfodZeta(location_par_ptr[i], location_par_ptr[i + num_data_], o)) * SigmaI_plus_W_inv_diag[i] + (w * o.lEtaZeta) * SigmaI_plus_W_inv_d_mll_d_mode[i];
+							}
 						}
 					}
 				}
@@ -3893,6 +4750,40 @@ namespace GPBoost {
 							fixed_effect_grad[i + num_data_] = -w * deriv_log_var - 0.5 * information_ll_[i] * SigmaI_plus_ZtWZ_inv_diag_data_scale[i];
 						}
 					}
+					if (IsRegressionZeroModel()) {
+						// Structural-zero (zeta) block on the ITERATIVE grouped-RE path. Computed separately from the eta block-0 above (which
+						// runs when grad_information_wrt_mode_non_zero_). Hurdle decouples -> direct score. Zero-inflated counts couple: add the
+						// log-det term (via dInfo/dzeta and the stochastic Hutchinson data-scale diagonal of (Sigma^-1+ZtWZ)^-1) and the
+						// implicit term (via l_eta_zeta and Z*(Sigma^-1+ZtWZ)^-1*d_mll_d_mode, already computed for the eta block).
+						if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+						if (IsHurdleRegression() || !grad_information_wrt_mode_non_zero_) {
+#pragma omp parallel for schedule(static)
+							for (data_size_t iz = 0; iz < num_data_; ++iz) {
+								const double wz = has_weights_ ? weights_[iz] : 1.0;
+								fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par[iz], location_par[iz + num_data_]);
+							}
+						}
+						else {
+							den_mat_t SigmaI_plus_ZtWZ_inv_RV_I(dim_mode_, num_rand_vec_trace_);
+							bool has_NA_or_Inf_stoch_diag = false;
+							CGRandomEffectsMat(SigmaI_plus_ZtWZ_rm_, rand_vec_trace_I_, SigmaI_plus_ZtWZ_inv_RV_I, has_NA_or_Inf_stoch_diag,
+								dim_mode_, num_rand_vec_trace_, cg_max_num_it_, cg_delta_conv_, cg_preconditioner_type_, L_SigmaI_plus_ZtWZ_rm_, P_SSOR_L_D_sqrt_inv_rm_);
+							if (has_NA_or_Inf_stoch_diag) Log::REDebug(CG_NA_OR_INF_WARNING_GRADIENT_);
+							den_mat_t Z_SigmaI_plus_ZtWZ_inv_RV_I(num_data_, num_rand_vec_trace_), Z_RV_I(num_data_, num_rand_vec_trace_);
+#pragma omp parallel for schedule(static)
+							for (int i = 0; i < num_rand_vec_trace_; ++i) {
+								Z_SigmaI_plus_ZtWZ_inv_RV_I.col(i) = (*Zt_).transpose() * SigmaI_plus_ZtWZ_inv_RV_I.col(i);
+								Z_RV_I.col(i) = (*Zt_).transpose() * rand_vec_trace_I_.col(i);
+							}
+							const vec_t diag_data = (Z_SigmaI_plus_ZtWZ_inv_RV_I.cwiseProduct(Z_RV_I)).rowwise().mean();// stochastic data-scale diagonal of (Sigma^-1+ZtWZ)^-1
+#pragma omp parallel for schedule(static)
+							for (data_size_t iz = 0; iz < num_data_; ++iz) {
+								const double wz = has_weights_ ? weights_[iz] : 1.0;
+								ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[iz], location_par[iz], location_par[iz + num_data_], o);
+								fixed_effect_grad[iz + num_data_] = -wz * o.dZeta + 0.5 * (wz * RegressionZeroModel_dInfodZeta(location_par[iz], location_par[iz + num_data_], o)) * diag_data[iz] + (wz * o.lEtaZeta) * Z_SigmaI_plus_ZtWZ_inv_d_mll_d_mode[iz];
+							}
+						}
+					}
 				}//end calc_F_grad
 				// calculate gradient wrt additional likelihood parameters
 				if (calc_aux_par_grad) {
@@ -4109,6 +5000,29 @@ namespace GPBoost {
 							fixed_effect_grad[i + num_data_] = -w * deriv_log_var - 0.5 * information_ll_[i] * SigmaI_plus_ZtWZ_inv_data_scale_i;
 						}
 					}
+					else if (IsRegressionZeroModel()) {
+						// Structural-zero block (zeta). Hurdle: direct score only (decoupled). Zero-inflated counts couple at zero counts:
+						// log-det via dJ_eta/dzeta (scaled by data-scale diagonal ||L_inv*Zt.col||^2) + implicit via l_eta_zeta (Z*(Sigma^-1+ZtWZ)^-1*d_mll_d_mode).
+						if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+						if (IsHurdleRegression()) {
+#pragma omp parallel for schedule(static)
+							for (data_size_t iz = 0; iz < num_data_; ++iz) {
+								const double wz = has_weights_ ? weights_[iz] : 1.0;
+								fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par[iz], location_par[iz + num_data_]);
+							}
+						}
+						else {
+							const vec_t Z_Ainv_d_mll_d_mode = (*Zt_).transpose() * (L_inv.transpose() * (L_inv * d_mll_d_mode));// = Z (Sigma^-1+ZtWZ)^-1 d_mll_d_mode (data scale)
+#pragma omp parallel for schedule(static)
+							for (data_size_t iz = 0; iz < num_data_; ++iz) {
+								const double wz = has_weights_ ? weights_[iz] : 1.0;
+								const vec_t L_inv_Zt_col = L_inv * (*Zt_).col(iz);
+								const double diag_iz = L_inv_Zt_col.squaredNorm();// data-scale diagonal of (Sigma^-1+ZtWZ)^-1
+								ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[iz], location_par[iz], location_par[iz + num_data_], o);
+								fixed_effect_grad[iz + num_data_] = -wz * o.dZeta + 0.5 * (wz * RegressionZeroModel_dInfodZeta(location_par[iz], location_par[iz + num_data_], o)) * diag_iz + (wz * o.lEtaZeta) * Z_Ainv_d_mll_d_mode[iz];
+							}
+						}
+					}
 				}//end calc_F_grad
 				// calculate gradient wrt additional likelihood parameters
 				if (calc_aux_par_grad) {
@@ -4185,7 +5099,7 @@ namespace GPBoost {
 			// calculate gradient of approx. marginal likelihood wrt the mode
 			vec_t deriv_information_diag_loc_par;//usually vector of negative third derivatives of log-likelihood
 			vec_t d_mll_d_mode;
-			if (grad_information_wrt_mode_non_zero_) {
+			if (grad_information_wrt_mode_non_zero_ && !iid_model_) {
 				d_mll_d_mode = vec_t(dim_mode_);
 				deriv_information_diag_loc_par = vec_t(num_data_);
 				CalcFirstDerivInformationLocPar_PerSample(y_data, y_data_int, location_par.data(), deriv_information_diag_loc_par);
@@ -4197,7 +5111,7 @@ namespace GPBoost {
 				double explicit_derivative = -0.5 * (mode_.array() * mode_.array()).sum() / sigma2 +
 					0.5 * (information_ll_.array() / diag_SigmaI_plus_ZtWZ_.array()).sum();
 				cov_grad[0] = explicit_derivative;
-				if (grad_information_wrt_mode_non_zero_) {
+				if (grad_information_wrt_mode_non_zero_ && !iid_model_) {
 					CHECK(first_deriv_information_loc_par_caluclated_);
 					// calculate implicit derivative (through mode) of approx. mariginal log-likelihood
 					vec_t d_mode_d_par = first_deriv_ll_;
@@ -4232,6 +5146,30 @@ namespace GPBoost {
 						}
 					}
 				}
+					else if (IsRegressionZeroModel()) {
+						// Structural-zero block (zeta). Hurdle decouples from eta (dJ_eta/dzeta = l_eta_zeta = 0) -> direct score only.
+						// Zero-inflated counts COUPLE at zero counts: add the log-determinant term (through dJ_eta/dzeta) and the implicit
+						// term (through the mode, via l_eta_zeta), mirroring the eta block above with dJ_eta/deta and W (=information_ll)
+						// replaced by dJ_eta/dzeta and l_eta_zeta (both zero for hurdle, so the same code reduces to the direct term).
+						if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+						if (IsHurdleRegression() || iid_model_) {
+#pragma omp parallel for schedule(static)
+							for (data_size_t iz = 0; iz < num_data_; ++iz) {
+								const double wz = has_weights_ ? weights_[iz] : 1.0;
+								fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par[iz], location_par[iz + num_data_]);
+							}
+						}
+						else {
+#pragma omp parallel for schedule(static)
+							for (data_size_t iz = 0; iz < num_data_; ++iz) {
+								const double wz = has_weights_ ? weights_[iz] : 1.0;
+								const data_size_t idx = random_effects_indices_of_data_[iz];
+								ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[iz], location_par[iz], location_par[iz + num_data_], o);
+								const double inv_diag = 1. / diag_SigmaI_plus_ZtWZ_[idx];
+								fixed_effect_grad[iz + num_data_] = -wz * o.dZeta + 0.5 * (wz * RegressionZeroModel_dInfodZeta(location_par[iz], location_par[iz + num_data_], o)) * inv_diag + d_mll_d_mode[idx] * (wz * o.lEtaZeta) * inv_diag;
+							}
+						}
+					}
 			}//end calc_F_grad
 			// calculate gradient wrt additional likelihood parameters
 			if (calc_aux_par_grad) {
@@ -4363,6 +5301,10 @@ namespace GPBoost {
 					"This is not permitted when using the VIF approximation and gradient-based optimization ");
 			}
 			if (matrix_inversion_method_ == "iterative") {
+				if ((cg_preconditioner_type_ == "vifdu" || cg_preconditioner_type_ == "fitc") && HasNegativeValueInformationLogLik()) {
+					Log::REFatal("CalcGradNegMargLikelihoodLaplaceApproxFSVA: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+						"The stochastic gradient calculation with the '%s' preconditioner requires W to be nonnegative ", cg_preconditioner_type_.c_str());
+				}
 				double c_opt;
 				sp_mat_rm_t SigmaI_rm = B_t_D_inv_rm_ * B_rm_;
 				vec_t SigmaI_deriv_mode;
@@ -4371,7 +5313,6 @@ namespace GPBoost {
 				vec_t tr_SigmaI_plus_W_inv_W_deriv, tr_PI_P_deriv_vec(dim_mode_), c_opt_vec;
 				den_mat_t Z_SigmaI_plus_W_inv_W_deriv_PI_Z, PI_Z(dim_mode_, num_rand_vec_trace_),
 					Z_PI_P_deriv_PI_Z;
-
 				if (grad_information_wrt_mode_non_zero_) {
 					W_deriv_rep = deriv_information_diag_loc_par.replicate(1, num_rand_vec_trace_);
 				}
@@ -4605,6 +5546,15 @@ namespace GPBoost {
 										0.5 * information_ll_data_scale_[i] * SigmaI_plus_W_inv_diag[random_effects_indices_of_data_[i]];
 								}
 							}
+							else if (IsRegressionZeroModel()) {
+								// Structural-zero block (zeta): hurdle -> direct score (exact). For zero-inflated counts the coupled log-det term would need the FSVA data-scale diagonal of (Sigma^-1+W)^-1, which is only a stochastic estimate here; coupled terms omitted -> alpha approximate for ZI counts on FSVA.
+								if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+								for (data_size_t iz = 0; iz < num_data_; ++iz) {
+									const double wz = has_weights_ ? weights_[iz] : 1.0;
+									fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par_ptr[iz], location_par_ptr[iz + num_data_]);
+								}
+							}
 						}
 						else {
 							fixed_effect_grad = -first_deriv_ll_;
@@ -4620,6 +5570,15 @@ namespace GPBoost {
 									double dummy_mean_deriv, deriv_log_var;
 									FirstDerivLogLikGaussianHeteroscedastic(y_data[i], location_par_ptr[i], location_par_ptr[i + num_data_], dummy_mean_deriv, deriv_log_var);
 									fixed_effect_grad[i + num_data_] = -w * deriv_log_var - 0.5 * information_ll_[i] * SigmaI_plus_W_inv_diag[i];
+								}
+							}
+							else if (IsRegressionZeroModel()) {
+								// Structural-zero block (zeta): hurdle -> direct score (exact). For zero-inflated counts the coupled log-det term would need the FSVA data-scale diagonal of (Sigma^-1+W)^-1, which is only a stochastic estimate here; coupled terms omitted -> alpha approximate for ZI counts on FSVA.
+								if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+								for (data_size_t iz = 0; iz < num_data_; ++iz) {
+									const double wz = has_weights_ ? weights_[iz] : 1.0;
+									fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par_ptr[iz], location_par_ptr[iz + num_data_]);
 								}
 							}
 						}
@@ -5056,6 +6015,15 @@ namespace GPBoost {
 										0.5 * information_ll_data_scale_[i] * SigmaI_plus_W_inv_diag[random_effects_indices_of_data_[i]];
 								}
 							}
+							else if (IsRegressionZeroModel()) {
+								// Structural-zero block (zeta): hurdle -> direct score (exact). For zero-inflated counts the coupled log-det term would need the FSVA data-scale diagonal of (Sigma^-1+W)^-1, which is only a stochastic estimate here; coupled terms omitted -> alpha approximate for ZI counts on FSVA.
+								if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+								for (data_size_t iz = 0; iz < num_data_; ++iz) {
+									const double wz = has_weights_ ? weights_[iz] : 1.0;
+									fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par_ptr[iz], location_par_ptr[iz + num_data_]);
+								}
+							}
 						}
 						else {
 							fixed_effect_grad = -first_deriv_ll_;
@@ -5071,6 +6039,15 @@ namespace GPBoost {
 									double dummy_mean_deriv, deriv_log_var;
 									FirstDerivLogLikGaussianHeteroscedastic(y_data[i], location_par_ptr[i], location_par_ptr[i + num_data_], dummy_mean_deriv, deriv_log_var);
 									fixed_effect_grad[i + num_data_] = -w * deriv_log_var - 0.5 * information_ll_[i] * SigmaI_plus_W_inv_diag[i];
+								}
+							}
+							else if (IsRegressionZeroModel()) {
+								// Structural-zero block (zeta): hurdle -> direct score (exact). For zero-inflated counts the coupled log-det term would need the FSVA data-scale diagonal of (Sigma^-1+W)^-1, which is only a stochastic estimate here; coupled terms omitted -> alpha approximate for ZI counts on FSVA.
+								if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+								for (data_size_t iz = 0; iz < num_data_; ++iz) {
+									const double wz = has_weights_ ? weights_[iz] : 1.0;
+									fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par_ptr[iz], location_par_ptr[iz + num_data_]);
 								}
 							}
 						}
@@ -5245,6 +6222,7 @@ namespace GPBoost {
 					den_mat_t sigma_woodbury_2 = (sigma_ip_stable)+(*cross_cov).transpose() * sigma_resid_inv_sigma_resid_plus_W_inv_cross_cov;
 					chol_den_mat_t chol_fact_sigma_woodbury_2;
 					chol_fact_sigma_woodbury_2.compute(sigma_woodbury_2);
+					CheckCholeskyFactorization(chol_fact_sigma_woodbury_2, "Laplace gradient Woodbury matrix");
 					int num_par = (int)B_grad.size();
 					CHECK(re_comps_ip_cluster_i.size() == 1);
 					for (int j = 0; j < (int)re_comps_ip_cluster_i.size(); ++j) {
@@ -5362,6 +6340,7 @@ namespace GPBoost {
 							den_mat_t sigma_woodbury_2 = (sigma_ip_stable)+(*cross_cov).transpose() * sigma_resid_inv_sigma_resid_plus_W_inv_cross_cov;
 							chol_den_mat_t chol_fact_sigma_woodbury_2;
 							chol_fact_sigma_woodbury_2.compute(sigma_woodbury_2);
+							CheckCholeskyFactorization(chol_fact_sigma_woodbury_2, "Laplace gradient Woodbury matrix");
 
 							vec_t Sigma_d_mll_d_mode_part = (B_rm_.transpose().template triangularView<Eigen::UpLoType::UnitUpper>()).solve(d_mll_d_mode);
 							vec_t Sigma_d_mll_d_mode_part1 = D_inv_B_rm_.triangularView<Eigen::UpLoType::Lower>().solve(Sigma_d_mll_d_mode_part);
@@ -5396,6 +6375,15 @@ namespace GPBoost {
 									0.5 * information_ll_data_scale_[i] * SigmaI_plus_W_inv_diag[random_effects_indices_of_data_[i]];
 							}
 						}
+						else if (IsRegressionZeroModel()) {
+							// Structural-zero block (zeta): hurdle -> direct score (exact). For zero-inflated counts the coupled log-det term would need the FSVA data-scale diagonal of (Sigma^-1+W)^-1, which is only a stochastic estimate here; coupled terms omitted -> alpha approximate for ZI counts on FSVA.
+							if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+							for (data_size_t iz = 0; iz < num_data_; ++iz) {
+								const double wz = has_weights_ ? weights_[iz] : 1.0;
+								fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par_ptr[iz], location_par_ptr[iz + num_data_]);
+							}
+						}
 					}
 					else {
 						fixed_effect_grad = -first_deriv_ll_;
@@ -5413,6 +6401,15 @@ namespace GPBoost {
 								double dummy_mean_deriv, deriv_log_var;
 								FirstDerivLogLikGaussianHeteroscedastic(y_data[i], location_par_ptr[i], location_par_ptr[i + num_data_], dummy_mean_deriv, deriv_log_var);
 								fixed_effect_grad[i + num_data_] = -w * deriv_log_var - 0.5 * information_ll_[i] * SigmaI_plus_W_inv_diag[i];
+							}
+						}
+						else if (IsRegressionZeroModel()) {
+							// Structural-zero block (zeta): hurdle -> direct score (exact). For zero-inflated counts the coupled log-det term would need the FSVA data-scale diagonal of (Sigma^-1+W)^-1, which is only a stochastic estimate here; coupled terms omitted -> alpha approximate for ZI counts on FSVA.
+							if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+							for (data_size_t iz = 0; iz < num_data_; ++iz) {
+								const double wz = has_weights_ ? weights_[iz] : 1.0;
+								fixed_effect_grad[iz + num_data_] = -wz * RegressionZeroModel_dZeta(y_data, y_data_int, iz, location_par_ptr[iz], location_par_ptr[iz + num_data_]);
 							}
 						}
 					}
@@ -5528,6 +6525,10 @@ namespace GPBoost {
 				if (cg_preconditioner_type_ == "vecchia_response") {
 					Log::REFatal("Calculation of gradients is currently not correctly implemented for the '%s' preconditioner ", cg_preconditioner_type_.c_str());
 				}
+				if ((cg_preconditioner_type_ == "pivoted_cholesky" || cg_preconditioner_type_ == "fitc") && HasNegativeValueInformationLogLik()) {
+					Log::REFatal("CalcGradNegMargLikelihoodLaplaceApproxVecchia: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+						"The stochastic gradient calculation with the '%s' preconditioner requires W to be nonnegative ", cg_preconditioner_type_.c_str());
+				}
 				vec_t d_log_det_Sigma_W_plus_I_d_mode;
 				//Declarations for preconditioner "piv_chol_on_Sigma"
 				vec_t diag_WI;
@@ -5641,7 +6642,8 @@ namespace GPBoost {
 					}//end loop num_sets_re_
 				}
 				//Calculate gradient wrt fixed effects
-				if (grad_information_wrt_mode_non_zero_ && ((use_random_effects_indices_of_data_ && calc_F_grad) || calc_aux_par_grad)) {
+				if (grad_information_wrt_mode_non_zero_ && ((use_random_effects_indices_of_data_ && calc_F_grad) || calc_aux_par_grad ||
+					(IsZeroInflatedCountRegression() && calc_F_grad))) {// a zero-inflated count regression needs diag((Sigma^-1+W)^-1) for its zeta-block log-det term whether or not use_random_effects_indices_of_data_
 					if (likelihood_type_ == "gaussian_heteroscedastic_fixed_and_random") {
 						vec_t ones = vec_t::Ones(dim_mode_);
 						vec_t diag_WI_dummy, D_inv_plus_W_inv_dia_dummy;
@@ -5853,7 +6855,8 @@ namespace GPBoost {
 							SigmaI_plus_W_inv_d_mll_d_mode = L_inv.transpose() * (L_inv * d_mll_d_mode);
 						}
 					}
-					else if (calc_aux_par_grad || (use_random_effects_indices_of_data_ && grad_information_wrt_mode_non_zero_) || (likelihood_type_ == "gaussian_heteroscedastic" && calc_F_grad)) {
+					else if (calc_aux_par_grad || (use_random_effects_indices_of_data_ && grad_information_wrt_mode_non_zero_) || (likelihood_type_ == "gaussian_heteroscedastic" && calc_F_grad) ||
+						(IsZeroInflatedCountRegression() && grad_information_wrt_mode_non_zero_ && calc_F_grad)) {// the zeta-block log-det term of a zero-inflated count regression needs the diagonal of (Sigma^-1+W)^-1
 						SigmaI_plus_W_inv_diag = SigmaI_plus_W_inv.diagonal();
 					}
 				}//end calc_F_grad || calc_aux_par_grad
@@ -5928,6 +6931,15 @@ namespace GPBoost {
 								0.5 * information_ll_data_scale_[i] * SigmaI_plus_W_inv_diag[random_effects_indices_of_data_[i]];
 						}
 					}
+					else if (IsRegressionZeroModel()) {
+						// Structural-zero block (zeta): hurdle -> direct score; zero-inflated counts add log-det (dJ_eta/dzeta) + implicit (l_eta_zeta) via RegressionZeroModel_dZetaDense
+						if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+						for (data_size_t iz = 0; iz < num_data_; ++iz) {
+							const double wz = has_weights_ ? weights_[iz] : 1.0;
+							fixed_effect_grad[iz + num_data_] = RegressionZeroModel_dZetaDense(y_data, y_data_int, iz, location_par_ptr[iz], location_par_ptr[iz + num_data_], wz, SigmaI_plus_W_inv_diag, SigmaI_plus_W_inv_d_mll_d_mode, random_effects_indices_of_data_[iz]);
+						}
+					}
 				}
 				else {
 					fixed_effect_grad = -first_deriv_ll_;
@@ -5945,6 +6957,15 @@ namespace GPBoost {
 							double dummy_mean_deriv, deriv_log_var;
 							FirstDerivLogLikGaussianHeteroscedastic(y_data[i], location_par_ptr[i], location_par_ptr[i + num_data_], dummy_mean_deriv, deriv_log_var);
 							fixed_effect_grad[i + num_data_] = -w * deriv_log_var - 0.5 * information_ll_[i] * SigmaI_plus_W_inv_diag[i];
+						}
+					}
+					else if (IsRegressionZeroModel()) {
+						// Structural-zero block (zeta): hurdle -> direct score; zero-inflated counts add log-det (dJ_eta/dzeta) + implicit (l_eta_zeta) via RegressionZeroModel_dZetaDense
+						if (fixed_effect_grad.size() < dim_location_par_) fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+						for (data_size_t iz = 0; iz < num_data_; ++iz) {
+							const double wz = has_weights_ ? weights_[iz] : 1.0;
+							fixed_effect_grad[iz + num_data_] = RegressionZeroModel_dZetaDense(y_data, y_data_int, iz, location_par_ptr[iz], location_par_ptr[iz + num_data_], wz, SigmaI_plus_W_inv_diag, SigmaI_plus_W_inv_d_mll_d_mode, iz);
 						}
 					}
 				}
@@ -6141,6 +7162,14 @@ namespace GPBoost {
 								0.5 * information_ll_data_scale_[i] * SigmaI_plus_W_inv_diag[random_effects_indices_of_data_[i]];
 						}
 					}
+					else if (IsRegressionZeroModel()) {
+						// Structural-zero block (zeta): hurdle -> direct score; zero-inflated counts add log-det (dJ_eta/dzeta) + implicit (l_eta_zeta) via RegressionZeroModel_dZetaDense
+#pragma omp parallel for schedule(static)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							fixed_effect_grad[i + num_data_] = RegressionZeroModel_dZetaDense(y_data, y_data_int, i, location_par_ptr[i], location_par_ptr[i + num_data_], w, SigmaI_plus_W_inv_diag, SigmaI_plus_W_inv_d_mll_d_mode, random_effects_indices_of_data_[i]);
+						}
+					}
 				}
 				else {
 					fixed_effect_grad = -first_deriv_ll_;
@@ -6158,6 +7187,16 @@ namespace GPBoost {
 							double dummy_mean_deriv, deriv_log_var;
 							FirstDerivLogLikGaussianHeteroscedastic(y_data[i], location_par_ptr[i], location_par_ptr[i + num_data_], dummy_mean_deriv, deriv_log_var);
 							fixed_effect_grad[i + num_data_] = -w * deriv_log_var - 0.5 * information_ll_[i] * SigmaI_plus_W_inv_diag[i];
+						}
+					}
+					else if (IsRegressionZeroModel()) {
+						fixed_effect_grad.conservativeResize(dim_location_par_);
+#pragma omp parallel for schedule(static)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							fixed_effect_grad[i + num_data_] = RegressionZeroModel_dZetaDense(y_data, y_data_int, i,
+								location_par_ptr[i], location_par_ptr[i + num_data_], w, SigmaI_plus_W_inv_diag,
+								SigmaI_plus_W_inv_d_mll_d_mode, i);
 						}
 					}
 				}
@@ -6244,16 +7283,16 @@ namespace GPBoost {
 			}
 			if (calc_pred_cov || calc_pred_var) {
 				vec_t Wsqrt(dim_mode_);//diagonal of matrix sqrt(ZtWZ) if use_random_effects_indices_of_data_ or sqrt(W) if !use_random_effects_indices_of_data_
-				if (HasNegativeValueInformationLogLik()) {
-					Log::REFatal("PredictLaplaceApproxStable: Negative values found in the (diagonal) Hessian (or Fisher information) of the negative log-likelihood. "
-						"Cannot have negative values when using the numerically stable version of Rasmussen and Williams (2006) for mode finding ");
-				}
 				if (use_variance_correction_for_prediction_) {
 					diag_information_variance_correction_for_prediction_ = true;
 					vec_t location_par;//location parameter = mode of random effects + fixed effects
 					double* location_par_ptr;
 					InitializeLocationPar(fixed_effects, location_par, &location_par_ptr);
 					CalcInformationLogLik(y_data, y_data_int, location_par_ptr, true);
+					if (HasNegativeValueInformationLogLik()) {
+						Log::REFatal("PredictLaplaceApproxStable: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+							"Predictive covariance and variance calculations in the stable Laplace approximation require the square root of W ");
+					}
 					Wsqrt.array() = information_ll_.array().sqrt();
 					T_mat Id_plus_Wsqrt_Sigma_Wsqrt(dim_mode_, dim_mode_);
 					Id_plus_Wsqrt_Sigma_Wsqrt.setIdentity();
@@ -6262,6 +7301,10 @@ namespace GPBoost {
 					diag_information_variance_correction_for_prediction_ = false;
 				}
 				else {
+					if (HasNegativeValueInformationLogLik()) {
+						Log::REFatal("PredictLaplaceApproxStable: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+							"Predictive covariance and variance calculations in the stable Laplace approximation require the square root of W ");
+					}
 					Wsqrt.array() = information_ll_.array().sqrt();
 				}
 				T_mat Maux = Wsqrt.asDiagonal() * Cross_Cov.transpose();
@@ -6401,6 +7444,7 @@ namespace GPBoost {
 							int seed_local = unif(cg_generator_);
 							parallel_rngs.push_back(RNG_t(seed_local));
 						}
+						bool na_inf_flag_1 = false;
 #pragma omp parallel
 						{
 							int thread_nb;
@@ -6420,7 +7464,7 @@ namespace GPBoost {
 								c_cov_private = vec_t::Zero(n_pred);
 								c_var_private = vec_t::Zero(n_pred);
 							}
-#pragma omp for
+#pragma omp for reduction(||:na_inf_flag_1)
 							for (int i = 0; i < nsim_var_pred_; ++i) {
 								//RV - Rademacher
 								std::uniform_real_distribution<double> udist(0.0, 1.0);
@@ -6452,7 +7496,7 @@ namespace GPBoost {
 									MInv_Ztilde_t_RV.conservativeResize(dim_re_group);
 								}
 								if (has_NA_or_Inf) {
-									Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+									na_inf_flag_1 = true;
 								}
 								//Part 2: Z_po (Sigma^(-1) + Z^T W Z)^(-1) Z_po^T RV
 								vec_t rand_vec_final = Ztilde * MInv_Ztilde_t_RV;
@@ -6480,6 +7524,7 @@ namespace GPBoost {
 								}
 							}
 						} //end #pragma omp parallel
+						if (na_inf_flag_1) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 						pred_var_global /= nsim_var_pred_;
 						pred_var += pred_var_global;
 						//Variance reduction
@@ -6524,6 +7569,7 @@ namespace GPBoost {
 							sp_mat_t SigmaI_sqrt = SigmaI.cwiseSqrt();
 							GPBoost::MakeBlockDiag_D_B<sp_mat_t>(SigmaI_sqrt, B_t_D_inv_sqrt, B_t_D_inv_sqrt);
 							CHECK(B_t_D_inv_sqrt.cols() == dim_mode_);
+							bool na_inf_flag_2 = false;
 #pragma omp parallel
 							{
 								int thread_nb;
@@ -6534,7 +7580,7 @@ namespace GPBoost {
 #endif
 								RNG_t rng_local = parallel_rngs[thread_nb];
 								vec_t pred_var_private = vec_t::Zero(n_pred);
-#pragma omp for
+#pragma omp for reduction(||:na_inf_flag_2)
 								for (int i = 0; i < nsim_var_pred_; ++i) {
 									//z_i ~ N(0,I)
 									std::normal_distribution<double> ndist(0.0, 1.0);
@@ -6556,7 +7602,7 @@ namespace GPBoost {
 										L_SigmaI_plus_ZtWZ_rm_, P_SSOR_L_D_sqrt_inv_rm_, SigmaI_plus_ZtWZ_inv_diag_, num_cg_steps_dummy);
 									rand_vec_pred_SigmaI_plus_W_inv = rand_vec_pred_SigmaI_plus_W_inv.tail(dim_gp).eval();
 									if (has_NA_or_Inf) {
-										Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+										na_inf_flag_2 = true;
 									}
 									//z_i ~ N(0, Bp^{-1} Bpo (Sigma^{-1} + W)^{-1} Bpo^T Bp^{-1})
 									vec_t rand_vec_pred = Bp_inv_Bpo * rand_vec_pred_SigmaI_plus_W_inv;
@@ -6567,6 +7613,7 @@ namespace GPBoost {
 									pred_var_gp += pred_var_private;
 								}
 							} // end #pragma omp parallel
+							if (na_inf_flag_2) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 							pred_var_gp /= nsim_var_pred_;
 							if (VecchiaCondObsOnly) {
 								pred_var_gp += Dp;
@@ -6601,6 +7648,7 @@ namespace GPBoost {
 							int seed_local = unif(cg_generator_);
 							parallel_rngs.push_back(RNG_t(seed_local));
 						}
+						bool na_inf_flag_3 = false;
 #pragma omp parallel
 						{
 							int thread_nb;
@@ -6611,7 +7659,7 @@ namespace GPBoost {
 #endif
 							RNG_t rng_local = parallel_rngs[thread_nb];
 							den_mat_t pred_cov_private = den_mat_t::Zero(n_pred, n_pred);
-#pragma omp for
+#pragma omp for reduction(||:na_inf_flag_3)
 							for (int i = 0; i < nsim_var_pred_; ++i) {
 								//z_i ~ N(0,I)
 								std::normal_distribution<double> ndist(0.0, 1.0);
@@ -6631,7 +7679,7 @@ namespace GPBoost {
 								CGRandomEffectsVec(SigmaI_plus_ZtWZ_rm_, rand_vec_pred_SigmaI_plus_ZtWZ, rand_vec_pred_SigmaI_plus_ZtWZ_inv, has_NA_or_Inf, cg_max_num_it_, cg_delta_conv_pred_,
 									true, ZERO_RHS_CG_THRESHOLD, true, cg_preconditioner_type_, L_SigmaI_plus_ZtWZ_rm_, P_SSOR_L_D_sqrt_inv_rm_, SigmaI_plus_ZtWZ_inv_diag_, num_cg_steps_dummy);
 								if (has_NA_or_Inf) {
-									Log::REFatal("There was Nan or Inf value generated in the Conjugate Gradient Method!");
+									na_inf_flag_3 = true;
 								}
 								//z_i ~ N(0, Z_p (Sigma^(-1) + Z^T W Z)^(-1) Z_p^T)
 								vec_t rand_vec_pred = Ztilde * rand_vec_pred_SigmaI_plus_ZtWZ_inv;
@@ -6642,6 +7690,7 @@ namespace GPBoost {
 								pred_cov_global += pred_cov_private;
 							}
 						} //end #pragma omp parallel
+						if (na_inf_flag_3) { Log::REFatal("There was Nan or Inf value generated in the Conjugate Gradient Method!"); }
 						pred_cov_global /= nsim_var_pred_;
 						T_mat pred_cov_T_mat;
 						ConvertTo_T_mat_FromDense<T_mat>(pred_cov_global, pred_cov_T_mat);
@@ -7019,6 +8068,10 @@ namespace GPBoost {
 						Log::REFatal("PredictLaplaceApproxFSVA: Negative values found in the (diagonal) Hessian (or Fisher information) of the negative log-likelihood. "
 							"Cannot have negative values when using 'iterative' methods for predictive variances in Vecchia-Laplace approximations ");
 					}
+					if (HasZeroValueInformationLogLik()) {
+						Log::REFatal("PredictLaplaceApproxFSVA: 0's found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+							"Predictive variance calculations with iterative methods require W to be invertible. Try using the Cholesky decomposition ");
+					}
 					const den_mat_t* cross_cov_preconditioner;
 					vec_t information_ll_inv;
 					information_ll_inv.resize(dim_mode_);
@@ -7058,6 +8111,7 @@ namespace GPBoost {
 							woodbury_mat = sigma_woodbury_preconditioner - diagonal_with_cross_cov_preconditioner.transpose() * diagonal_cross_cov_preconditioner;
 							chol_den_mat_t chol_fact_woodbury_mat;
 							chol_fact_woodbury_mat.compute(woodbury_mat);
+							CheckCholeskyFactorization(chol_fact_woodbury_mat, "Laplace prediction Woodbury matrix");
 							chol_wood_diagonal_cross_cov.resize((*cross_cov_preconditioner).cols(), dim_mode_);
 							TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol_fact_woodbury_mat, diagonal_cross_cov_preconditioner.transpose(), chol_wood_diagonal_cross_cov, false);
 						}
@@ -7070,6 +8124,7 @@ namespace GPBoost {
 							den_mat_t B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov = W_D_inv_inv.cwiseSqrt().asDiagonal() * D_inv_B_cross_cov_;
 							sigma_woodbury_woodbury_ = sigma_woodbury - B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov.transpose() * B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov;
 							chol_fact_sigma_woodbury_woodbury_.compute(sigma_woodbury_woodbury_);
+							CheckCholeskyFactorization(chol_fact_sigma_woodbury_woodbury_, "Laplace prediction VIF Woodbury matrix");
 							TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol_fact_sigma_woodbury_woodbury_, B_invt_cross_cov.transpose(), chol_wood_diagonal_cross_cov, false);
 						}
 						den_mat_t Bt_D_inv_B_cross_cov_T_WI = Bt_D_inv_B_cross_cov.transpose() * information_ll_inv_pluss_Diag_I_I.asDiagonal();
@@ -7112,6 +8167,19 @@ namespace GPBoost {
 								Bp_inv_Bpo_wood_T.col(i).array().square().sum();
 						}
 					}*/
+					// Hoisted out of the stochastic prediction-variance sampling loop below: the VIF Woodbury factorization
+					// used by the 'vifdu'/'none' preconditioner is identical for every sample. Computing it inside the
+					// parallel loop wrote to the shared members W_D_inv(_inv)/sigma_woodbury_woodbury_/
+					// chol_fact_sigma_woodbury_woodbury_ from all threads (a data race that intermittently corrupted the
+					// factorization -> Cholesky failure/segfault) and called the non-thread-safe Log::REFatal().
+					if ((cg_preconditioner_type_ == "vifdu" || cg_preconditioner_type_ == "none") && std::max(nsim_var_pred_, num_post_samples) > 0) {
+						W_D_inv = (information_ll_ + D_inv_rm_.diagonal());
+						W_D_inv_inv = W_D_inv.cwiseInverse();
+						den_mat_t B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov = W_D_inv_inv.cwiseSqrt().asDiagonal() * D_inv_B_cross_cov_;
+						sigma_woodbury_woodbury_ = sigma_woodbury - B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov.transpose() * B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov;
+						chol_fact_sigma_woodbury_woodbury_.compute(sigma_woodbury_woodbury_);
+						CheckCholeskyFactorization(chol_fact_sigma_woodbury_woodbury_, "Laplace prediction VIF Woodbury matrix");
+					}
 					int num_threads;
 #ifdef _OPENMP
 					num_threads = omp_get_max_threads();
@@ -7124,6 +8192,7 @@ namespace GPBoost {
 						int seed_local = unif(cg_generator_);
 						parallel_rngs.push_back(RNG_t(seed_local));
 					}
+					bool na_inf_flag_4 = false;
 #pragma omp parallel
 					{
 						int thread_nb;
@@ -7133,7 +8202,7 @@ namespace GPBoost {
 						thread_nb = 0;
 #endif
 						RNG_t rng_local = parallel_rngs[thread_nb];
-#pragma omp for
+#pragma omp for reduction(||:na_inf_flag_4)
 						for (int i = 0; i < std::max(nsim_var_pred_, num_post_samples); ++i) {
 							//z_i ~ N(0,I)
 							vec_t rand_vec_pred_I_1(dim_mode_), rand_vec_pred_I_2(dim_mode_), rand_vec_pred_I_3((*cross_cov).cols());
@@ -7159,11 +8228,11 @@ namespace GPBoost {
 							vec_t rand_vec_pred_SigmaI_plus_W = Sigma_inv_Sigma_sqrt_rand_vec + W_diag_sqrt.cwiseProduct(rand_vec_pred_I_2);
 							//z_i ~ N(0,(Sigma^{-1} + W)^{-1})
 							if (cg_preconditioner_type_ == "vifdu" || cg_preconditioner_type_ == "none") {
-								W_D_inv = (information_ll_ + D_inv_rm_.diagonal());
-								W_D_inv_inv = W_D_inv.cwiseInverse();
-								den_mat_t B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov = W_D_inv_inv.cwiseSqrt().asDiagonal() * D_inv_B_cross_cov_;
-								sigma_woodbury_woodbury_ = sigma_woodbury - B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov.transpose() * B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov;
-								chol_fact_sigma_woodbury_woodbury_.compute(sigma_woodbury_woodbury_);
+								// W_D_inv_inv, sigma_woodbury_woodbury_ and chol_fact_sigma_woodbury_woodbury_ are loop-invariant and are
+								// computed once BEFORE this parallel region (hoisted block above). They must not be recomputed here:
+								// writing to these shared members from every thread is a data race, and CheckCholeskyFactorization()
+								// calls Log::REFatal(), which is not thread-safe (intermittently segfaulted / printed the 'VIF Woodbury
+								// matrix' Cholesky error twice).
 								CGFVIFLaplaceVec(information_ll_, B_rm_, B_t_D_inv_rm_, chol_fact_sigma_woodbury, cross_cov, W_D_inv_inv,
 									chol_fact_sigma_woodbury_woodbury_, rand_vec_pred_SigmaI_plus_W, rand_vec_pred_SigmaI_plus_W_inv, has_NA_or_Inf, cg_max_num_it_,
 									true, cg_delta_conv_pred_, ZERO_RHS_CG_THRESHOLD, cg_preconditioner_type_, true);
@@ -7181,7 +8250,7 @@ namespace GPBoost {
 								rand_vec_pred_SigmaI_plus_W_inv = information_ll_inv.asDiagonal() * rand_vec_pred_SigmaI_plus_W_inv_interim;
 							}
 							if (has_NA_or_Inf) {
-								Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+								na_inf_flag_4 = true;
 							}
 							vec_t sigma_woodbury_vec = (*cross_cov) * chol_fact_sigma_woodbury.solve(Bt_D_inv_B_cross_cov.transpose() * rand_vec_pred_SigmaI_plus_W_inv);
 							//z_i ~ N(0, (Sigma_pm Sigma_ip^-1 Sigma_mn - B_p^-1 B_po (B_o^T D_o^-1 B_o)^-1) Sigma^{-1} (Sigma^{-1} + W)^{-1} Sigma^{-1} (Sigma_nm Sigma_ip^-1 Sigma_mp - (B_o^T D_o^-1 B_o)^-1 B_po^T B_p^-1 ))
@@ -7270,6 +8339,7 @@ namespace GPBoost {
 //							}
 						}
 					}
+					if (na_inf_flag_4) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 					if (calc_pred_cov) {
 						pred_cov /= nsim_var_pred_;
 						// Deterministic part
@@ -7345,6 +8415,7 @@ namespace GPBoost {
 					den_mat_t sigma_woodbury_2 = (sigma_ip_stable)+Bt_D_inv_B_cross_cov.transpose() * sigma_resid_plus_W_inv_cross_cov;
 					chol_den_mat_t chol_fact_sigma_woodbury_2;
 					chol_fact_sigma_woodbury_2.compute(sigma_woodbury_2);
+					CheckCholeskyFactorization(chol_fact_sigma_woodbury_2, "Laplace prediction Woodbury matrix");
 
 					den_mat_t M_aux_1 = sigma_ip_inv_sigma_cross_cov_pred.transpose() * (Bt_D_inv_B_cross_cov.transpose() * sigma_resid_plus_W_inv_cross_cov);
 					den_mat_t M_aux_2 = chol_fact_sigma_woodbury_2.solve(M_aux_1.transpose());
@@ -7501,6 +8572,7 @@ namespace GPBoost {
 						SigmaI_plus_W.diagonal().array() += information_ll_.array();
 						SigmaI_plus_W.makeCompressed();
 						chol_fact_SigmaI_plus_ZtWZ_vecchia_.factorize(SigmaI_plus_W);//This is the bottleneck for large data
+						CheckCholeskyFactorization(chol_fact_SigmaI_plus_ZtWZ_vecchia_, "PredictLaplaceApproxVecchia");
 					}
 					diag_information_variance_correction_for_prediction_ = false;
 				}
@@ -7552,6 +8624,7 @@ namespace GPBoost {
 						int seed_local = unif(cg_generator_);
 						parallel_rngs.push_back(RNG_t(seed_local));
 					}
+					bool na_inf_flag_5 = false;
 #pragma omp parallel
 					{
 						int thread_nb;
@@ -7569,7 +8642,7 @@ namespace GPBoost {
 						if (calc_pred_var) {
 							pred_var_private = vec_t::Zero(num_pred);
 						}
-#pragma omp for
+#pragma omp for reduction(||:na_inf_flag_5)
 						for (int i = 0; i < std::max(nsim_var_pred_, num_post_samples); ++i) {
 							//z_i ~ N(0,I)
 							std::normal_distribution<double> ndist(0.0, 1.0);
@@ -7585,7 +8658,7 @@ namespace GPBoost {
 							bool has_NA_or_Inf = false;
 							Inv_SigmaI_plus_ZtWZ_Vecchia_iterative_given_PC(cg_max_num_it_, re_comps_cross_cov_cluster_i, rand_vec_pred_SigmaI_plus_W, rand_vec_pred_SigmaI_plus_W_inv, true, has_NA_or_Inf);
 							if (has_NA_or_Inf) {
-								Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+								na_inf_flag_5 = true;
 							}
 							if (num_sets_re_ > 1) {
 								rand_vec_pred_SigmaI_plus_W_inv = rand_vec_pred_SigmaI_plus_W_inv.segment(num_gp * dim_mode_per_set_re_, dim_mode_per_set_re_);// this could be done much more efficiently avoiding double calculations...
@@ -7618,6 +8691,7 @@ namespace GPBoost {
 							}
 						}
 					} // end #pragma omp parallel
+					if (na_inf_flag_5) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 					if (calc_pred_cov) {
 						pred_cov /= nsim_var_pred_;
 						if (CondObsOnly) {
@@ -7779,6 +8853,10 @@ namespace GPBoost {
 			else if (matrix_inversion_method_ == "iterative") {
 				CHECK(rand_vec_I_2_sim_post_.cols() == num_rand_vec_sim_post_);
 				CHECK(rand_vec_I_2_sim_post_.rows() == num_data_);
+				if (HasNegativeValueInformationLogLik()) {
+					Log::REFatal("Sample_Posterior_LaplaceApprox_GroupedRE: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+						"Posterior sampling with iterative matrix inversion requires the square root of W ");
+				}
 				vec_t SigmaI_diag_sqrt;
 				sp_mat_t B_t_D_inv_sqrt;
 				if (has_vecchia_gp) {
@@ -7788,11 +8866,12 @@ namespace GPBoost {
 					SigmaI_diag_sqrt = SigmaI.diagonal().cwiseSqrt();
 				}
 				sp_mat_rm_t Zt_W_sqrt_rm = sp_mat_rm_t((*Zt_) * information_ll_.cwiseSqrt().asDiagonal());
+				bool na_inf_flag_6 = false;
 #pragma omp parallel
 				{
 					vec_t rand_vec_pred_SigmaI_plus_ZtWZ(dim_mode_); // allocated once per thread
 					vec_t rand_vec_pred_SigmaI_plus_ZtWZ_inv(dim_mode_);
-#pragma omp for schedule(static)
+#pragma omp for schedule(static) reduction(||:na_inf_flag_6)
 					for (int i = 0; i < num_rand_vec_sim_post_; ++i) {
 						//z_i ~ N(0,(Sigma^(-1) + Z^T W Z))
 						if (has_vecchia_gp) {
@@ -7815,11 +8894,12 @@ namespace GPBoost {
 						CGRandomEffectsVec(SigmaI_plus_ZtWZ_rm_, rand_vec_pred_SigmaI_plus_ZtWZ, rand_vec_pred_SigmaI_plus_ZtWZ_inv, has_NA_or_Inf, cg_max_num_it_, cg_delta_conv_pred_,
 							true, ZERO_RHS_CG_THRESHOLD, false, cg_preconditioner_type_, L_SigmaI_plus_ZtWZ_rm_, P_SSOR_L_D_sqrt_inv_rm_, SigmaI_plus_ZtWZ_inv_diag_, num_cg_steps_dummy);
 						if (has_NA_or_Inf) {
-							Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+							na_inf_flag_6 = true;
 						}
 						rand_vec_sim_post_.col(i) = rand_vec_pred_SigmaI_plus_ZtWZ_inv;
 					}//end parallel loop
 				}
+				if (na_inf_flag_6) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 //				//alernative version with multiple memory allocation
 //#pragma omp parallel for schedule(static)
 //				for (int i = 0; i < num_rand_vec_sim_post_; ++i) {
@@ -7911,9 +8991,14 @@ namespace GPBoost {
 			else if (matrix_inversion_method_ == "iterative") {
 				CHECK(rand_vec_I_2_sim_post_.cols() == num_rand_vec_sim_post_);
 				CHECK(rand_vec_I_2_sim_post_.rows() == dim_mode_);
+				if (HasNegativeValueInformationLogLik()) {
+					Log::REFatal("Sample_Posterior_LaplaceApprox_Vecchia: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+						"Posterior sampling with iterative matrix inversion requires the square root of W ");
+				}
 				vec_t W_diag_sqrt = information_ll_.cwiseSqrt();
 				sp_mat_rm_t B_t_D_inv_sqrt_rm = B_rm_.transpose() * (D_inv_rm_.cwiseSqrt());
-#pragma omp parallel for schedule(static)
+				bool na_inf_flag_7 = false;
+#pragma omp parallel for schedule(static) reduction(||:na_inf_flag_7)
 				for (int i = 0; i < num_rand_vec_sim_post_; ++i) {
 					//z_i ~ N(0,(Sigma^{-1} + W))
 					vec_t rand_vec_pred_SigmaI_plus_W = B_t_D_inv_sqrt_rm * rand_vec_I_sim_post_.col(i) + W_diag_sqrt.cwiseProduct(rand_vec_I_2_sim_post_.col(i));
@@ -7929,10 +9014,11 @@ namespace GPBoost {
 					bool has_NA_or_Inf = false;
 					Inv_SigmaI_plus_ZtWZ_Vecchia_iterative_given_PC(cg_max_num_it_, re_comps_cross_cov_cluster_i, rand_vec_pred_SigmaI_plus_W, rand_vec_pred_SigmaI_plus_W_inv, false, has_NA_or_Inf);
 					if (has_NA_or_Inf) {
-						Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+						na_inf_flag_7 = true;
 					}
 					rand_vec_sim_post_.col(i) = rand_vec_pred_SigmaI_plus_W_inv;
 				}//end parallel loop
+				if (na_inf_flag_7) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 			}//end matrix_inversion_method_ == "iterative"
 			SamplePosterior_LaplaceApprox_ScaleCovariance_AddMean();
 			rand_vec_sim_post_calculated_ = true;
@@ -7983,6 +9069,10 @@ namespace GPBoost {
 			else if (matrix_inversion_method_ == "iterative") {
 				CHECK(rand_vec_I_3_sim_post_.cols() == num_rand_vec_sim_post_);
 				CHECK(rand_vec_I_3_sim_post_.rows() == dim_mode_);
+				if (HasNegativeValueInformationLogLik()) {
+					Log::REFatal("Sample_Posterior_LaplaceApprox_FSVA: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+						"Posterior sampling with iterative matrix inversion requires the square root of W ");
+				}
 				vec_t W_diag_sqrt = information_ll_.cwiseSqrt();
 				vec_t D_sqrt = D_inv_rm_.diagonal().cwiseInverse().cwiseSqrt();
 				vec_t W_D_inv, W_D_inv_inv, information_ll_inv;
@@ -7993,14 +9083,20 @@ namespace GPBoost {
 					den_mat_t B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov = W_D_inv_inv.cwiseSqrt().asDiagonal() * D_inv_B_cross_cov_;
 					sigma_woodbury_woodbury_ = sigma_woodbury - B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov.transpose() * B_t_D_inv_W_D_inv_inv_D_inv_B_cross_cov;
 					chol_fact_sigma_woodbury_woodbury_.compute(sigma_woodbury_woodbury_);
+					CheckCholeskyFactorization(chol_fact_sigma_woodbury_woodbury_, "Laplace posterior-sampling Woodbury matrix");
 					cross_cov_preconditioner = nullptr;
 				}
 				else if (cg_preconditioner_type_ == "fitc") {
+					if (HasZeroValueInformationLogLik()) {
+						Log::REFatal("Sample_Posterior_LaplaceApprox_FSVA: 0's found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+							"Posterior sampling with the iterative FITC preconditioner requires W to be invertible. Try using another preconditioner or the Cholesky decomposition ");
+					}
 					information_ll_inv.resize(dim_mode_);
 					information_ll_inv.array() = information_ll_.array().inverse();
 					cross_cov_preconditioner = re_comps_cross_cov_preconditioner_cluster_i[0]->GetSigmaPtr();
 				}
-#pragma omp parallel for schedule(static)
+				bool na_inf_flag_8 = false;
+#pragma omp parallel for schedule(static) reduction(||:na_inf_flag_8)
 				for (int i = 0; i < num_rand_vec_sim_post_; ++i) {
 					vec_t rand_vec_pred_SigmaI_plus_W_inv;
 					//z_i ~ N(0,Sigma) (not possible to sample directly from Sigma^{-1})
@@ -8030,10 +9126,11 @@ namespace GPBoost {
 						rand_vec_pred_SigmaI_plus_W_inv = information_ll_inv.asDiagonal() * rand_vec_pred_SigmaI_plus_W_inv_interim;
 					}
 					if (has_NA_or_Inf) {
-						Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+						na_inf_flag_8 = true;
 					}
 					rand_vec_sim_post_.col(i) = rand_vec_pred_SigmaI_plus_W_inv;
 				}//end parallel loop
+				if (na_inf_flag_8) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 			}//end matrix_inversion_method_ == "iterative"
 			SamplePosterior_LaplaceApprox_ScaleCovariance_AddMean();
 			rand_vec_sim_post_calculated_ = true;
@@ -8276,6 +9373,7 @@ namespace GPBoost {
 					int seed_local = unif(cg_generator_);
 					parallel_rngs.push_back(RNG_t(seed_local));
 				}
+				bool na_inf_flag_9 = false;
 #pragma omp parallel
 				{
 					int thread_nb;
@@ -8295,7 +9393,7 @@ namespace GPBoost {
 						c_cov_private = vec_t::Zero(dim_mode_);
 						c_var_private = vec_t::Zero(dim_mode_);
 					}
-#pragma omp for
+#pragma omp for reduction(||:na_inf_flag_9)
 					for (int i = 0; i < nsim_var_pred_; ++i) {
 						//RV - Rademacher
 						std::uniform_real_distribution<double> udist(0.0, 1.0);
@@ -8318,7 +9416,7 @@ namespace GPBoost {
 							cg_max_num_it_, cg_delta_conv_pred_, true, ZERO_RHS_CG_THRESHOLD, true, cg_preconditioner_type_,
 							L_SigmaI_plus_ZtWZ_rm_, P_SSOR_L_D_sqrt_inv_rm_, SigmaI_plus_ZtWZ_inv_diag_, num_cg_steps_dummy);
 						if (has_NA_or_Inf) {
-							Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+							na_inf_flag_9 = true;
 						}
 						//Part 2: RV o (Sigma^(-1) + Z^T W Z)^(-1) RV
 						pred_var_private += MInv_RV.cwiseProduct(rand_vec_init);
@@ -8343,6 +9441,7 @@ namespace GPBoost {
 						}
 					}
 				} //end #pragma omp parallel
+				if (na_inf_flag_9) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 				pred_var /= nsim_var_pred_;
 				//Variance reduction
 				if (cg_preconditioner_type_ == "incomplete_cholesky" || cg_preconditioner_type_ == "ssor") {
@@ -8421,6 +9520,7 @@ namespace GPBoost {
 					int seed_local = unif(cg_generator_);
 					parallel_rngs.push_back(RNG_t(seed_local));
 				}
+				bool na_inf_flag_10 = false;
 #pragma omp parallel
 				{
 					int thread_nb;
@@ -8431,7 +9531,7 @@ namespace GPBoost {
 #endif
 					RNG_t rng_local = parallel_rngs[thread_nb];
 					vec_t pred_var_private = vec_t::Zero(dim_mode_);
-#pragma omp for
+#pragma omp for reduction(||:na_inf_flag_10)
 					for (int i = 0; i < nsim_var_pred_; ++i) {
 						//z_i ~ N(0,I)
 						std::normal_distribution<double> ndist(0.0, 1.0);
@@ -8447,7 +9547,7 @@ namespace GPBoost {
 						bool has_NA_or_Inf = false;
 						Inv_SigmaI_plus_ZtWZ_Vecchia_iterative_given_PC(cg_max_num_it_, re_comps_cross_cov_cluster_i, rand_vec_pred_SigmaI_plus_W, rand_vec_pred_SigmaI_plus_W_inv, true, has_NA_or_Inf);
 						if (has_NA_or_Inf) {
-							Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_);
+							na_inf_flag_10 = true;
 						}
 						pred_var_private += rand_vec_pred_SigmaI_plus_W_inv.cwiseProduct(rand_vec_pred_SigmaI_plus_W_inv);
 					}// end for loop
@@ -8456,6 +9556,7 @@ namespace GPBoost {
 						pred_var += pred_var_private;
 					}
 				}// end #pragma omp parallel
+				if (na_inf_flag_10) { Log::REDebug(CG_NA_OR_INF_WARNING_SAMPLE_POSTERIOR_); }
 				pred_var /= nsim_var_pred_;
 			} //end Version Simulation
 			else {
@@ -8475,14 +9576,15 @@ namespace GPBoost {
 		* \param pred_var[in & out] Predictive variances of latent random effects for mean. The predicted variance for the response variables is written on this
 		* \param pred_var_mean Predictive mean of latent random effects for variance parameter in heteroscedastic models
 		* \param pred_var_var Predictive variances of latent random effects for variance parameter in heteroscedastic models
-		* \param predict_var If true, predictive reponse variances are also calculated
+		* \param predict_var If true, predictive response variances are also calculated
 		*/
 		void PredictResponse(vec_t& pred_mean,
 			vec_t& pred_var,
 			const vec_t& pred_var_mean,
 			const vec_t& pred_var_var,
 			bool predict_var) {
-			if (likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "binomial_probit" || likelihood_type_ == "quasi_bernoulli_probit") {
+			if (likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "binomial_probit" || 
+				likelihood_type_ == "quasi_bernoulli_probit") {
 				CHECK(need_pred_latent_var_for_response_mean_);
 #pragma omp parallel for schedule(static)
 				for (int i = 0; i < (int)pred_mean.size(); ++i) {
@@ -8495,7 +9597,8 @@ namespace GPBoost {
 					}
 				}
 			}
-			else if (likelihood_type_ == "bernoulli_logit" || likelihood_type_ == "binomial_logit" || likelihood_type_ == "quasi_bernoulli_logit") {
+			else if (likelihood_type_ == "bernoulli_logit" || likelihood_type_ == "binomial_logit" || 
+				likelihood_type_ == "quasi_bernoulli_logit") {
 				CHECK(need_pred_latent_var_for_response_mean_);
 #pragma omp parallel for schedule(static)
 				for (int i = 0; i < (int)pred_mean.size(); ++i) {
@@ -8522,6 +9625,48 @@ namespace GPBoost {
 					pred_mean[i] = pm;
 				}
 			}
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				// latent eta ~ N(m,v), zeta fixed. E(Y*) = q*A1; Var(Y*) = q*A1 + q*p0*A2 + q^2*(A2 - A1^2)
+				CHECK(need_pred_latent_var_for_response_mean_);
+				const double p0 = aux_pars_original_[0];
+				const double q = 1. - p0;
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < (int)pred_mean.size(); ++i) {
+					const double m = pred_mean[i];
+					const double v = std::max(pred_var[i], 0.0);
+					const double A1 = std::exp(m + 0.5 * v);
+					const double pm = q * A1;
+					if (predict_var) {
+						const double A2 = std::exp(2. * m + 2. * v);
+						const double V_mu = A2 - A1 * A1;
+						pred_var[i] = q * A1 + q * p0 * A2 + q * q * V_mu;
+					}
+					pred_mean[i] = pm;
+				}
+			}
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				// E(Y*) = q*A1; Var(Y*) = q*Vfac*A1 + q*p0*A2 + q^2*(A2 - A1^2), with the count-component excess dispersion
+				// captured by Vfac (NB1) and the extra shape term (NB2).  A1=exp(m+v/2), A2=exp(2m+2v).
+				CHECK(need_pred_latent_var_for_response_mean_);
+				const bool nb2 = (likelihood_type_ == "zero_inflated_negative_binomial");
+				const double p0 = aux_pars_original_[1];
+				const double q = 1. - p0;
+				const double shape = aux_pars_[0];
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < (int)pred_mean.size(); ++i) {
+					const double m = pred_mean[i];
+					const double v = std::max(pred_var[i], 0.0);
+					const double A1 = std::exp(m + 0.5 * v);
+					const double pm = q * A1;
+					if (predict_var) {
+						const double A2 = std::exp(2. * m + 2. * v);
+						const double V_mu = A2 - A1 * A1;
+						if (nb2) pred_var[i] = q * A1 + q * (1. / shape + p0) * A2 + q * q * V_mu;// NB2: Var(Y|eta)=mu+mu^2/kappa
+						else     pred_var[i] = q * (1. + shape) * A1 + q * p0 * A2 + q * q * V_mu;// NB1: Var(Y|eta)=mu*(1+phi)
+					}
+					pred_mean[i] = pm;
+				}
+			}
 			else if (likelihood_type_ == "gamma") {
 				CHECK(need_pred_latent_var_for_response_mean_);
 #pragma omp parallel for schedule(static)
@@ -8534,6 +9679,60 @@ namespace GPBoost {
 						//pred_var[i] = psm - pm * pm + psm / aux_pars_[0];
 					}
 					pred_mean[i] = pm;
+				}
+			}
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+				CHECK(need_pred_latent_var_for_response_mean_);
+				const double phi = aux_pars_[0];
+				const double p = GetTweediePower();
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < (int)pred_mean.size(); ++i) {
+					const double m = pred_mean[i];
+					const double v = pred_var[i];
+					const double pm = std::exp(m + 0.5 * v);
+					if (predict_var) pred_var[i] = phi * std::exp(p * m + 0.5 * p * p * v) + std::exp(2. * m + v) * std::expm1(v);
+					pred_mean[i] = pm;
+				}
+			}
+			else if (IsEGPDLikelihood()) {
+				CHECK(need_pred_latent_var_for_response_mean_);
+				const auto& moments = GetEGPDMoments();
+				if (!moments.mean_exists) Log::REFatal("PredictResponse: the response mean does not exist for likelihood='%s' when shape >= 1 ", likelihood_type_.c_str());
+				if (predict_var && !moments.variance_exists) Log::REFatal("PredictResponse: the response variance does not exist for likelihood='%s' when shape >= 0.5 ", likelihood_type_.c_str());
+				if (moments.status != EGPDEvalStatus::kValid) Log::REFatal("PredictResponse: failed to calculate EGPD unit-scale moments ");
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < (int)pred_mean.size(); ++i) {
+					const double latent_mean = pred_mean[i];
+					const double latent_var = pred_var[i];
+					if (!(std::isfinite(latent_var) && latent_var >= 0.)) { pred_mean[i] = std::numeric_limits<double>::quiet_NaN(); if (predict_var) pred_var[i] = std::numeric_limits<double>::quiet_NaN(); continue; }
+					const double response_mean = moments.mean_unit_scale * std::exp(latent_mean + 0.5 * latent_var);
+					if (predict_var) {
+						const double unit_second = moments.variance_unit_scale + moments.mean_unit_scale * moments.mean_unit_scale;
+						pred_var[i] = unit_second * std::exp(2. * latent_mean + 2. * latent_var) - response_mean * response_mean;
+					}
+					pred_mean[i] = response_mean;
+				}
+			}
+			else if (IsHurdleEGPD()) {
+				// Scale family (M_b = c1*exp(eta), V_b = c2*exp(2*eta)). E(Y*) = q*c1*exp(m+v/2);
+				// Var(Y*) = q*(c2 + p0*c1^2)*exp(2m+2v) + q^2*c1^2*exp(2m+v)*(exp(v)-1).
+				CHECK(need_pred_latent_var_for_response_mean_);
+				const auto& moments = GetEGPDMoments();
+				if (!moments.mean_exists) Log::REFatal("PredictResponse: the response mean does not exist for likelihood='%s' when shape >= 1 ", likelihood_type_.c_str());
+				if (predict_var && !moments.variance_exists) Log::REFatal("PredictResponse: the response variance does not exist for likelihood='%s' when shape >= 0.5 ", likelihood_type_.c_str());
+				if (moments.status != EGPDEvalStatus::kValid) Log::REFatal("PredictResponse: failed to calculate EGPD unit-scale moments ");
+				const double p0 = aux_pars_original_[num_aux_pars_ - 1];
+				const double q = 1. - p0;
+				const double c1 = moments.mean_unit_scale, c2 = moments.variance_unit_scale;
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < (int)pred_mean.size(); ++i) {
+					const double m = pred_mean[i];
+					const double v = std::max(pred_var[i], 0.0);
+					const double response_mean = q * c1 * std::exp(m + 0.5 * v);
+					if (predict_var) {
+						pred_var[i] = q * (c2 + p0 * c1 * c1) * std::exp(2. * m + 2. * v) + q * q * c1 * c1 * std::exp(2. * m + v) * std::expm1(v);
+					}
+					pred_mean[i] = response_mean;
 				}
 			}
 			else if (likelihood_type_ == "negative_binomial") {
@@ -8612,7 +9811,7 @@ namespace GPBoost {
 				}
 			}
 			else if (IsGaussianHeteroscedastic()) {
-				// For 'gaussian_heteroscedastic' (fixed effects only), the caller sets pred_var_var = 0 since the log-error
+				// For 'gaussian_heteroscedastic' (fixed effects only), the caller sets 'pred_var_var' = 0 since the log-error
 				// variance is deterministic given the fixed effects (no random effect / GP posterior uncertainty)
 				if (predict_var) {
 #pragma omp parallel for schedule(static)
@@ -8666,32 +9865,98 @@ namespace GPBoost {
 					}
 				}
 			}//end "beta_binomial"
-			else if (likelihood_type_ == "zero_inflated_gamma") {
+			else if (likelihood_type_ == "hurdle_gamma") {
 				CHECK(need_pred_latent_var_for_response_mean_);
-				double k, p0, q;
+				const double p0 = aux_pars_original_[1];
+				const double q = 1. - p0;
+				double k = 0.;
 				if (predict_var) {
 					k = aux_pars_[0];
-					p0 = aux_pars_original_[1];
-					q = 1. - p0;
 				}
 #pragma omp parallel for schedule(static)
 				for (int i = 0; i < (int)pred_mean.size(); ++i) {
 					const double m = pred_mean[i];
 					const double v = std::max(pred_var[i], 0.0);
-					// E[Y | y] = E_mu = E[mu] with mu = exp(eta)
-					double pm = std::exp(m + 0.5 * v);
+					// E[Y | data] = q * E[mu], where mu = E[Y | Y > 0, eta] = exp(eta)
+					const double E_mu = std::exp(m + 0.5 * v);
+					double pm = q * E_mu;
 					if (predict_var) {
-						// Var(Y) = Var(E[Y|eta]) + E[Var(Y|eta)], Var(E[Y|eta]) = Var(mu) = (e^v - 1) * e^{2m+v} = (e^v - 1) * pm^2
-						const double var_of_mean = (std::exp(v) - 1.0) * pm * pm;
-						// For ZI-Gamma with shape k and odds a (p0 = a/(1+a), q = 1-p0 = 1/(1+a)):
-						// Var(Y | eta) = mu^2 * (1 + p0 * k) / (q * k), so E[Var(Y | eta)] = (1 + p0 * k) / (q * k) * E[mu^2] with E[mu^2] = e^{2m+2v}
+						// Var(E[Y|eta]) = q^2 * Var(mu) and Var(Y|eta) = q * (1/k + p0) * mu^2.
+						const double var_of_mean = q * q * (std::exp(v) - 1.0) * E_mu * E_mu;
 						const double E_mu2 = std::exp(2.0 * m + 2.0 * v);
-						const double mean_of_var = ((1.0 + p0 * k) / (q * k)) * E_mu2;
+						const double mean_of_var = q * (1.0 / k + p0) * E_mu2;
 						pred_var[i] = var_of_mean + mean_of_var;
 					}
 					pred_mean[i] = pm;
 				}
-			}//end zero_inflated_gamma
+			}//end hurdle_gamma
+			else if (likelihood_type_ == "hurdle_lognormal") {
+				CHECK(need_pred_latent_var_for_response_mean_);
+				const double p0 = aux_pars_original_[1];
+				const double q = 1. - p0;
+				const double exp_s2_m1 = std::expm1(aux_pars_[0]);// e^{sigma2} - 1
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < (int)pred_mean.size(); ++i) {
+					const double m = pred_mean[i];
+					const double v = std::max(pred_var[i], 0.0);
+					const double E_mu = std::exp(m + 0.5 * v);// E[mu], mu = exp(eta) = lognormal mean given eta
+					double pm = q * E_mu;
+					if (predict_var) {
+						// Var(Y|eta) = q*(V_b + p0*mu^2) with V_b = (e^{sigma2}-1)*mu^2; Var(E[Y|eta]) = q^2*(e^v-1)*E_mu^2
+						const double var_of_mean = q * q * std::expm1(v) * E_mu * E_mu;
+						const double E_mu2 = std::exp(2.0 * m + 2.0 * v);
+						const double mean_of_var = q * (exp_s2_m1 + p0) * E_mu2;
+						pred_var[i] = var_of_mean + mean_of_var;
+					}
+					pred_mean[i] = pm;
+				}
+			}//end hurdle_lognormal
+			else if (IsHurdleRegression()) {
+				// Regression zero model: q_i = sigmoid(-zeta_i) is per observation (zeta = pred_var_mean, a fixed-effects predictor).
+				// Scale-family form E[Y|eta,y>0] = c1*exp(eta), V_b = c2*exp(2 eta). alpha is treated as fixed (pred_var_var ignored).
+				CHECK(need_pred_latent_var_for_response_mean_);
+				const string_t base = HurdleRegressionBaseType();
+				double c1 = 1., c2 = 0.;
+				if (base == "hurdle_gamma") { c1 = 1.; c2 = 1. / aux_pars_[0]; }// V_b = mu^2 / shape
+				else if (base == "hurdle_lognormal") { c1 = 1.; c2 = std::expm1(aux_pars_[0]); }// V_b = (e^{sigma2}-1) mu^2
+				else {// EGPD base
+					const auto& mom = GetEGPDMoments();
+					if (!mom.mean_exists) Log::REFatal("PredictResponse: the response mean does not exist for likelihood='%s' when shape >= 1 ", likelihood_type_.c_str());
+					if (predict_var && !mom.variance_exists) Log::REFatal("PredictResponse: the response variance does not exist for likelihood='%s' when shape >= 0.5 ", likelihood_type_.c_str());
+					if (mom.status != EGPDEvalStatus::kValid) Log::REFatal("PredictResponse: failed to calculate EGPD unit-scale moments ");
+					c1 = mom.mean_unit_scale; c2 = mom.variance_unit_scale;
+				}
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < (int)pred_mean.size(); ++i) {
+					const double m = pred_mean[i];
+					const double v = std::max(pred_var[i], 0.0);
+					const double q = GPBoost::sigmoid_stable(-pred_var_mean[i]);// 1 - pi_i, pi_i = logit^{-1}(zeta_i)
+					const double p0 = 1. - q;
+					pred_mean[i] = q * c1 * std::exp(m + 0.5 * v);
+					if (predict_var) {
+						pred_var[i] = q * (c2 + p0 * c1 * c1) * std::exp(2. * m + 2. * v) + q * q * c1 * c1 * std::exp(2. * m + v) * std::expm1(v);
+					}
+				}
+			}//end hurdle regression
+			else if (IsZeroInflatedCountRegression()) {
+				// E(Y*) = q_i*A1; Var per Section 9 with per-observation q_i = sigmoid(-zeta_i) (pred_var_mean = zeta). A1=exp(m+v/2), A2=exp(2m+2v).
+				CHECK(need_pred_latent_var_for_response_mean_);
+				const string_t base = ZICountRegressionBaseType();
+				const int kind = (base == "zero_inflated_negative_binomial") ? 2 : ((base == "zero_inflated_negative_binomial_1") ? 1 : 0);
+				const double shape = (num_aux_pars_ > 0) ? aux_pars_[0] : 0.;
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < (int)pred_mean.size(); ++i) {
+					const double m = pred_mean[i]; const double v = std::max(pred_var[i], 0.0);
+					const double q = GPBoost::sigmoid_stable(-pred_var_mean[i]); const double p0 = 1. - q;
+					const double A1 = std::exp(m + 0.5 * v); const double A2 = std::exp(2. * m + 2. * v); const double V_mu = A2 - A1 * A1;
+					pred_mean[i] = q * A1;
+					if (predict_var) {
+						if (kind == 2) pred_var[i] = q * A1 + q * (1. / shape + p0) * A2 + q * q * V_mu;
+						else if (kind == 1) pred_var[i] = q * (1. + shape) * A1 + q * p0 * A2 + q * q * V_mu;
+						else pred_var[i] = q * A1 + q * p0 * A2 + q * q * V_mu;
+					}
+				}
+			}//end zero-inflated count regression
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 				// Model: Y = max(0, X)^lambda,  X | eta ~ N(eta, sigma^2),  eta ~ approx N(m, v)
 				// Unconditional: X ~ N(m, v + sigma^2). We compute E[Y] and optionally Var(Y).
@@ -8894,7 +10159,8 @@ namespace GPBoost {
 			const double* pred_var,
 			const data_size_t num_data) const {
 			double ll = 0.;
-#pragma omp parallel for schedule(static) if (num_data >= 128) reduction(+:ll)
+			bool na_inf_flag_11 = false;
+#pragma omp parallel for schedule(static) if (num_data >= 128) reduction(+:ll) reduction(||:na_inf_flag_11)
 			for (data_size_t i = 0; i < num_data; ++i) {
 				int y_test_int = 1;
 				double y_test_d = static_cast<double>(y_test[i]);
@@ -8920,13 +10186,24 @@ namespace GPBoost {
 				double sqrt2_sigma_hat = M_SQRT2 / std::sqrt(CalcDiagInformationLogLikOneSample(y_test_d, y_test_int, mode_integrand) + sigma2_inv);
 				double x_val;
 				double likelihood = 0.;
+				double log_normalizer = 0.;
+				if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+					const double p = GetTweediePower();
+					const auto power = likelihood_type_ == "tweedie" ? TransformTweediePowerFromQ(aux_pars_[1], TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_) : TweediePowerTransform{ p, 0., 0. };
+					thread_local TweedieSpecialFunctionCache cache;
+					const auto normalizer = EvaluateTweedieLogNormalizer(y_test_d, std::log(aux_pars_[0]), p, power.dp_dtheta, power.d2p_dtheta2, TweedieDerivativeOrder::kValue, false, 1000000, &cache);
+					if (!normalizer.converged) na_inf_flag_11 = true;
+					log_normalizer = normalizer.log_a;
+				}
 				for (int j = 0; j < order_GH_; ++j) {
 					x_val = sqrt2_sigma_hat * GH_nodes_[j] + mode_integrand;
-					likelihood += adaptive_GH_weights_[j] * std::exp(LogLikelihoodOneSample(y_test_d, y_test_int, x_val)) * GPBoost::normalPDF(sqrt_sigma2_inv * (x_val - pred_mean[i]));
+					const double node_log_likelihood = likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" ? LogLikTweedie(y_test_d, x_val, false) : LogLikelihoodOneSample(y_test_d, y_test_int, x_val);
+					likelihood += adaptive_GH_weights_[j] * std::exp(node_log_likelihood) * GPBoost::normalPDF(sqrt_sigma2_inv * (x_val - pred_mean[i]));
 				}
 				likelihood *= sqrt2_sigma_hat * sqrt_sigma2_inv;
-				ll += std::log(likelihood);
+				ll += std::log(likelihood) + log_normalizer;
 			}
+			if (na_inf_flag_11) { Log::REFatal("Tweedie density series did not converge for at least one test point (phi=%g, p = %g).", aux_pars_[0], GetTweediePower()); }
 			return -ll;
 		}//end TestNegLogLikelihoodAdaptiveGHQuadrature
 
@@ -8965,9 +10242,70 @@ namespace GPBoost {
 			else if (likelihood == string_t("beta-binomial") || likelihood == string_t("betabinomial")) {
 				return "beta_binomial";
 			}
-			else if (likelihood == string_t("gamma_zero_inflated") || likelihood == string_t("gamma-zero-inflated") ||
-				likelihood == string_t("zero-inflated-gamma")) {
-				return "zero_inflated_gamma";
+			else if (likelihood == string_t("zero-inflated-gamma") || likelihood == string_t("zero_inflated_gamma")) {
+				return "hurdle_gamma";
+			}
+			else if (likelihood == string_t("zero_inflated_lognormal") || likelihood == string_t("zero-inflated-lognormal")) {
+				return "hurdle_lognormal";
+			}
+			else if (likelihood == string_t("hurdle_poisson")) {
+				return "zero_inflated_poisson";
+			}
+			else if (likelihood == string_t("zero_inflated_nbinom2") || likelihood == string_t("zero_inflated_negative_binomial_2") || likelihood == string_t("zero_inflated_nbinom") ||
+				likelihood == string_t("hurdle_negative_binomial") || likelihood == string_t("hurdle_nbinom2") || likelihood == string_t("hurdle_negative_binomial_2")) {
+				return "zero_inflated_negative_binomial";
+			}
+			else if (likelihood == string_t("zero_inflated_nbinom1") || likelihood == string_t("hurdle_negative_binomial_1") || likelihood == string_t("hurdle_nbinom1")) {
+				return "zero_inflated_negative_binomial_1";
+			}
+			else if (likelihood == string_t("zero_inflated_gpd")) {
+				return "hurdle_gpd";
+			}
+			else if (likelihood == string_t("zero_inflated_egpd_power")) {
+				return "hurdle_egpd_power";
+			}
+			else if (likelihood == string_t("zero_inflated_egpd_power_mixture")) {
+				return "hurdle_egpd_power_mixture";
+			}
+			else if (likelihood == string_t("zero_inflated_egpd_beta")) {
+				return "hurdle_egpd_beta";
+			}
+			else if (likelihood == string_t("zero_inflated_egpd_power_beta")) {
+				return "hurdle_egpd_power_beta";
+			}
+			// Regression (fixed-effects) structural-zero-model aliases, analogous to the constant ones above (with "regression"
+			// inserted after the family prefix). Positive-continuous bases have canonical name "hurdle_regression_<base>"; count
+			// bases have canonical name "zero_inflated_regression_<base>"; the other prefix is accepted as an alias.
+			else if (likelihood == string_t("zero-inflated-regression-gamma") || likelihood == string_t("zero_inflated_regression_gamma")) {
+				return "hurdle_regression_gamma";
+			}
+			else if (likelihood == string_t("zero_inflated_regression_lognormal") || likelihood == string_t("zero-inflated-regression-lognormal")) {
+				return "hurdle_regression_lognormal";
+			}
+			else if (likelihood == string_t("hurdle_regression_poisson")) {
+				return "zero_inflated_regression_poisson";
+			}
+			else if (likelihood == string_t("zero_inflated_regression_nbinom2") || likelihood == string_t("zero_inflated_regression_negative_binomial_2") || likelihood == string_t("zero_inflated_regression_nbinom") ||
+				likelihood == string_t("hurdle_regression_negative_binomial") || likelihood == string_t("hurdle_regression_nbinom2") || likelihood == string_t("hurdle_regression_negative_binomial_2")) {
+				return "zero_inflated_regression_negative_binomial";
+			}
+			else if (likelihood == string_t("zero_inflated_regression_nbinom1") || likelihood == string_t("hurdle_regression_negative_binomial_1") || likelihood == string_t("hurdle_regression_nbinom1")) {
+				return "zero_inflated_regression_negative_binomial_1";
+			}
+			else if (likelihood == string_t("zero_inflated_regression_gpd")) {
+				return "hurdle_regression_gpd";
+			}
+			else if (likelihood == string_t("zero_inflated_regression_egpd_power")) {
+				return "hurdle_regression_egpd_power";
+			}
+			else if (likelihood == string_t("zero_inflated_regression_egpd_power_mixture")) {
+				return "hurdle_regression_egpd_power_mixture";
+			}
+			else if (likelihood == string_t("zero_inflated_regression_egpd_beta")) {
+				return "hurdle_regression_egpd_beta";
+			}
+			else if (likelihood == string_t("zero_inflated_regression_egpd_power_beta")) {
+				return "hurdle_regression_egpd_power_beta";
 			}
 			else if (likelihood == string_t("zero-censored-power-normal")) {
 				return "zero_censored_power_transformed_normal";
@@ -9093,7 +10431,7 @@ namespace GPBoost {
 		* \brief Transform from the latent to the response variable scale (often this is the inverse link function) conditional on the random and fixed effects
 		*			This is only used by the 'ConvertOutput()' function in regression_objective.hpp
 		*/
-		double TransformToReponseScale(const double value) const {
+		double TransformToResponseScale(const double value) const {
 			if (IsGaussianLikelihood() || likelihood_type_ == "t") {
 				return value;
 			}
@@ -9104,9 +10442,28 @@ namespace GPBoost {
 				likelihood_type_ == "beta" || likelihood_type_ == "beta_binomial" || likelihood_type_ == "quasi_bernoulli_logit") {
 				return GPBoost::sigmoid_stable(value);
 			}
-			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
+			else if (IsEGPDLikelihood()) {
+				const auto& moments = GetEGPDMoments();
+				if (!moments.mean_exists || moments.status != EGPDEvalStatus::kValid) Log::REFatal("TransformToResponseScale: the EGPD response mean is unavailable ");
+				return moments.mean_unit_scale * std::exp(value);
+			}
+			else if (IsHurdleEGPD()) {
+				const auto& moments = GetEGPDMoments();
+				if (!moments.mean_exists || moments.status != EGPDEvalStatus::kValid) Log::REFatal("The EGPD response mean is unavailable for likelihood='%s' ", likelihood_type_.c_str());
+				return (1. - aux_pars_original_[num_aux_pars_ - 1]) * moments.mean_unit_scale * std::exp(value);
+			}
+			else if (likelihood_type_ == "hurdle_gamma" || likelihood_type_ == "hurdle_lognormal") {
+				return (1. - aux_pars_original_[1]) * std::exp(value);
+			}
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				return (1. - aux_pars_original_[0]) * std::exp(value);
+			}
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				return (1. - aux_pars_original_[1]) * std::exp(value);
+			}
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
-				likelihood_type_ == "lognormal" || likelihood_type_ == "zero_inflated_gamma") {
+				likelihood_type_ == "lognormal") {
 				return std::exp(value);
 			}
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
@@ -9156,10 +10513,10 @@ namespace GPBoost {
 				}
 			}//end "zero_one_censored_shifted_gamma"
 			else {
-				Log::REFatal("TransformReponseScale: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
+				Log::REFatal("TransformToResponseScale: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
 				return 0.;
 			}
-		}//end TransformToReponseScale
+		}//end TransformToResponseScale
 
 	private:
 
@@ -9198,6 +10555,15 @@ namespace GPBoost {
 					}
 					aux_log_normalizing_constant_ = log_aux_normalizing_constant;
 				}
+				else if (IsZeroInflatedCount()) {
+					double log_aux_normalizing_constant = 0.;// -sum_i w_i * log(y_i!) (count-component factorial term)
+#pragma omp parallel for schedule(static) reduction(+:log_aux_normalizing_constant)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						log_aux_normalizing_constant += w * (-std::lgamma((double)y_data_int[i] + 1.));
+					}
+					aux_log_normalizing_constant_ = log_aux_normalizing_constant;
+				}
 				else if (likelihood_type_ == "binomial_probit" || likelihood_type_ == "binomial_logit" || likelihood_type_ == "beta_binomial") {
 					CHECK(has_weights_);
 					double log_aux_normalizing_constant = 0.;
@@ -9218,7 +10584,18 @@ namespace GPBoost {
 					}
 					aux_log_normalizing_constant_ = log_aux_normalizing_constant;
 				}
-				else if (likelihood_type_ == "zero_inflated_gamma") {
+				else if (likelihood_type_ == "hurdle_lognormal") {
+					double log_aux_normalizing_constant = 0.;// -sum_{y>0} w * log(y)
+#pragma omp parallel for schedule(static) reduction(+:log_aux_normalizing_constant)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						if (y_data[i] > 0.) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							log_aux_normalizing_constant -= w * std::log(y_data[i]);
+						}
+					}
+					aux_log_normalizing_constant_ = log_aux_normalizing_constant;
+				}
+				else if (likelihood_type_ == "hurdle_gamma") {
 					double log_aux_normalizing_constant = 0.0;
 #pragma omp parallel for schedule(static) reduction(+:log_aux_normalizing_constant)
 					for (data_size_t i = 0; i < num_data_; ++i) {
@@ -9253,9 +10630,21 @@ namespace GPBoost {
 					}
 					aux_log_normalizing_constant_ = log_aux_normalizing_constant;
 				}
-				else if (!IsGaussianLikelihood() && !IsGaussianHeteroscedastic() &&
+				else if (IsHurdleRegression()) {
+					const string_t base = HurdleRegressionBaseType();
+					double c = 0.;
+					if (base == "hurdle_gamma" || base == "hurdle_lognormal") {
+						const double sgn = (base == "hurdle_gamma") ? 1. : -1.;// +log(y) for gamma, -log(y) for lognormal (over positive observations)
+#pragma omp parallel for schedule(static) reduction(+:c)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							if (y_data[i] > 0.) { const double w = has_weights_ ? weights_[i] : 1.0; c += sgn * w * std::log(y_data[i]); }
+						}
+					}
+					aux_log_normalizing_constant_ = c;// 0 for EGPD bases (EvaluateEGPD returns the complete density)
+				}
+				else if (!IsGaussianLikelihood() && !IsGaussianHeteroscedastic() && !IsEGPDLikelihood() && !IsHurdleEGPD() &&
 					likelihood_type_ != "bernoulli_probit" && likelihood_type_ != "bernoulli_logit" &&
-					likelihood_type_ != "poisson" && likelihood_type_ != "t" && likelihood_type_ != "beta" &&
+					likelihood_type_ != "poisson" && likelihood_type_ != "tweedie" && likelihood_type_ != "tweedie_fixed_p" && likelihood_type_ != "t" && likelihood_type_ != "beta" &&
 					likelihood_type_ != "zero_one_censored_transformed_beta" && likelihood_type_ != "zero_one_censored_shifted_gamma" &&
 					likelihood_type_ != "asymmetric_laplace" && likelihood_type_ != "quasi_bernoulli_probit" && likelihood_type_ != "quasi_bernoulli_logit") {
 					Log::REFatal("CalculateAuxQuantLogNormalizingConstant: Likelihood of type '%s' is not supported ", likelihood_type_.c_str());
@@ -9285,7 +10674,35 @@ namespace GPBoost {
 			const int* y_data_int) {
 			if (!normalizing_constant_has_been_calculated_) {
 				CalculateAuxQuantLogNormalizingConstant(y_data, y_data_int);
-				if (likelihood_type_ == "poisson") {
+				if (IsEGPDLikelihood()) {
+					log_normalizing_constant_ = 0.;
+				}
+				else if (IsHurdleRegression()) {
+					// The structural-zero mixture terms log(pi_i)/log(q_i) depend on zeta and are handled per-sample; only the aux-dependent
+					// base normalizer over positive observations remains (0 for EGPD bases, whose density is complete in EvaluateEGPD).
+					const string_t base = HurdleRegressionBaseType();
+					if (base == "hurdle_gamma" || base == "hurdle_lognormal") {
+						double w_pos = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:w_pos)
+						for (data_size_t i = 0; i < num_data_; ++i) { if (y_data[i] > 0.) w_pos += has_weights_ ? weights_[i] : 1.0; }
+						if (base == "hurdle_gamma") log_normalizing_constant_ = w_pos * (aux_pars_[0] * std::log(aux_pars_[0]) - std::lgamma(aux_pars_[0])) + (aux_pars_[0] - 1.) * aux_log_normalizing_constant_;
+						else log_normalizing_constant_ = w_pos * (-M_LOGSQRT2PI - 0.5 * std::log(aux_pars_[0])) + aux_log_normalizing_constant_;
+					}
+					else log_normalizing_constant_ = 0.;// EGPD bases
+				}
+				else if (IsHurdleEGPD()) {
+					// The positive EGPD density is fully evaluated per-sample; only the mixture constants remain: w_zero*log(p0) + w_pos*log(q).
+					const double p0 = aux_pars_original_[num_aux_pars_ - 1];
+					const double log_q = std::log1p(-p0), log_p0 = std::log(p0);
+					double w_pos = 0., w_zero = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:w_pos, w_zero)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data[i] > 0.) w_pos += w; else w_zero += w;
+					}
+					log_normalizing_constant_ = w_zero * log_p0 + w_pos * log_q;
+				}
+				else if (likelihood_type_ == "poisson") {
 					double aux_const = 0.;
 #pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:aux_const)
 					for (data_size_t i = 0; i < num_data_; ++i) {
@@ -9297,11 +10714,109 @@ namespace GPBoost {
 				else if (likelihood_type_ == "gamma") {
 					log_normalizing_constant_ = LogNormalizingConstantGamma();
 				}
+				else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+					const double phi = aux_pars_[0];
+					const double p = GetTweediePower();
+					const double log_phi = std::log(phi);
+					const auto transform = likelihood_type_ == "tweedie" ? TransformTweediePowerFromQ(aux_pars_[1], TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_) : TweediePowerTransform{ p, 0., 0. };
+					const bool calc_power_deriv = likelihood_type_ == "tweedie";
+					double sum_a = 0., sum_rho = 0., sum_theta = 0.;
+					// Non-convergence is exceptional; record it and raise the error after the parallel region (Log::REFatal must not throw out of an OpenMP loop).
+					bool convergence_failure = false;
+					data_size_t fail_index = 0;
+					// Each thread uses its own persistent special-function cache (thread_local => reused across calls, e.g. when only phi changes).
+#pragma omp parallel for schedule(static) reduction(+:sum_a,sum_rho,sum_theta) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						thread_local TweedieSpecialFunctionCache cache;
+						const double w = has_weights_ ? weights_[i] : 1.;
+						const auto res = EvaluateTweedieLogNormalizer(y_data[i], log_phi, p, transform.dp_dtheta, transform.d2p_dtheta2, TweedieDerivativeOrder::kFirst, calc_power_deriv, 1000000, &cache);
+						if (!res.converged || !std::isfinite(res.log_a) || !std::isfinite(res.d_rho) || !std::isfinite(res.d_theta)) {
+#pragma omp critical
+							{
+								convergence_failure = true;
+								fail_index = i;
+							}
+						}
+						else {
+							sum_a += w * res.log_a;
+							sum_rho += w * res.d_rho;
+							sum_theta += w * res.d_theta;
+						}
+					}
+					if (convergence_failure) {
+						Log::REFatal("Tweedie density series did not converge for y=%g, phi=%g, p = %g.", y_data[fail_index], phi, p);
+					}
+					tweedie_sum_d_log_a_rho_ = sum_rho;
+					tweedie_sum_d_log_a_theta_ = sum_theta;
+					// Snapshot the parameters the cached normalizer aggregates correspond to (verified in CalcGradNegLogLikAuxPars).
+					tweedie_cached_phi_ = phi;
+					tweedie_cached_p_ = p;
+					log_normalizing_constant_ = sum_a;
+				}
 				else if (likelihood_type_ == "negative_binomial") {
 					log_normalizing_constant_ = LogNormalizingConstantNegBin(y_data_int);
 				}
 				else if (likelihood_type_ == "negative_binomial_1") {
 					log_normalizing_constant_ = LogNormalizingConstantNegBin1(y_data_int);
+				}
+				else if (likelihood_type_ == "zero_inflated_poisson") {
+					// Total constant = sum_{y>0} w * log(q) - sum_i w * log(y!). The log(q) factor for the positive-count branch;
+					// the y=0 mixture log D = log(pi + q*f0) is location-dependent and handled in the per-sample log-likelihood.
+					const double log_q = std::log1p(-aux_pars_original_[0]);
+					double w_pos = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:w_pos)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data_int[i] > 0) w_pos += w;
+					}
+					log_normalizing_constant_ = w_pos * log_q + aux_log_normalizing_constant_;
+				}
+				else if (IsZeroInflatedCountRegression()) {
+					// Base-count normalizer over positive observations only (the per-sample log(pi)/log(q) mixture terms depend on zeta and are in the per-sample log-likelihood).
+					const string_t base = ZICountRegressionBaseType();
+					if (base == "zero_inflated_negative_binomial") {
+						const double kappa = aux_pars_[0];
+						const double kappa_term = kappa * std::log(kappa) - std::lgamma(kappa);
+						double c = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:c)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							if (y_data_int[i] > 0) { const double w = has_weights_ ? weights_[i] : 1.0; c += w * (std::lgamma((double)y_data_int[i] + kappa) - std::lgamma((double)y_data_int[i] + 1.) + kappa_term); }
+						}
+						log_normalizing_constant_ = c;
+					}
+					else if (base == "zero_inflated_negative_binomial_1") {
+						log_normalizing_constant_ = LogNormalizingConstantNegBin1(y_data_int);// y=0 contributes 0
+					}
+					else {// zero_inflated_poisson
+						log_normalizing_constant_ = aux_log_normalizing_constant_;// -sum_i w * log(y!)
+					}
+				}
+				else if (likelihood_type_ == "zero_inflated_negative_binomial") {
+					// Positive-count NB2 normalizer over y>0 only (the y=0 mixture log D is location/shape-dependent, handled per-sample).
+					// Note: the base NB2 one-sample normalizer at y=0 equals kappa*log(kappa) != 0, so we must restrict to y>0.
+					const double kappa = aux_pars_[0];
+					const double log_q = std::log1p(-aux_pars_original_[1]);
+					const double kappa_term = kappa * std::log(kappa) - std::lgamma(kappa);
+					double c = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:c)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						if (y_data_int[i] > 0) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							c += w * (std::lgamma((double)y_data_int[i] + kappa) - std::lgamma((double)y_data_int[i] + 1.) + kappa_term + log_q);
+						}
+					}
+					log_normalizing_constant_ = c;
+				}
+				else if (likelihood_type_ == "zero_inflated_negative_binomial_1") {
+					// NB1 one-sample normalizer at y=0 equals 0, so the base sum over all data equals the sum over y>0. Add w_pos*log(q).
+					const double log_q = std::log1p(-aux_pars_original_[1]);
+					double w_pos = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:w_pos)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data_int[i] > 0) w_pos += w;
+					}
+					log_normalizing_constant_ = w_pos * log_q + LogNormalizingConstantNegBin1(y_data_int);
 				}
 				else if (likelihood_type_ == "beta") {
 					log_normalizing_constant_ = num_data_ * std::lgamma(aux_pars_[0]);
@@ -9327,7 +10842,18 @@ namespace GPBoost {
 				else if (likelihood_type_ == "lognormal") {
 					log_normalizing_constant_ = aux_log_normalizing_constant_ - (double)num_data_ * (M_LOGSQRT2PI + 0.5 * std::log(aux_pars_[0]));
 				}
-				else if (likelihood_type_ == "zero_inflated_gamma") {
+				else if (likelihood_type_ == "hurdle_lognormal") {
+					const double p0 = aux_pars_original_[1];
+					const double log_q = std::log1p(-p0), log_p0 = std::log(p0);
+					double w_pos = 0., w_zero = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:w_pos, w_zero)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data[i] > 0.) w_pos += w; else w_zero += w;
+					}
+					log_normalizing_constant_ = w_zero * log_p0 + w_pos * (log_q - M_LOGSQRT2PI - 0.5 * std::log(aux_pars_[0])) + aux_log_normalizing_constant_;
+				}
+				else if (likelihood_type_ == "hurdle_gamma") {
 					const double q = 1 - aux_pars_original_[1];// = 1 - p0
 					const double log_q = std::log(q);
 					double w_pos = 0.0, w_zero = 0.0;
@@ -9337,7 +10863,7 @@ namespace GPBoost {
 						if (y_data[i] > 0.0) w_pos += w;
 						else                 w_zero += w;
 					}
-					log_normalizing_constant_ = w_zero * std::log(1.0 - q) + w_pos * (log_q + aux_pars_[0] * std::log(aux_pars_[0] * q) - std::lgamma(aux_pars_[0])) +
+					log_normalizing_constant_ = w_zero * std::log(1.0 - q) + w_pos * (log_q + aux_pars_[0] * std::log(aux_pars_[0]) - std::lgamma(aux_pars_[0])) +
 						(aux_pars_[0] - 1.0) * aux_log_normalizing_constant_;
 				}
 				else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
@@ -9483,6 +11009,31 @@ namespace GPBoost {
 			return(norm_const);
 		}
 
+		inline double LogLikTweedie(double y, double eta, bool incl_norm_const) const {
+			const double phi = aux_pars_[0];
+			const double p = GetTweediePower();
+			const auto location = EvaluateTweedieLocation(y, eta, std::log(phi), p);
+			double ll = location.canonical;
+			if (incl_norm_const) {
+				const auto transform = likelihood_type_ == "tweedie" ? TransformTweediePowerFromQ(aux_pars_[1], TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_) : TweediePowerTransform{ p, 0., 0. };
+				thread_local TweedieSpecialFunctionCache cache;
+				const auto res = EvaluateTweedieLogNormalizer(y, std::log(phi), p, transform.dp_dtheta, transform.d2p_dtheta2, TweedieDerivativeOrder::kValue, false, 1000000, &cache);
+				if (!res.converged) return std::numeric_limits<double>::quiet_NaN();
+				ll += res.log_a;
+			}
+			return ll;
+		}
+
+		inline double FirstDerivLogLikTweedie(double y, double eta) const {
+			const double p = GetTweediePower();
+			return EvaluateTweedieLocation(y, eta, std::log(aux_pars_[0]), p).score;
+		}
+
+		inline double InformationLogLikTweedie(double y, double eta) const {
+			const double p = GetTweediePower();
+			return EvaluateTweedieLocation(y, eta, std::log(aux_pars_[0]), p).information;
+		}
+
 		/*!
 		* \brief Evaluate the log-likelihood conditional on the latent variable (=location_par)
 		* \param y_data Response variable data if response variable is continuous
@@ -9536,6 +11087,24 @@ namespace GPBoost {
 					ll += w * LogLikGamma(y_data[i], location_par[i], false);
 				}
 			}
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.;
+					ll += w * LogLikTweedie(y_data[i], location_par[i], false);
+				}
+			}
+			else if (IsEGPDLikelihood() || IsHurdleEGPD()) {
+				const bool hurdle = IsHurdleEGPD();
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.;
+					if (w == 0.) continue;
+					if (hurdle && y_data[i] <= 0.) continue;// point mass log(p0) is in the normalizing constant
+					const auto result = EvaluateEGPD(y_data[i], location_par[i]);
+					ll += result.status == EGPDEvalStatus::kValid ? w * result.log_likelihood : -std::numeric_limits<double>::infinity();
+				}
+			}
 			else if (likelihood_type_ == "negative_binomial") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
 				for (data_size_t i = 0; i < num_data_; ++i) {
@@ -9548,6 +11117,20 @@ namespace GPBoost {
 				for (data_size_t i = 0; i < num_data_; ++i) {
 					const double w = has_weights_ ? weights_[i] : 1.0;
 					ll += w * LogLikNegBin1(y_data_int[i], location_par[i], false);
+				}
+			}
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					ll += w * LogLikZeroInflatedPoisson(y_data_int[i], location_par[i], false);
+				}
+			}
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					ll += w * LogLikZeroInflatedNegBinFamily(y_data_int[i], location_par[i], false);
 				}
 			}
 			else if (likelihood_type_ == "beta") {
@@ -9578,6 +11161,20 @@ namespace GPBoost {
 					ll += w * LogLikGaussianHeteroscedastic(y_data[i], location_par[i], location_par[i + num_data_], false);
 				}
 			}
+			else if (IsHurdleRegression()) {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					ll += w * LogLikHurdleRegression(y_data[i], location_par[i], location_par[i + num_data_]);
+				}
+			}
+			else if (IsZeroInflatedCountRegression()) {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
+				for (data_size_t iz = 0; iz < num_data_; ++iz) {
+					const double wz = has_weights_ ? weights_[iz] : 1.0;
+					ll += wz * LogLikZICountRegression(y_data_int[iz], location_par[iz], location_par[iz + num_data_]);
+				}
+			}
 			else if (likelihood_type_ == "lognormal") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
 				for (data_size_t i = 0; i < num_data_; ++i) {
@@ -9592,11 +11189,18 @@ namespace GPBoost {
 					ll += LogLikBetaBinomial(y_data[i], location_par[i], weights_[i]);
 				}
 			}
-			else if (likelihood_type_ == "zero_inflated_gamma") {
+			else if (likelihood_type_ == "hurdle_gamma") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
 				for (data_size_t i = 0; i < num_data_; ++i) {
 					const double w = has_weights_ ? weights_[i] : 1.0;
 					ll += w * LogLikGammaZeroInflated(y_data[i], location_par[i], false);
+				}
+			}
+			else if (likelihood_type_ == "hurdle_lognormal") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:ll)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					ll += w * LogLikLogNormalZeroInflated(y_data[i], location_par[i], false);
 				}
 			}
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
@@ -9664,11 +11268,30 @@ namespace GPBoost {
 			else if (likelihood_type_ == "gamma") {
 				return(LogLikGamma(y_data, location_par, true));
 			}
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+				return LogLikTweedie(y_data, location_par, true);
+			}
+			else if (IsEGPDLikelihood()) {
+				const auto result = EvaluateEGPD(y_data, location_par);
+				return result.status == EGPDEvalStatus::kValid ? result.log_likelihood : -std::numeric_limits<double>::infinity();
+			}
+			else if (IsHurdleEGPD()) {
+				if (y_data <= 0.) return std::log(aux_pars_original_[num_aux_pars_ - 1]);// log(p0)
+				const auto result = EvaluateEGPD(y_data, location_par);
+				if (result.status != EGPDEvalStatus::kValid) return -std::numeric_limits<double>::infinity();
+				return result.log_likelihood + std::log1p(-aux_pars_original_[num_aux_pars_ - 1]);// + log(q)
+			}
 			else if (likelihood_type_ == "negative_binomial") {
 				return(LogLikNegBin(y_data_int, location_par, true));
 			}
 			else if (likelihood_type_ == "negative_binomial_1") {
 				return(LogLikNegBin1(y_data_int, location_par, true));
+			}
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				return(LogLikZeroInflatedPoisson(y_data_int, location_par, true));
+			}
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				return(LogLikZeroInflatedNegBinFamily(y_data_int, location_par, true));
 			}
 			else if (likelihood_type_ == "beta") {
 				return LogLikBeta(y_data, location_par, true);
@@ -9682,8 +11305,11 @@ namespace GPBoost {
 			else if (likelihood_type_ == "lognormal") {
 				return(LogLikLogNormal(y_data, location_par, true));
 			}
-			else if (likelihood_type_ == "zero_inflated_gamma") {
+			else if (likelihood_type_ == "hurdle_gamma") {
 				return(LogLikGammaZeroInflated(y_data, location_par, true));
+			}
+			else if (likelihood_type_ == "hurdle_lognormal") {
+				return(LogLikLogNormalZeroInflated(y_data, location_par, true));
 			}
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 				return LogLikZeroCensPowNorm(y_data, location_par, true);
@@ -9741,6 +11367,461 @@ namespace GPBoost {
 			else {
 				return (ll);
 			}
+		}
+
+		// ---------------------------------------------------------------------------------------------------------
+		// Zero-inflated Poisson (constant structural-zero probability p0 = aux_pars_original_[0], pi = p0, q = 1 - p0)
+		//   P(Y=0) = pi + q*exp(-mu),  P(Y=y>0) = q * Poisson(y; mu),  mu = exp(location_par)
+		// For a zero count define D = pi + q*f0, w = pi/D (posterior structural-zero prob), v = q*f0/D = 1 - w.
+		// ---------------------------------------------------------------------------------------------------------
+		/*! \brief For a zero count: returns log D and sets w = pi/D (posterior structural-zero probability). b0 = log f0 = -mu. */
+		inline double ZIPoissonZeroLogMixture(double mu, double p0, double& w) const {
+			const double log_pi = std::log(p0);
+			const double log_q = std::log1p(-p0);
+			const double b0 = -mu;// log Poisson(0; mu)
+			const double log_D = LogAddExpStable(log_pi, log_q + b0);
+			w = std::exp(log_pi - log_D);// pi / D in [0,1]
+			if (w > 1.) w = 1.;
+			if (w < 0.) w = 0.;
+			return log_D;
+		}
+
+		inline double LogLikZeroInflatedPoisson(int y, double location_par, bool incl_norm_const) const {
+			const double p0 = aux_pars_original_[0];
+			if (y == 0) {
+				const double mu = std::exp(location_par);
+				double w;
+				return ZIPoissonZeroLogMixture(mu, p0, w);// = log D (fully location-dependent)
+			}
+			double ll = y * location_par - std::exp(location_par);// Poisson kernel (location-dependent part)
+			if (incl_norm_const) {
+				ll += std::log1p(-p0) - std::lgamma((double)y + 1.);// log q - log(y!)
+			}
+			return ll;
+		}
+
+		inline double FirstDerivLogLikZeroInflatedPoisson(int y, double location_par) const {
+			const double mu = std::exp(location_par);
+			if (y > 0) return (double)y - mu;// s_y
+			const double p0 = aux_pars_original_[0];
+			double w;
+			ZIPoissonZeroLogMixture(mu, p0, w);
+			const double v = 1. - w;
+			return -v * mu;// l_eta = v * s0, s0 = -mu
+		}
+
+		/*! \brief Observed information J_eta = -d^2 l / d eta^2 (can be negative for zero counts) */
+		inline double SecondDerivNegLogLikZeroInflatedPoisson(int y, double location_par) const {
+			const double mu = std::exp(location_par);
+			if (y > 0) return mu;// J_eta = -t_y = mu
+			const double p0 = aux_pars_original_[0];
+			double w;
+			ZIPoissonZeroLogMixture(mu, p0, w);
+			const double v = 1. - w;
+			// J_eta = -(v*t0 + v*w*s0^2) = v*mu - v*w*mu^2  (t0 = -mu, s0^2 = mu^2)
+			return v * mu - v * w * mu * mu;
+		}
+
+		/*! \brief d J_eta / d eta = -d^3 l / d eta^3 */
+		inline double DerivInformationLocParZeroInflatedPoisson(int y, double location_par) const {
+			const double mu = std::exp(location_par);
+			if (y > 0) return mu;
+			const double p0 = aux_pars_original_[0];
+			double w;
+			ZIPoissonZeroLogMixture(mu, p0, w);
+			const double v = 1. - w;
+			// dJ/deta = -(v*u0 + 3*v*w*s0*t0 + v*w*(w-v)*s0^3),  s0=t0=u0=-mu
+			//         = v*mu - 3*v*w*mu^2 + v*w*(w-v)*mu^3
+			return v * mu - 3. * v * w * mu * mu + v * w * (w - v) * mu * mu * mu;
+		}
+
+		// ---------------------------------------------------------------------------------------------------------
+		// Zero-inflated negative binomial (NB2 and NB1), constant structural-zero probability.
+		//   aux_pars_[0] = base shape (NB2 kappa) / dispersion (NB1 phi) (optimized on log-scale),
+		//   aux_pars_[1] = transformed structural-zero odds A = p0/(1-p0)  (optimized on log(A) = logit(p0)).
+		// At a zero count the base zero-mass f0 depends on both eta and the base aux parameter, so eta, rho and the
+		// shape/dispersion all couple. All base zero-mass quantities are evaluated on the optimizer (log) scale for
+		// the auxiliary parameter (g0,h0,k0). See plan Sections 5 and 8.
+		// ---------------------------------------------------------------------------------------------------------
+		struct ZICountZeroMass {
+			double b0 = 0.;// log f0
+			double s0 = 0., t0 = 0., u0 = 0.;// d/deta, d^2/deta^2, d^3/deta^3 of b0
+			double g0 = 0., h0 = 0., k0 = 0.;// d/da, d^2/(deta da), d^3/(deta^2 da) of b0, a = log(aux_pars_[0])
+		};
+
+		/*! \brief NB2 zero-mass quantities at y=0, a = log(kappa) */
+		inline void FillZeroMassNegBin(double mu, double kappa, ZICountZeroMass& z) const {
+			const double kpm = kappa + mu;
+			const double L = std::log1p(mu / kappa);
+			z.b0 = -kappa * L;
+			z.s0 = -kappa * mu / kpm;
+			z.t0 = -kappa * kappa * mu / (kpm * kpm);
+			z.u0 = -kappa * kappa * mu * (kappa - mu) / (kpm * kpm * kpm);
+			z.g0 = kappa * (-L + mu / kpm);
+			z.h0 = -kappa * mu * mu / (kpm * kpm);
+			z.k0 = -2. * kappa * kappa * mu * mu / (kpm * kpm * kpm);
+		}
+
+		/*! \brief NB1 zero-mass quantities at y=0, a = log(phi). s0=t0=u0=b0 and h0=k0=g0. */
+		inline void FillZeroMassNegBin1(double mu, double phi, ZICountZeroMass& z) const {
+			const double L = std::log1p(phi);
+			const double base = -mu * L / phi;
+			z.b0 = base; z.s0 = base; z.t0 = base; z.u0 = base;
+			const double g = (mu / phi) * (L - phi / (1. + phi));
+			z.g0 = g; z.h0 = g; z.k0 = g;
+		}
+
+		/*! \brief For a zero count: log D = log(pi + q*f0); sets w = pi/D (posterior structural-zero prob) and v = 1 - w. */
+		inline double ZICountZeroLogMixture(double p0, double b0, double& w, double& v) const {
+			const double log_pi = std::log(p0);
+			const double log_q = std::log1p(-p0);
+			const double log_D = LogAddExpStable(log_pi, log_q + b0);
+			w = std::exp(log_pi - log_D);
+			if (w > 1.) w = 1.;
+			if (w < 0.) w = 0.;
+			v = 1. - w;
+			return log_D;
+		}
+		// Generic zero-count derivative building blocks (given zero-mass z and mixture weights w,v):
+		inline double ZICountZero_dEta(const ZICountZeroMass& z, double v) const { return v * z.s0; }// l_eta
+		inline double ZICountZero_Jeta(const ZICountZeroMass& z, double w, double v) const { return -(v * z.t0 + v * w * z.s0 * z.s0); }// J_eta = -l_etaeta
+		inline double ZICountZero_dJetadEta(const ZICountZeroMass& z, double w, double v) const {
+			return -(v * z.u0 + 3. * v * w * z.s0 * z.t0 + v * w * (w - v) * z.s0 * z.s0 * z.s0);
+		}
+		inline double ZICountZero_lEtaRho(const ZICountZeroMass& z, double w, double v) const { return -v * w * z.s0; }
+		inline double ZICountZero_dJetadRho(const ZICountZeroMass& z, double w, double v) const { return v * w * (z.t0 + (w - v) * z.s0 * z.s0); }
+		inline double ZICountZero_lEtaShape(const ZICountZeroMass& z, double w, double v) const { return v * z.h0 + v * w * z.s0 * z.g0; }
+		inline double ZICountZero_dJetadShape(const ZICountZeroMass& z, double w, double v) const {
+			return -(v * z.k0 + v * w * z.g0 * z.t0 + v * w * (w - v) * z.g0 * z.s0 * z.s0 + 2. * v * w * z.s0 * z.h0);
+		}
+
+		inline void FillZeroMassZICount(double mu, ZICountZeroMass& z) const {
+			if (likelihood_type_ == "zero_inflated_negative_binomial") FillZeroMassNegBin(mu, aux_pars_[0], z);
+			else FillZeroMassNegBin1(mu, aux_pars_[0], z);// zero_inflated_negative_binomial_1
+		}
+
+		// -------- Fisher (expected) information wrt eta for the fisher_laplace approximation of count likelihoods. --------
+		// The expected information E[(d log L / d eta)^2] does not depend on the realized y, so (unlike the observed Hessian,
+		// which is negative at some zero counts) it is guaranteed nonnegative. This makes W >= 0, which stabilizes mode finding
+		// and enables the iterative matrix-inversion methods (Vecchia, crossed grouped REs).
+		/*! rief Base kind of a zero-inflated count likelihood: 0 = Poisson, 1 = NB1, 2 = NB2. */
+		inline int ZICountBaseKind() const {
+			const string_t b = IsZeroInflatedCountRegression() ? ZICountRegressionBaseType() : likelihood_type_;
+			if (b == "zero_inflated_negative_binomial") return 2;
+			if (b == "zero_inflated_negative_binomial_1") return 1;
+			return 0;
+		}
+		/*! rief Constant structural-zero probability pi = p0 (untransformed) for a constant zero-inflated count. */
+		inline double ZICountConstantP0() const {
+			return aux_pars_original_[(likelihood_type_ == "zero_inflated_poisson") ? 0 : 1];
+		}
+		/*! rief Fill the base zero-mass quantities for a given base kind (0 = Poisson, 1 = NB1, 2 = NB2). */
+		inline void FillZeroMassZICountKind(double mu, ZICountZeroMass& z, int kind) const {
+			if (kind == 2) FillZeroMassNegBin(mu, aux_pars_[0], z);
+			else if (kind == 1) FillZeroMassNegBin1(mu, aux_pars_[0], z);
+			else { z.b0 = -mu; z.s0 = -mu; z.t0 = -mu; z.u0 = -mu; z.g0 = 0.; z.h0 = 0.; z.k0 = 0.; }// Poisson
+		}
+		/*! rief Base-count Fisher information wrt eta (mu = exp(eta)). Exact for Poisson (mu) and NB2 (mu*kappa/(kappa+mu)).
+		* NB1 has NO closed-form exact Fisher information wrt eta (it is r^2*Var(digamma(Y+r)) with r = mu/phi, an infinite sum
+		* over the NB1 pmf), so the GLM/quasi expected information mu^2/Var(Y) = mu/(1+phi) is used instead -- a QUASI-Fisher
+		* information. kind: 0 = Poisson, 1 = NB1, 2 = NB2. */
+		inline double ZICountBaseFisherInfoEta(double mu, int kind) const {
+			if (kind == 2) return mu * aux_pars_[0] / (aux_pars_[0] + mu);// NB2, exact (kappa = aux_pars_[0])
+			if (kind == 1) return mu / (1. + aux_pars_[0]);// NB1, quasi-Fisher (phi = aux_pars_[0])
+			return mu;// Poisson, exact
+		}
+		/*! rief Fisher (expected) information of a zero-inflated count wrt eta:
+		*   E[(d log L / d eta)^2] = D * v^2 * s0^2 + (1 - pi) * (I_base - f0 * s0^2)  >= 0,  D = pi + (1-pi) f0, v = (1-pi) f0 / D.
+		* Exact for Poisson/NB2; quasi (via the NB1 base) for NB1. */
+		inline double ZICountFisherInfoEta(double mu, double pi, const ZICountZeroMass& z, int kind) const {
+			const double q = 1. - pi;
+			const double f0 = std::exp(z.b0);
+			const double D = pi + q * f0;
+			const double v = q * f0 / D;
+			const double fisher = D * v * v * z.s0 * z.s0 + q * (ZICountBaseFisherInfoEta(mu, kind) - f0 * z.s0 * z.s0);
+			return fisher > 0. ? fisher : 0.;// provably >= 0 for Poisson/NB2; guard tiny negatives from the NB1 quasi-Fisher
+		}
+		/*! rief Fisher information wrt eta with the base aux parameter (kappa/phi) and pi given explicitly, for numerical
+		* derivatives wrt the auxiliary parameters (dFisher/d log(shape) and dFisher/d rho). */
+		inline double ZICountFisherInfoEtaExplicit(double mu, double pi, int kind, double base_aux) const {
+			ZICountZeroMass z;
+			if (kind == 2) FillZeroMassNegBin(mu, base_aux, z);
+			else if (kind == 1) FillZeroMassNegBin1(mu, base_aux, z);
+			else { z.b0 = -mu; z.s0 = -mu; }
+			const double q = 1. - pi, f0 = std::exp(z.b0), D = pi + q * f0, v = q * f0 / D;
+			const double I_base = (kind == 2) ? (mu * base_aux / (base_aux + mu)) : (kind == 1 ? mu / (1. + base_aux) : mu);
+			const double fisher = D * v * v * z.s0 * z.s0 + q * (I_base - f0 * z.s0 * z.s0);
+			return fisher > 0. ? fisher : 0.;
+		}
+		/*! \brief Set the information/approximation flags of NB1 and zero-inflated count likelihoods from approximation_type_ and use_fisher_for_mode_finding_.
+		* fisher_laplace: nonnegative Fisher information for mode finding AND determinant. laplace: observed Hessian for the determinant
+		* (can be negative); if use_fisher_for_mode_finding_ is set (the NB1/ZINB1 default), the positive (quasi-)Fisher is used for
+		* mode finding only ('combined'). */
+		void SetCountApproximationTypeFlags() {
+			if (approximation_type_ == "fisher_laplace") {
+				information_ll_can_be_negative_ = false;// Fisher (expected) information is nonnegative
+				grad_information_wrt_mode_non_zero_ = true;// Fisher depends on mu
+				// The Fisher information's derivative wrt the mode can vanish at isolated eta values (local extrema of the
+				// information as a function of eta); enable the zero-guard used by the iterative ratio-trick diagonal
+				// SigmaI_plus_W_inv_diag = d_log_det / deriv_information_diag_loc_par (0/0 -> set to 0 instead of NaN).
+				grad_information_wrt_mode_can_be_zero_for_some_points_ = true;
+				information_changes_during_mode_finding_ = true;
+				information_changes_after_mode_finding_ = false;
+				use_fisher_for_mode_finding_ = true;
+			} else if (approximation_type_ == "laplace") {
+				information_ll_can_be_negative_ = true;// observed Hessian can be negative for NB1 and for zero-inflated counts
+				grad_information_wrt_mode_non_zero_ = true;
+				grad_information_wrt_mode_can_be_zero_for_some_points_ = true;
+				information_changes_during_mode_finding_ = true;
+				information_ll_can_be_exact_zero_ = true;
+				if (use_fisher_for_mode_finding_) information_changes_after_mode_finding_ = true;// (quasi-)Fisher mode finding + Hessian determinant
+			} else {
+				Log::REFatal("'approximation_type' = '%s' is not supported for likelihood = '%s' ", approximation_type_.c_str(), likelihood_type_.c_str());
+			}
+		}
+
+		inline double LogLikZeroInflatedNegBinFamily(int y, double location_par, bool incl_norm_const) const {
+			const bool nb2 = (likelihood_type_ == "zero_inflated_negative_binomial");
+			const double p0 = aux_pars_original_[1];
+			if (y == 0) {
+				const double mu = std::exp(location_par);
+				ZICountZeroMass z; FillZeroMassZICount(mu, z);
+				double w, v;
+				return ZICountZeroLogMixture(p0, z.b0, w, v);// = log D (location- and shape-dependent)
+			}
+			double ll = nb2 ? LogLikNegBin(y, location_par, false) : LogLikNegBin1(y, location_par, false);
+			if (incl_norm_const) {
+				ll += std::log1p(-p0) + (nb2 ? LogNormalizingConstantNegBinOneSample(y) : LogNormalizingConstantNegBin1OneSample(y));
+			}
+			return ll;
+		}
+
+		inline double FirstDerivLogLikZeroInflatedNegBinFamily(int y, double location_par) const {
+			const bool nb2 = (likelihood_type_ == "zero_inflated_negative_binomial");
+			if (y > 0) return nb2 ? FirstDerivLogLikNegBin(y, location_par) : FirstDerivLogLikNegBin1(y, location_par);
+			const double mu = std::exp(location_par);
+			ZICountZeroMass z; FillZeroMassZICount(mu, z);
+			double w, v; ZICountZeroLogMixture(aux_pars_original_[1], z.b0, w, v);
+			return ZICountZero_dEta(z, v);
+		}
+
+		inline double SecondDerivNegLogLikZeroInflatedNegBinFamily(int y, double location_par) const {
+			const bool nb2 = (likelihood_type_ == "zero_inflated_negative_binomial");
+			if (y > 0) return nb2 ? SecondDerivNegLogLikNegBin(y, location_par) : SecondDerivNegLogLikNegBin1(y, location_par);
+			const double mu = std::exp(location_par);
+			ZICountZeroMass z; FillZeroMassZICount(mu, z);
+			double w, v; ZICountZeroLogMixture(aux_pars_original_[1], z.b0, w, v);
+			return ZICountZero_Jeta(z, w, v);
+		}
+
+		inline double DerivInformationLocParZeroInflatedNegBinFamily(int y, double location_par) const {
+			const bool nb2 = (likelihood_type_ == "zero_inflated_negative_binomial");
+			if (y > 0) {
+				const double mu = std::exp(location_par);
+				if (nb2) {
+					const double mu_plus_r = mu + aux_pars_[0];
+					return -(y + aux_pars_[0]) * mu * aux_pars_[0] * (mu - aux_pars_[0]) / (mu_plus_r * mu_plus_r * mu_plus_r);
+				}
+				const double r = mu / aux_pars_[0];
+				const double dig_diff = GPBoost::digamma(y + r) - GPBoost::digamma(r);
+				const double tri_diff = GPBoost::trigamma(y + r) - GPBoost::trigamma(r);
+				const double tet_diff = GPBoost::tetragamma(y + r) - GPBoost::tetragamma(r);
+				const double C = dig_diff - std::log1p(aux_pars_[0]);
+				return -3.0 * r * r * tri_diff - r * r * r * tet_diff - r * C;
+			}
+			const double mu = std::exp(location_par);
+			ZICountZeroMass z; FillZeroMassZICount(mu, z);
+			double w, v; ZICountZeroLogMixture(aux_pars_original_[1], z.b0, w, v);
+			return ZICountZero_dJetadEta(z, w, v);
+		}
+
+		/*! \brief Base NB2/NB1 negative-log-likelihood gradient wrt log(shape/dispersion) for a single positive count. */
+		inline double NegLLGradShapeNegBinFamilyPos(int y, double location_par) const {
+			const double mu = std::exp(location_par);
+			if (likelihood_type_ == "zero_inflated_negative_binomial") {
+				const double mu_plus_r = mu + aux_pars_[0];
+				const double y_plus_r = y + aux_pars_[0];
+				return aux_pars_[0] * (-GPBoost::digamma(y_plus_r) + std::log(mu_plus_r) + y_plus_r / mu_plus_r)
+					+ aux_pars_[0] * (GPBoost::digamma(aux_pars_[0]) - std::log(aux_pars_[0]) - 1.);
+			}
+			const double r = mu / aux_pars_[0];
+			const double C = GPBoost::digamma(y + r) - GPBoost::digamma(r) - std::log1p(aux_pars_[0]);
+			return r * C + (mu - y) / (1.0 + aux_pars_[0]);
+		}
+
+		// ---------------------------------------------------------------------------------------------------------
+		// Hurdle lognormal (constant structural-zero probability p0 = aux_pars_original_[1]).
+		//   P(Y=0) = p0,  f(y | y>0) = LogNormal(y; location_par, sigma2).  The zero part fully decouples from eta:
+		//   all eta-derivatives vanish at y=0, and l_{eta,rho} = 0 everywhere (same structure as hurdle_gamma).
+		// ---------------------------------------------------------------------------------------------------------
+		inline double LogLikLogNormalZeroInflated(double y, double location_par, bool incl_norm_const) const {
+			if (y > 0.) {
+				double ll = LogLikLogNormal(y, location_par, false);
+				if (incl_norm_const) ll += std::log1p(-aux_pars_original_[1]) - std::log(y) - M_LOGSQRT2PI - 0.5 * std::log(aux_pars_[0]);
+				return ll;
+			}
+			if (incl_norm_const) return std::log(aux_pars_original_[1]);// log p0
+			return 0.;
+		}
+
+		inline double FirstDerivLogLikLogNormalZeroInflated(double y, double location_par) const {
+			if (y <= 0.) return 0.;
+			return FirstDerivLogLikLogNormal(y, location_par);
+		}
+
+		inline double SecondDerivNegLogLikLogNormalZeroInflated(double y) const {
+			if (y <= 0.) return 0.;
+			return 1. / aux_pars_[0];// constant Fisher information for positive observations
+		}
+
+		/*! \brief Stable softplus log(1 + exp(x)). */
+		static inline double SoftplusStable(double x) { return (x > 0. ? x : 0.) + std::log1p(std::exp(-std::fabs(x))); }
+
+		// ---------------------------------------------------------------------------------------------------------
+		// Hurdle regression (fixed-effects structural-zero model) two-block helpers.
+		//   Block 0 (eta = location_par): the positive base likelihood, evaluated on y > 0 (random effects live here).
+		//   Block 1 (zeta = location_par2): a logistic model for the structural zero, pi = logit^{-1}(zeta), on d = 1{y=0}.
+		//   The two blocks decouple: l_{eta,zeta} = 0 and dJ_eta/dzeta = 0.
+		// ---------------------------------------------------------------------------------------------------------
+		inline double HurdleRegressionBaseLogLikLocDep(double y, double loc_eta) const {
+			// location-dependent part of the positive base log-likelihood (the aux-dependent normalizer is in log_normalizing_constant_ for
+			// gamma/lognormal; for EGPD, EvaluateEGPD already returns the complete density and log_normalizing_constant_ is 0)
+			const string_t base = HurdleRegressionBaseType();
+			if (base == "hurdle_gamma") return LogLikGammaZeroInflated(y, loc_eta, false);
+			if (base == "hurdle_lognormal") return LogLikLogNormalZeroInflated(y, loc_eta, false);
+			const auto r = EvaluateEGPD(y, loc_eta);
+			return r.status == EGPDEvalStatus::kValid ? r.log_likelihood : -std::numeric_limits<double>::infinity();
+		}
+		inline double HurdleRegression_dEta(double y, double loc_eta) const {// l_eta (0 at y=0)
+			if (y <= 0.) return 0.;
+			const string_t base = HurdleRegressionBaseType();
+			if (base == "hurdle_gamma") return FirstDerivLogLikGammaZeroInflated(y, loc_eta);
+			if (base == "hurdle_lognormal") return FirstDerivLogLikLogNormalZeroInflated(y, loc_eta);
+			const auto r = EvaluateEGPD(y, loc_eta);
+			return r.status == EGPDEvalStatus::kValid ? r.d_eta : std::numeric_limits<double>::quiet_NaN();
+		}
+		inline double HurdleRegression_Jeta(double y, double loc_eta) const {// J_eta = -l_etaeta (0 at y=0)
+			if (y <= 0.) return 0.;
+			const string_t base = HurdleRegressionBaseType();
+			if (base == "hurdle_gamma") return SecondDerivNegLogLikGammaZeroInflated(y, loc_eta);
+			if (base == "hurdle_lognormal") return SecondDerivNegLogLikLogNormalZeroInflated(y);
+			const auto r = EvaluateEGPD(y, loc_eta);
+			return r.status == EGPDEvalStatus::kValid ? -r.d2_eta : std::numeric_limits<double>::quiet_NaN();
+		}
+		inline double HurdleRegression_dJetadEta(double y, double loc_eta) const {// dJ_eta/deta = -l_etaetaeta (0 at y=0)
+			if (y <= 0.) return 0.;
+			const string_t base = HurdleRegressionBaseType();
+			if (base == "hurdle_gamma") return -aux_pars_[0] * y * std::exp(-loc_eta);
+			if (base == "hurdle_lognormal") return 0.;
+			const auto r = EvaluateEGPD(y, loc_eta);
+			return r.status == EGPDEvalStatus::kValid ? -r.d3_eta : std::numeric_limits<double>::quiet_NaN();
+		}
+		inline double HurdleRegression_dZeta(double y, double loc_zeta) const { return (y <= 0. ? 1. : 0.) - GPBoost::sigmoid_stable(loc_zeta); }// l_zeta = d - pi
+		inline double HurdleRegression_Jzeta(double loc_zeta) const { const double p = GPBoost::sigmoid_stable(loc_zeta); return p * (1. - p); }// -l_zetazeta = pi*q
+		inline double LogLikHurdleRegression(double y, double loc_eta, double loc_zeta) const {
+			if (y <= 0.) return -SoftplusStable(-loc_zeta);// log(pi)
+			return HurdleRegressionBaseLogLikLocDep(y, loc_eta) - SoftplusStable(loc_zeta);// base location-dependent part + log(q)
+		}
+
+		// ---------------------------------------------------------------------------------------------------------
+		// Zero-inflated COUNT regression (coupled two-block) helpers. Block 0 (eta) = count response predictor (with RE);
+		// block 1 (zeta) = structural-zero logit, pi_i = logit^{-1}(zeta_i). At a zero count eta and zeta couple.
+		// ---------------------------------------------------------------------------------------------------------
+		inline void FillZeroMassCountRegression(double mu, ZICountZeroMass& z) const {
+			const string_t base = ZICountRegressionBaseType();
+			if (base == "zero_inflated_negative_binomial") FillZeroMassNegBin(mu, aux_pars_[0], z);
+			else if (base == "zero_inflated_negative_binomial_1") FillZeroMassNegBin1(mu, aux_pars_[0], z);
+			else { z.b0 = -mu; z.s0 = -mu; z.t0 = -mu; z.u0 = -mu; z.g0 = 0.; z.h0 = 0.; z.k0 = 0.; }// Poisson
+		}
+		inline double CountRegBaseDEta(int y, double loc_eta) const {// base count s_y (y>0)
+			const string_t base = ZICountRegressionBaseType();
+			if (base == "zero_inflated_negative_binomial") return FirstDerivLogLikNegBin(y, loc_eta);
+			if (base == "zero_inflated_negative_binomial_1") return FirstDerivLogLikNegBin1(y, loc_eta);
+			return FirstDerivLogLikPoisson(y, loc_eta);
+		}
+		inline double CountRegBaseJeta(int y, double loc_eta) const {// base count -t_y (y>0)
+			const string_t base = ZICountRegressionBaseType();
+			if (base == "zero_inflated_negative_binomial") return SecondDerivNegLogLikNegBin(y, loc_eta);
+			if (base == "zero_inflated_negative_binomial_1") return SecondDerivNegLogLikNegBin1(y, loc_eta);
+			return SecondDerivNegLogLikPoisson(loc_eta);
+		}
+		inline double CountRegBaseDJetadEta(int y, double loc_eta) const {// base count dJ_eta/deta (y>0)
+			const string_t base = ZICountRegressionBaseType();
+			const double mu = std::exp(loc_eta);
+			if (base == "zero_inflated_negative_binomial") { const double mpr = mu + aux_pars_[0]; return -(y + aux_pars_[0]) * mu * aux_pars_[0] * (mu - aux_pars_[0]) / (mpr * mpr * mpr); }
+			if (base == "zero_inflated_negative_binomial_1") { const double r = mu / aux_pars_[0]; const double dd = GPBoost::digamma(y + r) - GPBoost::digamma(r); const double td = GPBoost::trigamma(y + r) - GPBoost::trigamma(r); const double tt = GPBoost::tetragamma(y + r) - GPBoost::tetragamma(r); const double C = dd - std::log1p(aux_pars_[0]); return -3. * r * r * td - r * r * r * tt - r * C; }
+			return mu;// Poisson
+		}
+		inline double CountRegBaseLogLikLocDep(int y, double loc_eta) const {// location-dependent base count log-lik (y>0)
+			const string_t base = ZICountRegressionBaseType();
+			if (base == "zero_inflated_negative_binomial") return LogLikNegBin(y, loc_eta, false);
+			if (base == "zero_inflated_negative_binomial_1") return LogLikNegBin1(y, loc_eta, false);
+			return y * loc_eta - std::exp(loc_eta);// Poisson
+		}
+		/*! \brief All two-block derivative quantities of a zero-inflated count regression likelihood at one observation. */
+		struct ZICountRegQuant { double dEta = 0., Jeta = 0., dJetadEta = 0., dZeta = 0., Jzeta = 0., lEtaZeta = 0., dJetadZeta = 0., v = 0.; };
+		inline void ZICountRegressionQuantities(int y, double loc_eta, double loc_zeta, ZICountRegQuant& o) const {
+			const double pi = GPBoost::sigmoid_stable(loc_zeta);
+			const double q = 1. - pi;
+			if (y > 0) {
+				o.dEta = CountRegBaseDEta(y, loc_eta);
+				o.Jeta = CountRegBaseJeta(y, loc_eta);
+				o.dJetadEta = CountRegBaseDJetadEta(y, loc_eta);
+				o.dZeta = -pi;// tau - pi, tau = 0
+				o.Jzeta = pi * q;
+				o.lEtaZeta = 0.; o.dJetadZeta = 0.; o.v = 1.;
+				return;
+			}
+			const double mu = std::exp(loc_eta);
+			ZICountZeroMass z; FillZeroMassCountRegression(mu, z);
+			const double log_pi = std::log(pi), log_q = std::log1p(-pi);
+			const double log_D = LogAddExpStable(log_pi, log_q + z.b0);
+			double w = std::exp(log_pi - log_D); if (w > 1.) w = 1.; if (w < 0.) w = 0.;
+			const double v = 1. - w;
+			o.v = v;
+			o.dEta = v * z.s0;
+			o.Jeta = -(v * z.t0 + v * w * z.s0 * z.s0);
+			o.dJetadEta = -(v * z.u0 + 3. * v * w * z.s0 * z.t0 + v * w * (w - v) * z.s0 * z.s0 * z.s0);
+			o.dZeta = w - pi;// tau - pi, tau = w
+			o.Jzeta = pi * q - w * v;
+			o.lEtaZeta = -v * w * z.s0;
+			o.dJetadZeta = v * w * (z.t0 + (w - v) * z.s0 * z.s0);
+		}
+		/*! rief Derivative of the eta-block information W wrt zeta at one zero-inflated count regression observation, for the
+		* zeta-block log-determinant gradient term: the observed dJ_eta/dzeta for the Laplace approximation, or d Fisher_eta / d zeta
+		* (numerical central difference; Fisher_eta depends on zeta through pi = sigmoid(zeta)) for the fisher_laplace approximation. */
+		inline double RegressionZeroModel_dInfodZeta(double loc_eta, double loc_zeta, const ZICountRegQuant& o) const {
+			if (approximation_type_ != "fisher_laplace") return o.dJetadZeta;
+			const int kind = ZICountBaseKind();
+			const double mu = std::exp(loc_eta), h = 1e-5;
+			ZICountZeroMass z; FillZeroMassZICountKind(mu, z, kind);
+			return (ZICountFisherInfoEta(mu, GPBoost::sigmoid_stable(loc_zeta + h), z, kind)
+				- ZICountFisherInfoEta(mu, GPBoost::sigmoid_stable(loc_zeta - h), z, kind)) / (2. * h);
+		}
+		inline double LogLikZICountRegression(int y, double loc_eta, double loc_zeta) const {
+			if (y <= 0.) {// log(pi + q*f0) = log D
+				const double mu = std::exp(loc_eta);
+				ZICountZeroMass z; FillZeroMassCountRegression(mu, z);
+				return LogAddExpStable(-SoftplusStable(-loc_zeta), -SoftplusStable(loc_zeta) + z.b0);// log(pi) , log(q)+b0
+			}
+			return CountRegBaseLogLikLocDep(y, loc_eta) - SoftplusStable(loc_zeta);// base location-dependent part + log(q)
+		}
+		/*! \brief Structural-zero-block score l_zeta = tau - pi for a regression zero model (hurdle or count). */
+		inline double RegressionZeroModel_dZeta(const double* y_data, const int* y_data_int, data_size_t iz, double loc_eta, double loc_zeta) const {
+			if (IsHurdleRegression()) return HurdleRegression_dZeta(y_data[iz], loc_zeta);
+			ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[iz], loc_eta, loc_zeta, o);
+			return o.dZeta;
+		}
+		/*! rief Structural-zero block (zeta) gradient of the negative Laplace marginal log-likelihood at one observation, for the
+		* dense / Vecchia / FITC / FSVA gradient functions that represent the implicit derivative via the vectors SigmaI_plus_W_inv_diag
+		* (data-mapped diagonal of (Sigma^-1+W)^-1) and SigmaI_plus_W_inv_d_mll_d_mode ((Sigma^-1+W)^-1 d_mll_d_mode). Hurdle: dJ_eta/dzeta =
+		* l_eta_zeta = 0, so this reduces to the direct score -w*dZeta and never indexes the two vectors (which are empty when
+		* grad_information_wrt_mode_non_zero_ is false). Zero-inflated counts add the log-det (dJ_eta/dzeta) and implicit (l_eta_zeta) terms. */
+		inline double RegressionZeroModel_dZetaDense(const double* y_data, const int* y_data_int, data_size_t i, double loc_eta, double loc_zeta,
+			double w, const vec_t& SigmaI_plus_W_inv_diag, const vec_t& SigmaI_plus_W_inv_d_mll_d_mode, data_size_t idx) const {
+			if (IsHurdleRegression()) return -w * HurdleRegression_dZeta(y_data[i], loc_zeta);
+			ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[i], loc_eta, loc_zeta, o);
+			return -w * o.dZeta + 0.5 * (w * RegressionZeroModel_dInfodZeta(loc_eta, loc_zeta, o)) * SigmaI_plus_W_inv_diag[idx] + (w * o.lEtaZeta) * SigmaI_plus_W_inv_d_mll_d_mode[idx];
 		}
 
 		inline double LogLikGamma(double y, double location_par, bool incl_norm_const) const {
@@ -9848,9 +11929,9 @@ namespace GPBoost {
 			double ll = 0.0;
 			if (y > 0.0) {
 				const double q = 1. - aux_pars_original_[1];// = 1 - p0
-				ll = -aux_pars_[0] * (location_par + q * y * std::exp(-location_par));
+				ll = -aux_pars_[0] * (location_par + y * std::exp(-location_par));
 				if (incl_norm_const) {
-					ll += std::log(q) + aux_pars_[0] * std::log(aux_pars_[0] * q) - std::lgamma(aux_pars_[0]) + (aux_pars_[0] - 1.0) * std::log(y);
+					ll += std::log(q) + aux_pars_[0] * std::log(aux_pars_[0]) - std::lgamma(aux_pars_[0]) + (aux_pars_[0] - 1.0) * std::log(y);
 				}
 			}
 			else { // y == 0
@@ -10057,6 +12138,25 @@ namespace GPBoost {
 					first_deriv_ll[i] = w * FirstDerivLogLikGamma(y_data[i], location_par[i]);
 				}
 			}
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.;
+					first_deriv_ll[i] = w * FirstDerivLogLikTweedie(y_data[i], location_par[i]);
+				}
+			}
+			else if (IsEGPDLikelihood() || IsHurdleEGPD()) {
+				const bool hurdle = IsHurdleEGPD();
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.;
+					if (w == 0. || (hurdle && y_data[i] <= 0.)) first_deriv_ll[i] = 0.;// zero part decouples from eta
+					else {
+						const auto result = EvaluateEGPD(y_data[i], location_par[i]);
+						first_deriv_ll[i] = result.status == EGPDEvalStatus::kValid ? w * result.d_eta : std::numeric_limits<double>::quiet_NaN();
+					}
+				}
+			}
 			else if (likelihood_type_ == "negative_binomial") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 				for (data_size_t i = 0; i < num_data_; ++i) {
@@ -10069,6 +12169,20 @@ namespace GPBoost {
 				for (data_size_t i = 0; i < num_data_; ++i) {
 					const double w = has_weights_ ? weights_[i] : 1.0;
 					first_deriv_ll[i] = w * FirstDerivLogLikNegBin1(y_data_int[i], location_par[i]);
+				}
+			}
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					first_deriv_ll[i] = w * FirstDerivLogLikZeroInflatedPoisson(y_data_int[i], location_par[i]);
+				}
+			}
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					first_deriv_ll[i] = w * FirstDerivLogLikZeroInflatedNegBinFamily(y_data_int[i], location_par[i]);
 				}
 			}
 			else if (likelihood_type_ == "beta") {
@@ -10111,6 +12225,22 @@ namespace GPBoost {
 					first_deriv_ll[i] = w * FirstDerivLogLikGaussianHeteroscedasticMean(y_data[i], location_par[i], location_par[i + num_data_]);
 				}
 			}
+			else if (IsHurdleRegression()) {
+				// Random effects live on the response predictor eta (block 0); this is the block-0 score used for mode finding.
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					first_deriv_ll[i] = w * HurdleRegression_dEta(y_data[i], location_par[i]);
+				}
+			}
+			else if (IsZeroInflatedCountRegression()) {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+				for (data_size_t iz = 0; iz < num_data_; ++iz) {
+					const double wz = has_weights_ ? weights_[iz] : 1.0;
+					ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[iz], location_par[iz], location_par[iz + num_data_], o);
+					first_deriv_ll[iz] = wz * o.dEta;
+				}
+			}
 			else if (likelihood_type_ == "lognormal") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 				for (data_size_t i = 0; i < num_data_; ++i) {
@@ -10125,10 +12255,17 @@ namespace GPBoost {
 					first_deriv_ll[i] = FirstDerivLogLikBetaBinomial(y_data[i], location_par[i], weights_[i]);
 				}
 			}
-			else if (likelihood_type_ == "zero_inflated_gamma") {
+			else if (likelihood_type_ == "hurdle_gamma") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 				for (data_size_t i = 0; i < num_data_; ++i) {
 					first_deriv_ll[i] = FirstDerivLogLikGammaZeroInflated(y_data[i], location_par[i]);
+				}
+			}
+			else if (likelihood_type_ == "hurdle_lognormal") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					first_deriv_ll[i] = w * FirstDerivLogLikLogNormalZeroInflated(y_data[i], location_par[i]);
 				}
 			}
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
@@ -10202,11 +12339,29 @@ namespace GPBoost {
 			else if (likelihood_type_ == "gamma") {
 				return(FirstDerivLogLikGamma(y_data, location_par));
 			}
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+				return FirstDerivLogLikTweedie(y_data, location_par);
+			}
+			else if (IsEGPDLikelihood()) {
+				const auto result = EvaluateEGPD(y_data, location_par);
+				return result.status == EGPDEvalStatus::kValid ? result.d_eta : std::numeric_limits<double>::quiet_NaN();
+			}
+			else if (IsHurdleEGPD()) {
+				if (y_data <= 0.) return 0.;
+				const auto result = EvaluateEGPD(y_data, location_par);
+				return result.status == EGPDEvalStatus::kValid ? result.d_eta : std::numeric_limits<double>::quiet_NaN();
+			}
 			else if (likelihood_type_ == "negative_binomial") {
 				return(FirstDerivLogLikNegBin(y_data_int, location_par));
 			}
 			else if (likelihood_type_ == "negative_binomial_1") {
 				return(FirstDerivLogLikNegBin1(y_data_int, location_par));
+			}
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				return(FirstDerivLogLikZeroInflatedPoisson(y_data_int, location_par));
+			}
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				return(FirstDerivLogLikZeroInflatedNegBinFamily(y_data_int, location_par));
 			}
 			else if (likelihood_type_ == "beta") {
 				return(FirstDerivLogLikBeta(y_data, location_par));
@@ -10220,8 +12375,11 @@ namespace GPBoost {
 			else if (likelihood_type_ == "lognormal") {
 				return(FirstDerivLogLikLogNormal(y_data, location_par));
 			}
-			else if (likelihood_type_ == "zero_inflated_gamma") {
+			else if (likelihood_type_ == "hurdle_gamma") {
 				return(FirstDerivLogLikGammaZeroInflated(y_data, location_par));
+			}
+			else if (likelihood_type_ == "hurdle_lognormal") {
+				return(FirstDerivLogLikLogNormalZeroInflated(y_data, location_par));
 			}
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 				return FirstDerivLogLikZeroCensPowNorm(y_data, location_par);
@@ -10346,8 +12504,7 @@ namespace GPBoost {
 
 		inline double FirstDerivLogLikGammaZeroInflated(double y, double location_par) const {
 			if (y <= 0.) return 0.;
-			const double q = 1. - aux_pars_original_[1];// = 1 - p0
-			return aux_pars_[0] * (q * y * std::exp(-location_par) - 1.);
+			return aux_pars_[0] * (y * std::exp(-location_par) - 1.);
 		}
 
 		inline double FirstDerivLogLikZeroCensPowNorm(double y, double location_par) const {
@@ -10535,8 +12692,9 @@ namespace GPBoost {
 		}
 
 		/*!
-		* \brief Calculate (usually only the diagonal) the Fisher information aggregated per random effect
-		*			This is usually the second derivative of the negative (!) log-likelihood with respect to the location parameter, i.e., the observed FI
+		* \brief Calculate the information, i.e., either (i) the Hessian of the negative log-likelihood, (ii) the Fisher information (=expected Hessian), or (iii) sometimes an approximate quasi-Fisher information.
+		*			This is usually the second derivative of the negative log-likelihood with respect to the location parameter, i.e., the observed FI.
+		*			This is usually a diagonal matrix and only its diagonal part is calculated.
 		* \param y_data Response variable data if response variable is continuous
 		* \param y_data_int Response variable data if response variable is integer-valued
 		* \param location_par Location parameter (random plus fixed effects)
@@ -10558,10 +12716,6 @@ namespace GPBoost {
 			}
 			else {// !use_random_effects_indices_of_data_
 				CalcInformationLogLik_PerSample(y_data, y_data_int, location_par, called_during_mode_finding, information_ll_, off_diag_information_ll_);
-			}
-			if (HasNegativeValueInformationLogLik()) {
-				Log::REDebug("Negative values found in the (diagonal) Hessian / Fisher information for the Laplace approximation. "
-					"This is not necessarily a problem, but it could lead to non-positive definite matrices ");
 			}
 			if (information_has_off_diagonal_) {
 				CHECK(num_sets_re_ == 2);
@@ -10630,8 +12784,9 @@ namespace GPBoost {
 		}//end CalcInformationLogLik
 
 		/*!
-		* \brief Calculate (usually only the diagonal) the Fisher information per sample.
-		*			This is usually the second derivative of the negative (!) log-likelihood with respect to the location parameter, i.e., the observed FI
+		* Calculate the information per sample., i.e., either (i) the Hessian of the negative log-likelihood, (ii) the Fisher information (=expected Hessian), or (iii) sometimes an approximate quasi-Fisher information.
+		*			This is usually the second derivative of the negative log-likelihood with respect to the location parameter, i.e., the observed FI.
+		*			This is usually a diagonal matrix and only its diagonal part is calculated.
 		* \param y_data Response variable data if response variable is continuous
 		* \param y_data_int Response variable data if response variable is integer-valued
 		* \param location_par Location parameter (random plus fixed effects)
@@ -10688,6 +12843,25 @@ namespace GPBoost {
 						information_ll[i] = w * SecondDerivNegLogLikGamma(y_data[i], location_par[i]);
 					}
 				}
+				else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						information_ll[i] = w * InformationLogLikTweedie(y_data[i], location_par[i]);
+					}
+				}
+				else if (IsEGPDLikelihood() || IsHurdleEGPD()) {
+					const bool hurdle = IsHurdleEGPD();
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						if (w == 0. || (hurdle && y_data[i] <= 0.)) information_ll[i] = 0.;
+						else {
+							const auto result = EvaluateEGPD(y_data[i], location_par[i]);
+							information_ll[i] = result.status == EGPDEvalStatus::kValid ? -w * result.d2_eta : std::numeric_limits<double>::quiet_NaN();
+						}
+					}
+				}
 				else if (likelihood_type_ == "negative_binomial") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 					for (data_size_t i = 0; i < num_data_; ++i) {
@@ -10700,6 +12874,20 @@ namespace GPBoost {
 					for (data_size_t i = 0; i < num_data_; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
 						information_ll[i] = w * SecondDerivNegLogLikNegBin1(y_data_int[i], location_par[i]);
+					}
+				}
+				else if (likelihood_type_ == "zero_inflated_poisson") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						information_ll[i] = w * SecondDerivNegLogLikZeroInflatedPoisson(y_data_int[i], location_par[i]);
+					}
+				}
+				else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						information_ll[i] = w * SecondDerivNegLogLikZeroInflatedNegBinFamily(y_data_int[i], location_par[i]);
 					}
 				}
 				else if (likelihood_type_ == "beta") {
@@ -10751,11 +12939,34 @@ namespace GPBoost {
 						information_ll[i] = SecondDerivNegLogLikBetaBinomial(y_data[i], location_par[i], weights_[i]);
 					}
 				}
-				else if (likelihood_type_ == "zero_inflated_gamma") {
+				else if (likelihood_type_ == "hurdle_gamma") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 					for (data_size_t i = 0; i < num_data_; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
 						information_ll[i] = w * SecondDerivNegLogLikGammaZeroInflated(y_data[i], location_par[i]);
+					}
+				}
+				else if (likelihood_type_ == "hurdle_lognormal") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						information_ll[i] = w * SecondDerivNegLogLikLogNormalZeroInflated(y_data[i]);
+					}
+				}
+				else if (IsHurdleRegression()) {
+					// Block-0 (eta) observed information used for the Laplace mode / random effects
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						information_ll[i] = w * HurdleRegression_Jeta(y_data[i], location_par[i]);
+					}
+				}
+				else if (IsZeroInflatedCountRegression()) {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t iz = 0; iz < num_data_; ++iz) {
+						const double wz = has_weights_ ? weights_[iz] : 1.0;
+						ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[iz], location_par[iz], location_par[iz + num_data_], o);
+						information_ll[iz] = wz * o.Jeta;
 					}
 				}
 				else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
@@ -10855,6 +13066,29 @@ namespace GPBoost {
 						information_ll[i] = w * FI;
 					}
 				}
+					else if (IsZeroInflatedCount()) {
+						// Fisher (expected) information wrt eta of a zero-inflated count (does not depend on y -> nonnegative).
+						const int kind = ZICountBaseKind();
+						const bool reg = IsZeroInflatedCountRegression();
+						const double pi_const = reg ? 0. : ZICountConstantP0();
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							const double mu = std::exp(location_par[i]);
+							const double pi = reg ? GPBoost::sigmoid_stable(location_par[i + num_data_]) : pi_const;
+							ZICountZeroMass z; FillZeroMassZICountKind(mu, z, kind);
+							information_ll[i] = w * ZICountFisherInfoEta(mu, pi, z, kind);
+						}
+					}
+					else if (likelihood_type_ == "negative_binomial_1") {
+						// Base NB1: QUASI-Fisher information mu/(1+phi) (no closed-form exact Fisher wrt eta). Used for mode finding only;
+						// the determinant/gradient uses the observed Hessian (approximation_type_ = "laplace").
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							information_ll[i] = w * std::exp(location_par[i]) / (1. + aux_pars_[0]);
+						}
+					}
 				else {
 					Log::REFatal("CalcInformationLogLik_PerSample: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
 						likelihood_type_.c_str(), approximation_type_local.c_str());
@@ -10903,11 +13137,29 @@ namespace GPBoost {
 				else if (likelihood_type_ == "gamma") {
 					return(SecondDerivNegLogLikGamma(y_data, location_par));
 				}
+				else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+					return InformationLogLikTweedie(y_data, location_par);
+				}
+				else if (IsEGPDLikelihood()) {
+					const auto result = EvaluateEGPD(y_data, location_par);
+					return result.status == EGPDEvalStatus::kValid ? -result.d2_eta : std::numeric_limits<double>::quiet_NaN();
+				}
+				else if (IsHurdleEGPD()) {
+					if (y_data <= 0.) return 0.;
+					const auto result = EvaluateEGPD(y_data, location_par);
+					return result.status == EGPDEvalStatus::kValid ? -result.d2_eta : std::numeric_limits<double>::quiet_NaN();
+				}
 				else if (likelihood_type_ == "negative_binomial") {
 					return(SecondDerivNegLogLikNegBin(y_data_int, location_par));
 				}
 				else if (likelihood_type_ == "negative_binomial_1") {
 					return(SecondDerivNegLogLikNegBin1(y_data_int, location_par));
+				}
+				else if (likelihood_type_ == "zero_inflated_poisson") {
+					return(SecondDerivNegLogLikZeroInflatedPoisson(y_data_int, location_par));
+				}
+				else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+					return(SecondDerivNegLogLikZeroInflatedNegBinFamily(y_data_int, location_par));
 				}
 				else if (likelihood_type_ == "beta") {
 					return(SecondDerivNegLogLikBeta(y_data, location_par));
@@ -10918,8 +13170,11 @@ namespace GPBoost {
 				else if (likelihood_type_ == "lognormal") {
 					return(SecondDerivNegLogLikLogNormal());
 				}
-				else if (likelihood_type_ == "zero_inflated_gamma") {
+				else if (likelihood_type_ == "hurdle_gamma") {
 					return(SecondDerivNegLogLikGammaZeroInflated(y_data, location_par));
+				}
+				else if (likelihood_type_ == "hurdle_lognormal") {
+					return(SecondDerivNegLogLikLogNormalZeroInflated(y_data));
 				}
 				else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 					return SecondDerivNegLogLikZeroCensPowNorm(y_data, location_par);
@@ -11099,8 +13354,7 @@ namespace GPBoost {
 
 		inline double SecondDerivNegLogLikGammaZeroInflated(double y, double location_par) const {
 			if (y <= 0.) return 0.;
-			const double q = 1. - aux_pars_original_[1];// = 1 - p0
-			return q * aux_pars_[0] * y * std::exp(-location_par);
+			return aux_pars_[0] * y * std::exp(-location_par);
 		}
 
 		inline double SecondDerivNegLogLikZeroCensPowNorm(double y, double location_par) const {
@@ -11523,11 +13777,45 @@ namespace GPBoost {
 						deriv_information_diag_loc_par[i] = w * std::exp(location_par[i]);
 					}
 				}
+				else if (likelihood_type_ == "zero_inflated_poisson") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						deriv_information_diag_loc_par[i] = w * DerivInformationLocParZeroInflatedPoisson(y_data_int[i], location_par[i]);
+					}
+				}
+				else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						deriv_information_diag_loc_par[i] = w * DerivInformationLocParZeroInflatedNegBinFamily(y_data_int[i], location_par[i]);
+					}
+				}
 				else if (likelihood_type_ == "gamma") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 					for (data_size_t i = 0; i < num_data_; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
 						deriv_information_diag_loc_par[i] = w * -aux_pars_[0] * y_data[i] * std::exp(-location_par[i]);
+					}
+				}
+				else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+					const double p = GetTweediePower();
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						deriv_information_diag_loc_par[i] = w * EvaluateTweedieLocation(y_data[i], location_par[i], std::log(aux_pars_[0]), p).deriv_information_eta;
+					}
+				}
+				else if (IsEGPDLikelihood() || IsHurdleEGPD()) {
+					const bool hurdle = IsHurdleEGPD();
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						if (w == 0. || (hurdle && y_data[i] <= 0.)) deriv_information_diag_loc_par[i] = 0.;
+						else {
+							const auto result = EvaluateEGPD(y_data[i], location_par[i]);
+							deriv_information_diag_loc_par[i] = result.status == EGPDEvalStatus::kValid ? -w * result.d3_eta : std::numeric_limits<double>::quiet_NaN();
+						}
 					}
 				}
 				else if (likelihood_type_ == "negative_binomial") {
@@ -11589,10 +13877,25 @@ namespace GPBoost {
 						deriv_information_diag_loc_par[i] = w * -2. * (aux_pars_[1] + 1.) * (res_sq - 3. * nu_sigma2) * res / (denom * denom * denom);
 					}
 				}
-				else if (IsGaussianLikelihood() || likelihood_type_ == "lognormal") {
+				else if (IsGaussianLikelihood() || likelihood_type_ == "lognormal" || likelihood_type_ == "hurdle_lognormal") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 					for (data_size_t i = 0; i < num_data_; ++i) {
 						deriv_information_diag_loc_par[i] = 0.;
+					}
+				}
+				else if (IsHurdleRegression()) {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						deriv_information_diag_loc_par[i] = w * HurdleRegression_dJetadEta(y_data[i], location_par[i]);
+					}
+				}
+				else if (IsZeroInflatedCountRegression()) {
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t iz = 0; iz < num_data_; ++iz) {
+						const double wz = has_weights_ ? weights_[iz] : 1.0;
+						ZICountRegQuant o; ZICountRegressionQuantities(y_data_int[iz], location_par[iz], location_par[iz + num_data_], o);
+						deriv_information_diag_loc_par[iz] = wz * o.dJetadEta;
 					}
 				}
 				else if (likelihood_type_ == "beta_binomial") {
@@ -11621,8 +13924,7 @@ namespace GPBoost {
 						}
 					}
 				} // end "beta_binomial"
-				else if (likelihood_type_ == "zero_inflated_gamma") {
-					const double q = 1. - aux_pars_original_[1];// = 1 - p0
+				else if (likelihood_type_ == "hurdle_gamma") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 					for (data_size_t i = 0; i < num_data_; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
@@ -11630,10 +13932,10 @@ namespace GPBoost {
 							deriv_information_diag_loc_par[i] = 0.0;
 						}
 						else {
-							deriv_information_diag_loc_par[i] = w * -q * aux_pars_[0] * y_data[i] * std::exp(-location_par[i]);
+							deriv_information_diag_loc_par[i] = w * -aux_pars_[0] * y_data[i] * std::exp(-location_par[i]);
 						}
 					}
-				}//end "zero_inflated_gamma"
+				}//end "hurdle_gamma"
 				else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 					for (data_size_t i = 0; i < num_data_; ++i) {
@@ -11782,6 +14084,23 @@ namespace GPBoost {
 						deriv_information_diag_loc_par[i] = w * -std::exp(-location_par[i + num_data_]);
 					}
 				}
+					else if (IsZeroInflatedCount()) {
+						// d Fisher / d eta by central differences (the Fisher information is a smooth function of eta = log mu).
+						const int kind = ZICountBaseKind();
+						const bool reg = IsZeroInflatedCountRegression();
+						const double pi_const = reg ? 0. : ZICountConstantP0();
+						const double h = 1e-5;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							const double eta = location_par[i];
+							const double pi = reg ? GPBoost::sigmoid_stable(location_par[i + num_data_]) : pi_const;
+							ZICountZeroMass zp, zm;
+							const double mup = std::exp(eta + h), mum = std::exp(eta - h);
+							FillZeroMassZICountKind(mup, zp, kind); FillZeroMassZICountKind(mum, zm, kind);
+							deriv_information_diag_loc_par[i] = w * (ZICountFisherInfoEta(mup, pi, zp, kind) - ZICountFisherInfoEta(mum, pi, zm, kind)) / (2. * h);
+						}
+					}
 				else {
 					Log::REFatal("CalcFirstDerivInformationLocPar_PerSample: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
 						likelihood_type_.c_str(), approximation_type_.c_str());
@@ -11817,7 +14136,7 @@ namespace GPBoost {
 		void CalcGradNegLogLikAuxPars(const double* y_data,
 			const int* y_data_int,
 			const double* location_par,
-			double* grad) const {
+			double* grad) {
 			if (likelihood_type_ == "gamma") {
 				CHECK(aux_normalizing_constant_has_been_calculated_);
 				//gradient for shape parameter is calculated on the log-scale
@@ -11934,9 +14253,9 @@ namespace GPBoost {
 				}
 				grad[0] = neg_log_grad;
 			}//end "beta_binomial"
-			else if (likelihood_type_ == "zero_inflated_gamma") {
+			else if (likelihood_type_ == "hurdle_gamma") {
 				CHECK(aux_normalizing_constant_has_been_calculated_);
-				const double r = aux_pars_[1];
+				const double p0 = aux_pars_original_[1];
 				const double q = 1. - aux_pars_original_[1];// = 1 - p0
 				double Wpos = 0.0, Wzero = 0.0, sum_for_gamma = 0.0;
 #pragma omp parallel for schedule(static) reduction(+:Wpos,Wzero,sum_for_gamma)
@@ -11944,27 +14263,141 @@ namespace GPBoost {
 					const double w = has_weights_ ? weights_[i] : 1.0;
 					if (y_data[i] > 0.0) {
 						Wpos += w;
-						sum_for_gamma += w * (location_par[i] + q * y_data[i] * std::exp(-location_par[i]));
+						sum_for_gamma += w * (location_par[i] + y_data[i] * std::exp(-location_par[i]));
 					}
 					else {
 						Wzero += w;
 					}
 				}
-				double neg_log_grad_gamma = sum_for_gamma - Wpos * (std::log(aux_pars_[0]) + 1. - GPBoost::digamma(aux_pars_[0]) + std::log(q)) -
+				double neg_log_grad_gamma = sum_for_gamma - Wpos * (std::log(aux_pars_[0]) + 1. - GPBoost::digamma(aux_pars_[0])) -
 					aux_log_normalizing_constant_;
 				grad[0] = neg_log_grad_gamma * aux_pars_[0];//grad on log(gamma)
-				// grad on log r
-				double neg_log_grad_r = -q * Wzero;
-#pragma omp parallel for schedule(static) reduction(+:neg_log_grad_r)
+				// Gradient on log odds, log(r) = log(p0 / (1-p0)).
+				grad[1] = p0 * Wpos - q * Wzero;
+			}//end "hurdle_gamma"
+			else if (likelihood_type_ == "hurdle_lognormal") {
+				const double p0 = aux_pars_original_[1];
+				const double q = 1. - p0;
+				const double s2 = aux_pars_[0];
+				double Wpos = 0., Wzero = 0., neg_log_grad_s2 = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:Wpos, Wzero, neg_log_grad_s2)
 				for (data_size_t i = 0; i < num_data_; ++i) {
-					if (y_data[i] > 0.) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
-						const double e_m_eta = std::exp(-location_par[i]);
-						neg_log_grad_r += w * (r * q * (1.0 + aux_pars_[0]) - r * aux_pars_[0] * q * q * y_data[i] * e_m_eta);
+					const double w = has_weights_ ? weights_[i] : 1.0;
+					if (y_data[i] > 0.0) {
+						Wpos += w;
+						const double z = std::log(y_data[i]) - (location_par[i] - 0.5 * s2);
+						neg_log_grad_s2 += w * ((z + 1.0) * 0.5 - (z * z) / (2.0 * s2));// same per-obs term as base lognormal, wrt log(sigma2)
+					}
+					else Wzero += w;
+				}
+				grad[0] = neg_log_grad_s2;// already on log(sigma2) scale (matches base lognormal)
+				grad[1] = p0 * Wpos - q * Wzero;// wrt rho = logit(p0)
+			}//end "hurdle_lognormal"
+			else if (IsHurdleRegression()) {
+				// Base-likelihood auxiliary gradient over the positive observations only (the structural zero is a separate fixed-effects block).
+				const string_t base = HurdleRegressionBaseType();
+				if (base == "hurdle_gamma") {
+					double Wpos = 0., sum_for_gamma = 0.;
+#pragma omp parallel for schedule(static) reduction(+:Wpos, sum_for_gamma)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						if (y_data[i] > 0.) { const double w = has_weights_ ? weights_[i] : 1.0; Wpos += w; sum_for_gamma += w * (location_par[i] + y_data[i] * std::exp(-location_par[i])); }
+					}
+					grad[0] = (sum_for_gamma - Wpos * (std::log(aux_pars_[0]) + 1. - GPBoost::digamma(aux_pars_[0])) - aux_log_normalizing_constant_) * aux_pars_[0];
+				}
+				else if (base == "hurdle_lognormal") {
+					const double s2 = aux_pars_[0];
+					double g = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:g)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						if (y_data[i] > 0.) { const double w = has_weights_ ? weights_[i] : 1.0; const double z = std::log(y_data[i]) - (location_par[i] - 0.5 * s2); g += w * ((z + 1.0) * 0.5 - (z * z) / (2.0 * s2)); }
+					}
+					grad[0] = g;
+				}
+				else {// EGPD base: score over positive observations, on the optimizer scale
+					for (int j = 0; j < num_aux_pars_estim_; ++j) {
+						double score_sum = 0.;
+#pragma omp parallel for schedule(static) reduction(+:score_sum) if (num_data_ >= 128)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							if (y_data[i] <= 0.) continue;
+							const double w = has_weights_ ? weights_[i] : 1.;
+							const auto r = EvaluateEGPD(y_data[i], location_par[i]);
+							if (r.status == EGPDEvalStatus::kValid) score_sum += w * r.d_aux_optimizer[j];
+						}
+						grad[j] = -score_sum;
 					}
 				}
-				grad[1] = neg_log_grad_r;
-			}//end "zero_inflated_gamma"
+			}//end hurdle regression
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				// Gradient of the negative log-likelihood wrt rho = log(p0/(1-p0)) = logit(p0): sum_i w_i (pi_i - tau_i),
+				// with pi_i = p0 and tau_i = w_i^post (posterior structural-zero prob) for y_i = 0, tau_i = 0 for y_i > 0.
+				const double p0 = aux_pars_original_[0];
+				double grad_rho = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:grad_rho)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double wt = has_weights_ ? weights_[i] : 1.0;
+					if (y_data_int[i] == 0) {
+						const double mu = std::exp(location_par[i]);
+						double wpost;
+						ZIPoissonZeroLogMixture(mu, p0, wpost);
+						grad_rho += wt * (p0 - wpost);
+					}
+					else {
+						grad_rho += wt * p0;
+					}
+				}
+				grad[0] = grad_rho;
+			}//end "zero_inflated_poisson"
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				// grad[0]: negative-ll gradient wrt log(shape/dispersion); grad[1]: wrt rho = logit(p0).
+				const double p0 = aux_pars_original_[1];
+				double grad_shape = 0., grad_rho = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:grad_shape, grad_rho)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double wt = has_weights_ ? weights_[i] : 1.0;
+					if (y_data_int[i] > 0) {
+						grad_shape += wt * NegLLGradShapeNegBinFamilyPos(y_data_int[i], location_par[i]);
+						grad_rho += wt * p0;
+					}
+					else {
+						const double mu = std::exp(location_par[i]);
+						ZICountZeroMass z; FillZeroMassZICount(mu, z);
+						double w, v; ZICountZeroLogMixture(p0, z.b0, w, v);
+						grad_shape += wt * (-v * z.g0);// d(-l)/d log(shape) = -v*g0 at a zero count
+						grad_rho += wt * (p0 - w);
+					}
+				}
+				grad[0] = grad_shape;
+				grad[1] = grad_rho;
+			}//end zero_inflated_negative_binomial(_1)
+			else if (IsZeroInflatedCountRegression()) {
+				// Base-count auxiliary gradient (shape for NB2, dispersion for NB1; Poisson has none). Per-obs pi from zeta.
+				const string_t base = ZICountRegressionBaseType();
+				if (base != "zero_inflated_poisson") {
+					const bool nb2 = (base == "zero_inflated_negative_binomial");
+					double grad_shape = 0.;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128) reduction(+:grad_shape)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double wt = has_weights_ ? weights_[i] : 1.0;
+						if (y_data_int[i] > 0) {
+							const double mu = std::exp(location_par[i]);
+							if (nb2) {
+								const double mu_plus_r = mu + aux_pars_[0]; const double y_plus_r = y_data_int[i] + aux_pars_[0];
+								grad_shape += wt * (aux_pars_[0] * (-GPBoost::digamma(y_plus_r) + std::log(mu_plus_r) + y_plus_r / mu_plus_r) + aux_pars_[0] * (GPBoost::digamma(aux_pars_[0]) - std::log(aux_pars_[0]) - 1.));
+							}
+							else {
+								const double r = mu / aux_pars_[0]; const double C = GPBoost::digamma(y_data_int[i] + r) - GPBoost::digamma(r) - std::log1p(aux_pars_[0]);
+								grad_shape += wt * (r * C + (mu - y_data_int[i]) / (1.0 + aux_pars_[0]));
+							}
+						}
+						else {
+							ZICountRegQuant o; ZICountRegressionQuantities(0, location_par[i], location_par[i + num_data_], o);
+							ZICountZeroMass z; FillZeroMassCountRegression(std::exp(location_par[i]), z);
+							grad_shape += wt * (-o.v * z.g0);
+						}
+					}
+					grad[0] = grad_shape;
+				}
+			}//end zero-inflated count regression
 			else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 				double grad_log_sigma = 0.0, grad_log_lambda = 0.0;
 #pragma omp parallel for schedule(static) reduction(+:grad_log_sigma,grad_log_lambda)
@@ -12143,6 +14576,68 @@ namespace GPBoost {
 				grad[0] = -dlogL_dlogk;     // gradient of *negative* log-likelihood
 				grad[1] = -dlogL_dlogxi;
 			} // end "zero_one_censored_shifted_gamma"
+			else if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+				// SetAuxPars() invalidates the normalizer cache. Some optimization paths evaluate the auxiliary
+				// gradient before reevaluating the objective, so refresh the cache here when necessary.
+				CalculateLogNormalizingConstant(y_data, y_data_int);
+				const double phi = aux_pars_[0];
+				const double p = GetTweediePower();
+				const double dp = likelihood_type_ == "tweedie" ? TransformTweediePowerFromQ(aux_pars_[1], TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_).dp_dtheta : 0.;
+				// Verify that the normalizer-derivative aggregates correspond to the current auxiliary parameters.
+				CHECK(normalizing_constant_has_been_calculated_);
+				CHECK(TwoNumbersAreEqual<double>(tweedie_cached_phi_, phi));
+				CHECK(TwoNumbersAreEqual<double>(tweedie_cached_p_, p));
+				double canonical_sum = 0., power_sum = 0.;
+#pragma omp parallel for schedule(static) reduction(+:canonical_sum,power_sum)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.;
+					const double eta = location_par[i];
+					const auto location = EvaluateTweedieLocation(y_data[i], eta, std::log(phi), p);
+					canonical_sum += w * location.canonical;
+					if (likelihood_type_ == "tweedie") {
+						const double coefficient_a = eta / (2. - p) - 1. / ((2. - p) * (2. - p));
+						const double coefficient_b = eta / (p - 1.) + 1. / ((p - 1.) * (p - 1.));
+						power_sum += w * dp * TweedieSignedLogSum(coefficient_a, location.log_scaled_a, coefficient_b, location.log_scaled_b);
+					}
+				}
+				grad[0] = -tweedie_sum_d_log_a_rho_ + canonical_sum;
+				if (likelihood_type_ == "tweedie") grad[1] = -tweedie_sum_d_log_a_theta_ - power_sum;
+			}
+			else if (IsEGPDLikelihood()) {
+				for (int j = 0; j < num_aux_pars_estim_; ++j) {
+					double score_sum = 0.;
+#pragma omp parallel for schedule(static) reduction(+:score_sum) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						if (w == 0.) continue;
+						const auto result = EvaluateEGPD(y_data[i], location_par[i]);
+						if (result.status == EGPDEvalStatus::kValid) score_sum += w * result.d_aux_optimizer[j];
+					}
+					grad[j] = -score_sum;
+				}
+			}
+			else if (IsHurdleEGPD()) {
+				const int ip0 = num_aux_pars_ - 1;
+				const double p0 = aux_pars_original_[ip0];
+				for (int j = 0; j < ip0; ++j) {// base EGPD auxiliary parameters (score over positive observations)
+					double score_sum = 0.;
+#pragma omp parallel for schedule(static) reduction(+:score_sum) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						if (w == 0. || y_data[i] <= 0.) continue;
+						const auto result = EvaluateEGPD(y_data[i], location_par[i]);
+						if (result.status == EGPDEvalStatus::kValid) score_sum += w * result.d_aux_optimizer[j];
+					}
+					grad[j] = -score_sum;
+				}
+				double Wpos = 0., Wzero = 0.;
+#pragma omp parallel for schedule(static) reduction(+:Wpos, Wzero) if (num_data_ >= 128)
+				for (data_size_t i = 0; i < num_data_; ++i) {
+					const double w = has_weights_ ? weights_[i] : 1.;
+					if (y_data[i] > 0.) Wpos += w; else Wzero += w;
+				}
+				grad[ip0] = p0 * Wpos - (1. - p0) * Wzero;// gradient wrt rho = logit(p0)
+			}//end hurdle EGPD variants
 			else if (likelihood_type_ == "asymmetric_laplace") {
 				//gradient for scale parameter is calculated on the log-scale
 				double neg_log_grad = 0.;
@@ -12179,7 +14674,58 @@ namespace GPBoost {
 			double* second_deriv_loc_aux_par,
 			double* deriv_information_aux_par) const {
 			if (approximation_type_ == "laplace") {
-				if (likelihood_type_ == "gamma") {
+				if (likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p") {
+					CHECK(ind_aux_par == 0 || (likelihood_type_ == "tweedie" && ind_aux_par == 1));
+					const double dp = likelihood_type_ == "tweedie" ? TransformTweediePowerFromQ(aux_pars_[1], TWEEDIE_POWER_LOWER_, TWEEDIE_POWER_UPPER_).dp_dtheta : 0.;
+#pragma omp parallel for schedule(static)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						const double s = FirstDerivLogLikTweedie(y_data[i], location_par[i]);
+						const double information = InformationLogLikTweedie(y_data[i], location_par[i]);
+						if (ind_aux_par == 0) {
+							second_deriv_loc_aux_par[i] = -w * s;
+							deriv_information_aux_par[i] = -w * information;
+						}
+						else {
+							second_deriv_loc_aux_par[i] = -w * dp * location_par[i] * s;
+							deriv_information_aux_par[i] = w * dp * (s - location_par[i] * information);
+						}
+					}
+				}
+				else if (IsEGPDLikelihood()) {
+					CHECK(ind_aux_par >= 0 && ind_aux_par < num_aux_pars_estim_);
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						if (w == 0.) { second_deriv_loc_aux_par[i] = 0.; deriv_information_aux_par[i] = 0.; }
+						else {
+							const auto result = EvaluateEGPD(y_data[i], location_par[i]);
+							if (result.status == EGPDEvalStatus::kValid) {
+								second_deriv_loc_aux_par[i] = w * result.d_eta_aux_optimizer[ind_aux_par];
+								deriv_information_aux_par[i] = -w * result.d2_eta_aux_optimizer[ind_aux_par];
+							}
+							else { second_deriv_loc_aux_par[i] = std::numeric_limits<double>::quiet_NaN(); deriv_information_aux_par[i] = std::numeric_limits<double>::quiet_NaN(); }
+						}
+					}
+				}
+				else if (IsHurdleEGPD()) {
+					CHECK(ind_aux_par >= 0 && ind_aux_par < num_aux_pars_estim_);
+					const int ip0 = num_aux_pars_ - 1;// structural-zero parameter index (rho); decouples from eta
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.;
+						if (w == 0. || ind_aux_par == ip0 || y_data[i] <= 0.) { second_deriv_loc_aux_par[i] = 0.; deriv_information_aux_par[i] = 0.; }
+						else {
+							const auto result = EvaluateEGPD(y_data[i], location_par[i]);
+							if (result.status == EGPDEvalStatus::kValid) {
+								second_deriv_loc_aux_par[i] = w * result.d_eta_aux_optimizer[ind_aux_par];
+								deriv_information_aux_par[i] = -w * result.d2_eta_aux_optimizer[ind_aux_par];
+							}
+							else { second_deriv_loc_aux_par[i] = std::numeric_limits<double>::quiet_NaN(); deriv_information_aux_par[i] = std::numeric_limits<double>::quiet_NaN(); }
+						}
+					}
+				}
+				else if (likelihood_type_ == "gamma") {
 					//note: gradient wrt to aux_pars_[0] on the log-scale
 					CHECK(ind_aux_par == 0);
 #pragma omp parallel for schedule(static)
@@ -12197,10 +14743,9 @@ namespace GPBoost {
 						const double w = has_weights_ ? weights_[i] : 1.0;
 						const double mu = std::exp(location_par[i]);
 						const double mu_plus_r = mu + aux_pars_[0];
-						const double y_plus_r = y_data_int[i] + aux_pars_[0];
 						const double mu_r_div_mu_plus_r_sqr = mu * aux_pars_[0] / (mu_plus_r * mu_plus_r);
 						second_deriv_loc_aux_par[i] = w * mu_r_div_mu_plus_r_sqr * (y_data_int[i] - mu);
-						deriv_information_aux_par[i] = w * -mu_r_div_mu_plus_r_sqr * (y_data_int[i] * (aux_pars_[0] - mu) - 2 * aux_pars_[0] * mu) / y_plus_r;
+						deriv_information_aux_par[i] = w * -mu_r_div_mu_plus_r_sqr * (y_data_int[i] * (aux_pars_[0] - mu) - 2 * aux_pars_[0] * mu) / mu_plus_r;
 					}
 				}
 				else if (likelihood_type_ == "negative_binomial_1") {
@@ -12339,10 +14884,8 @@ namespace GPBoost {
 						}
 					}
 				}//end "beta_binomial"
-				else if (likelihood_type_ == "zero_inflated_gamma") {
+				else if (likelihood_type_ == "hurdle_gamma") {
 					CHECK(ind_aux_par == 0 || ind_aux_par == 1);
-					const double r = aux_pars_[1];
-					const double q = 1. - aux_pars_original_[1];// = 1 - p0
 #pragma omp parallel for schedule(static) if (num_data_ >= 128)
 					for (data_size_t i = 0; i < num_data_; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
@@ -12353,16 +14896,157 @@ namespace GPBoost {
 						}
 						const double y_exp_neg_loc = y_data[i] * std::exp(-location_par[i]);
 						if (ind_aux_par == 0) { // log gamma
-							second_deriv_loc_aux_par[i] = w * aux_pars_[0] * (q * y_exp_neg_loc - 1.0);
-							deriv_information_aux_par[i] = w * q * aux_pars_[0] * y_exp_neg_loc; // = W_i
+							second_deriv_loc_aux_par[i] = w * aux_pars_[0] * (y_exp_neg_loc - 1.0);
+							deriv_information_aux_par[i] = w * aux_pars_[0] * y_exp_neg_loc; // = W_i
 						}
 						else { // log r
-							const double val = -r * aux_pars_[0] * q * q * y_exp_neg_loc;
-							second_deriv_loc_aux_par[i] = w * val;
-							deriv_information_aux_par[i] = w * val;
+							second_deriv_loc_aux_par[i] = 0.;
+							deriv_information_aux_par[i] = 0.;
 						}
 					}
-				}//end "zero_inflated_gamma"
+				}//end "hurdle_gamma"
+				else if (likelihood_type_ == "hurdle_lognormal") {
+					CHECK(ind_aux_par == 0 || ind_aux_par == 1);
+					const double s2 = aux_pars_[0];
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data[i] <= 0.0 || ind_aux_par == 1) {// zero part decouples; rho (ind 1) has no coupling with eta
+							second_deriv_loc_aux_par[i] = 0.0;
+							deriv_information_aux_par[i] = 0.0;
+							continue;
+						}
+						// ind_aux_par == 0 (log sigma2), positive observation: base lognormal cross-derivatives
+						second_deriv_loc_aux_par[i] = w * (-std::log(y_data[i]) + location_par[i]) / s2;
+						deriv_information_aux_par[i] = w * (-1.0 / s2);
+					}
+				}//end "hurdle_lognormal"
+				else if (IsHurdleRegression()) {
+					const string_t base = HurdleRegressionBaseType();
+					const bool egpd = (base != "hurdle_gamma" && base != "hurdle_lognormal");
+					const double s2 = aux_pars_[0];
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data[i] <= 0.0) { second_deriv_loc_aux_par[i] = 0.; deriv_information_aux_par[i] = 0.; continue; }
+						if (base == "hurdle_gamma") {
+							const double y_exp_neg_loc = y_data[i] * std::exp(-location_par[i]);
+							second_deriv_loc_aux_par[i] = w * aux_pars_[0] * (y_exp_neg_loc - 1.0);
+							deriv_information_aux_par[i] = w * aux_pars_[0] * y_exp_neg_loc;
+						}
+						else if (base == "hurdle_lognormal") {
+							second_deriv_loc_aux_par[i] = w * (-std::log(y_data[i]) + location_par[i]) / s2;
+							deriv_information_aux_par[i] = w * (-1.0 / s2);
+						}
+						else {// EGPD base
+							const auto r = EvaluateEGPD(y_data[i], location_par[i]);
+							if (r.status == EGPDEvalStatus::kValid) { second_deriv_loc_aux_par[i] = w * r.d_eta_aux_optimizer[ind_aux_par]; deriv_information_aux_par[i] = -w * r.d2_eta_aux_optimizer[ind_aux_par]; }
+							else { second_deriv_loc_aux_par[i] = std::numeric_limits<double>::quiet_NaN(); deriv_information_aux_par[i] = std::numeric_limits<double>::quiet_NaN(); }
+						}
+					}
+					(void)egpd;
+				}//end hurdle regression
+				else if (likelihood_type_ == "zero_inflated_poisson") {
+					// Only aux par is rho = logit(p0) (= zero predictor zeta). Cross-derivatives are nonzero only at zero counts.
+					CHECK(ind_aux_par == 0);
+					const double p0 = aux_pars_original_[0];
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double w = has_weights_ ? weights_[i] : 1.0;
+						if (y_data_int[i] != 0) {
+							second_deriv_loc_aux_par[i] = 0.;
+							deriv_information_aux_par[i] = 0.;
+							continue;
+						}
+						const double mu = std::exp(location_par[i]);
+						double wpost;
+						ZIPoissonZeroLogMixture(mu, p0, wpost);
+						const double v = 1. - wpost;
+						// l_{eta,rho} = -v*w*s0 = v*w*mu  (s0 = -mu)
+						second_deriv_loc_aux_par[i] = w * (v * wpost * mu);
+						// dJ_eta/drho = v*w*(t0 + (w-v)*s0^2) = v*w*(-mu + (w-v)*mu^2)
+						deriv_information_aux_par[i] = w * (v * wpost * (-mu + (wpost - v) * mu * mu));
+					}
+				}//end "zero_inflated_poisson"
+				else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+					CHECK(ind_aux_par == 0 || ind_aux_par == 1);
+					const bool nb2 = (likelihood_type_ == "zero_inflated_negative_binomial");
+					const double p0 = aux_pars_original_[1];
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double wt = has_weights_ ? weights_[i] : 1.0;
+						double sdl = 0., dinfo = 0.;
+						if (y_data_int[i] > 0) {
+							if (ind_aux_par == 0) {// log(shape/dispersion), base NB cross-derivatives (positive count)
+								const double mu = std::exp(location_par[i]);
+								if (nb2) {
+									const double mu_plus_r = mu + aux_pars_[0];
+									const double mrr = mu * aux_pars_[0] / (mu_plus_r * mu_plus_r);
+									sdl = mrr * (y_data_int[i] - mu);
+									dinfo = -mrr * (y_data_int[i] * (aux_pars_[0] - mu) - 2. * aux_pars_[0] * mu) / mu_plus_r;
+								}
+								else {
+									const double r = mu / aux_pars_[0];
+									const double dig_diff = GPBoost::digamma(y_data_int[i] + r) - GPBoost::digamma(r);
+									const double tri_diff = GPBoost::trigamma(y_data_int[i] + r) - GPBoost::trigamma(r);
+									const double tet_diff = GPBoost::tetragamma(y_data_int[i] + r) - GPBoost::tetragamma(r);
+									const double C = dig_diff - std::log1p(aux_pars_[0]);
+									sdl = -(r * C + r * r * tri_diff + mu / (1.0 + aux_pars_[0]));
+									dinfo = 3.0 * r * r * tri_diff + r * r * r * tet_diff + r * C + mu / (1.0 + aux_pars_[0]);
+								}
+							}// else ind_aux_par == 1 (rho): both zero for positive counts
+						}
+						else {// zero count
+							const double mu = std::exp(location_par[i]);
+							ZICountZeroMass z; FillZeroMassZICount(mu, z);
+							double wpost, v; ZICountZeroLogMixture(p0, z.b0, wpost, v);
+							if (ind_aux_par == 0) {
+								sdl = ZICountZero_lEtaShape(z, wpost, v);
+								dinfo = ZICountZero_dJetadShape(z, wpost, v);
+							}
+							else {
+								sdl = ZICountZero_lEtaRho(z, wpost, v);
+								dinfo = ZICountZero_dJetadRho(z, wpost, v);
+							}
+						}
+						second_deriv_loc_aux_par[i] = wt * sdl;
+						deriv_information_aux_par[i] = wt * dinfo;
+					}
+				}//end zero_inflated_negative_binomial(_1)
+				else if (IsZeroInflatedCountRegression()) {
+					// Base-count auxiliary cross-derivatives over positive observations; at zero counts use the mixture-weighted forms (per-obs pi from zeta).
+					const string_t base = ZICountRegressionBaseType();
+					const bool nb2 = (base == "zero_inflated_negative_binomial");
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+					for (data_size_t i = 0; i < num_data_; ++i) {
+						const double wt = has_weights_ ? weights_[i] : 1.0;
+						double sdl = 0., dinfo = 0.;
+						if (y_data_int[i] > 0) {
+							const double mu = std::exp(location_par[i]);
+							if (nb2) {
+								const double mu_plus_r = mu + aux_pars_[0]; const double mrr = mu * aux_pars_[0] / (mu_plus_r * mu_plus_r);
+								sdl = mrr * (y_data_int[i] - mu);
+								dinfo = -mrr * (y_data_int[i] * (aux_pars_[0] - mu) - 2. * aux_pars_[0] * mu) / mu_plus_r;
+							}
+							else {
+								const double r = mu / aux_pars_[0];
+								const double dd = GPBoost::digamma(y_data_int[i] + r) - GPBoost::digamma(r); const double td = GPBoost::trigamma(y_data_int[i] + r) - GPBoost::trigamma(r); const double tt = GPBoost::tetragamma(y_data_int[i] + r) - GPBoost::tetragamma(r); const double C = dd - std::log1p(aux_pars_[0]);
+								sdl = -(r * C + r * r * td + mu / (1.0 + aux_pars_[0]));
+								dinfo = 3.0 * r * r * td + r * r * r * tt + r * C + mu / (1.0 + aux_pars_[0]);
+							}
+						}
+						else {
+							const double mu = std::exp(location_par[i]);
+							ZICountZeroMass z; FillZeroMassCountRegression(mu, z);
+							ZICountRegQuant o; ZICountRegressionQuantities(0, location_par[i], location_par[i + num_data_], o);
+							const double v = o.v, w = 1. - v;
+							sdl = ZICountZero_lEtaShape(z, w, v);
+							dinfo = ZICountZero_dJetadShape(z, w, v);
+						}
+						second_deriv_loc_aux_par[i] = wt * sdl;
+						deriv_information_aux_par[i] = wt * dinfo;
+					}
+				}//end zero-inflated count regression
 				else if (likelihood_type_ == "zero_censored_power_transformed_normal") {
 					CHECK(ind_aux_par == 0 || ind_aux_par == 1);
 #pragma omp parallel for schedule(static)
@@ -12690,6 +15374,82 @@ namespace GPBoost {
 						deriv_information_aux_par[i] = w * -2. * quantile_ * (1. - quantile_) / (aux_pars_[0] * aux_pars_[0]);
 					}
 				}// end "asymmetric_laplace"
+					else if (likelihood_type_ == "zero_inflated_poisson") {
+						// Fisher aux cross-derivative for rho = logit(p0): second_deriv_loc_aux (score cross-deriv) is unchanged; the
+						// information derivative uses d Fisher / d rho (numerical). Nonzero only at zero counts for the score cross-deriv.
+						CHECK(ind_aux_par == 0);
+						const double pi = ZICountConstantP0();
+						const double h = 1e-5;
+						const double rho = std::log(pi) - std::log1p(-pi);
+						const double pi_p = GPBoost::sigmoid_stable(rho + h), pi_m = GPBoost::sigmoid_stable(rho - h);
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							const double mu = std::exp(location_par[i]);
+							ZICountZeroMass z; FillZeroMassZICountKind(mu, z, 0);
+							if (y_data_int[i] != 0) { second_deriv_loc_aux_par[i] = 0.; }
+							else { double wpost; ZIPoissonZeroLogMixture(mu, pi, wpost); second_deriv_loc_aux_par[i] = w * ((1. - wpost) * wpost * mu); }
+							deriv_information_aux_par[i] = w * (ZICountFisherInfoEta(mu, pi_p, z, 0) - ZICountFisherInfoEta(mu, pi_m, z, 0)) / (2. * h);
+						}
+					}
+					else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+						CHECK(ind_aux_par == 0 || ind_aux_par == 1);
+						const int kind = ZICountBaseKind();
+						const bool nb2 = (kind == 2);
+						const double pi = ZICountConstantP0();
+						const double base_aux = aux_pars_[0];
+						const double h = 1e-5;
+						const double rho = std::log(pi) - std::log1p(-pi);
+						const double pi_p = GPBoost::sigmoid_stable(rho + h), pi_m = GPBoost::sigmoid_stable(rho - h);
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							const double mu = std::exp(location_par[i]);
+							double sdl = 0.;// second_deriv_loc_aux = d^2 l / d eta d aux (same as the Laplace/observed case)
+							if (y_data_int[i] > 0) {
+								if (ind_aux_par == 0) {// log(shape/dispersion), positive count
+									if (nb2) { const double mpr = mu + base_aux; sdl = mu * base_aux / (mpr * mpr) * (y_data_int[i] - mu); }
+									else { const double r = mu / base_aux; const double C = GPBoost::digamma(y_data_int[i] + r) - GPBoost::digamma(r) - std::log1p(base_aux); const double td = GPBoost::trigamma(y_data_int[i] + r) - GPBoost::trigamma(r); sdl = -(r * C + r * r * td + mu / (1.0 + base_aux)); }
+								}// ind_aux_par == 1 (rho): sdl = 0 for positive counts
+							}
+							else {// zero count
+								ZICountZeroMass z; FillZeroMassZICount(mu, z);
+								double wpost, v; ZICountZeroLogMixture(pi, z.b0, wpost, v);
+								sdl = (ind_aux_par == 0) ? ZICountZero_lEtaShape(z, wpost, v) : ZICountZero_lEtaRho(z, wpost, v);
+							}
+							second_deriv_loc_aux_par[i] = w * sdl;
+							double dinfo;// deriv_information_aux = d Fisher / d aux (numerical)
+							if (ind_aux_par == 0) { const double a_p = base_aux * std::exp(h), a_m = base_aux * std::exp(-h); dinfo = (ZICountFisherInfoEtaExplicit(mu, pi, kind, a_p) - ZICountFisherInfoEtaExplicit(mu, pi, kind, a_m)) / (2. * h); }
+							else { dinfo = (ZICountFisherInfoEtaExplicit(mu, pi_p, kind, base_aux) - ZICountFisherInfoEtaExplicit(mu, pi_m, kind, base_aux)) / (2. * h); }
+							deriv_information_aux_par[i] = w * dinfo;
+						}
+					}
+					else if (IsZeroInflatedCountRegression()) {
+						// Fisher case: only ZINB regression has an aux (shape). ZIP regression has none; ZINB1 regression is combined (Laplace).
+						const int kind = ZICountBaseKind();
+						const bool nb2 = (kind == 2);
+						const double base_aux = aux_pars_[0];
+						const double h = 1e-5;
+#pragma omp parallel for schedule(static) if (num_data_ >= 128)
+						for (data_size_t i = 0; i < num_data_; ++i) {
+							const double w = has_weights_ ? weights_[i] : 1.0;
+							const double mu = std::exp(location_par[i]);
+							const double pi = GPBoost::sigmoid_stable(location_par[i + num_data_]);
+							double sdl = 0.;// score cross-deriv d^2 l / d eta d log(shape) (same as the Laplace case)
+							if (y_data_int[i] > 0) {
+								if (nb2) { const double mpr = mu + base_aux; sdl = mu * base_aux / (mpr * mpr) * (y_data_int[i] - mu); }
+								else { const double r = mu / base_aux; const double C = GPBoost::digamma(y_data_int[i] + r) - GPBoost::digamma(r) - std::log1p(base_aux); const double td = GPBoost::trigamma(y_data_int[i] + r) - GPBoost::trigamma(r); sdl = -(r * C + r * r * td + mu / (1.0 + base_aux)); }
+							}
+							else {
+								ZICountZeroMass z; FillZeroMassCountRegression(mu, z);
+								ZICountRegQuant o; ZICountRegressionQuantities(0, location_par[i], location_par[i + num_data_], o);
+								const double v = o.v, wp = 1. - v; sdl = ZICountZero_lEtaShape(z, wp, v);
+							}
+							second_deriv_loc_aux_par[i] = w * sdl;
+							const double a_p = base_aux * std::exp(h), a_m = base_aux * std::exp(-h);// d Fisher / d log(shape), per-obs pi from zeta
+							deriv_information_aux_par[i] = w * (ZICountFisherInfoEtaExplicit(mu, pi, kind, a_p) - ZICountFisherInfoEtaExplicit(mu, pi, kind, a_m)) / (2. * h);
+						}
+					}
 				else if (num_aux_pars_estim_ > 0) {
 					Log::REFatal("CalcSecondDerivNegLogLikAuxParsLocPar: Likelihood of type '%s' is not supported for approximation_type = '%s' ",
 						likelihood_type_.c_str(), approximation_type_.c_str());
@@ -12738,9 +15498,28 @@ namespace GPBoost {
 				likelihood_type_ == "beta" || likelihood_type_ == "beta_binomial" || likelihood_type_ == "quasi_bernoulli_logit") {
 				return GPBoost::sigmoid_stable(value);
 			}
-			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
+			else if (IsEGPDLikelihood()) {
+				const auto& moments = GetEGPDMoments();
+				if (!moments.mean_exists || moments.status != EGPDEvalStatus::kValid) Log::REFatal("CondMeanLikelihood: the EGPD response mean is unavailable ");
+				return moments.mean_unit_scale * std::exp(value);
+			}
+			else if (IsHurdleEGPD()) {
+				const auto& moments = GetEGPDMoments();
+				if (!moments.mean_exists || moments.status != EGPDEvalStatus::kValid) Log::REFatal("The EGPD response mean is unavailable for likelihood='%s' ", likelihood_type_.c_str());
+				return (1. - aux_pars_original_[num_aux_pars_ - 1]) * moments.mean_unit_scale * std::exp(value);
+			}
+			else if (likelihood_type_ == "hurdle_gamma" || likelihood_type_ == "hurdle_lognormal") {
+				return (1. - aux_pars_original_[1]) * std::exp(value);
+			}
+			else if (likelihood_type_ == "zero_inflated_poisson") {
+				return (1. - aux_pars_original_[0]) * std::exp(value);
+			}
+			else if (likelihood_type_ == "zero_inflated_negative_binomial" || likelihood_type_ == "zero_inflated_negative_binomial_1") {
+				return (1. - aux_pars_original_[1]) * std::exp(value);
+			}
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
-				likelihood_type_ == "lognormal" || likelihood_type_ == "zero_inflated_gamma") {
+				likelihood_type_ == "lognormal") {
 				return std::exp(value);
 			}
 			else {
@@ -12758,9 +15537,9 @@ namespace GPBoost {
 				likelihood_type_ == "beta" || likelihood_type_ == "beta_binomial") {
 				return GPBoost::sigmoid_stable(-value);
 			}
-			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" || IsEGPDLikelihood() ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
-				likelihood_type_ == "lognormal" || likelihood_type_ == "zero_inflated_gamma") {
+				likelihood_type_ == "lognormal" || IsHurdlePositive() || IsZeroInflatedCount()) {
 				return 1.;
 			}
 			else if (likelihood_type_ == "t" || IsGaussianLikelihood()) {
@@ -12785,9 +15564,9 @@ namespace GPBoost {
 				//double exp_x = std::exp(value);
 				//return -exp_x / ((1. + exp_x) * (1. + exp_x));
 			}
-			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" ||
+			else if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" || IsEGPDLikelihood() ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" ||
-				likelihood_type_ == "lognormal" || likelihood_type_ == "zero_inflated_gamma") {
+				likelihood_type_ == "lognormal" || IsHurdlePositive() || IsZeroInflatedCount()) {
 				return 0.;
 			}
 			else if (likelihood_type_ == "t" || IsGaussianLikelihood()) {
@@ -12808,6 +15587,11 @@ namespace GPBoost {
 				double exp_min_val = std::exp(-value);
 				return exp_min_val / ((1. + exp_min_val) * (1. + exp_min_val)) / (1. + aux_pars_[0]);
 			}
+			else if (IsEGPDLikelihood()) {
+				const auto& moments = GetEGPDMoments();
+				if (!moments.variance_exists || moments.status != EGPDEvalStatus::kValid) Log::REFatal("CondVarLikelihood: the EGPD response variance is unavailable ");
+				return moments.variance_unit_scale * std::exp(2. * value);
+			}
 			else {
 				Log::REFatal("CondVarLikelihood: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
 				return 0.;
@@ -12821,6 +15605,9 @@ namespace GPBoost {
 		inline double FirstDerivLogCondVarLikelihood(const double value) const {
 			if (likelihood_type_ == "beta") {
 				return (-1. + 2. / (1. + std::exp(value)));
+			}
+			else if (IsEGPDLikelihood()) {
+				return 2.;
 			}
 			else {
 				Log::REFatal("FirstDerivLogCondVarLikelihood: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
@@ -12836,6 +15623,9 @@ namespace GPBoost {
 			if (likelihood_type_ == "beta") {
 				double exp_x = std::exp(value);
 				return -2 * exp_x / ((1. + exp_x) * (1. + exp_x));
+			}
+			else if (IsEGPDLikelihood()) {
+				return 0.;
 			}
 			else {
 				Log::REFatal("SecondDerivLogCondVarLikelihood: Likelihood of type '%s' is not supported.", likelihood_type_.c_str());
@@ -12998,6 +15788,13 @@ namespace GPBoost {
 		* \param[out] chol_fact Cholesky factor
 		* \param psi Matrix for which the Cholesky decomposition should be done
 		*/
+		template <class T_chol_1>
+		void CheckCholeskyFactorization(const T_chol_1& chol_fact, const char* caller) const {
+			if (chol_fact.info() != Eigen::Success) {
+				Log::REFatal("%s: Cholesky factorization failed because the matrix is not positive definite or contains non-finite values ", caller);
+			}
+		}
+
 		template <class T_mat_1, typename std::enable_if <std::is_same<sp_mat_t, T_mat_1>::value ||
 			std::is_same<sp_mat_rm_t, T_mat_1>::value>::type* = nullptr >
 		void CalcChol(T_chol& chol_fact, const T_mat_1& psi, bool& chol_fact_pattern_analyzed) {
@@ -13006,10 +15803,12 @@ namespace GPBoost {
 				chol_fact_pattern_analyzed = true;
 			}
 			chol_fact.factorize(psi);
+			CheckCholeskyFactorization(chol_fact, "CalcChol");
 		}
 		template <class T_mat_1, typename std::enable_if <std::is_same<den_mat_t, T_mat_1>::value>::type* = nullptr  >
 		void CalcChol(T_chol& chol_fact, const T_mat_1& psi, bool&) {
 			chol_fact.compute(psi);
+			CheckCholeskyFactorization(chol_fact, "CalcChol");
 		}
 
 		// Initialize location parameter of log-likelihood for calculation of approx. marginal log-likelihood (objective function)
@@ -13286,6 +16085,41 @@ namespace GPBoost {
 			return GPBoost::HasNegativeValues<double>(information_ll_.data(), (data_size_t)information_ll_.size());
 		}//end HasNegativeValueInformationLogLik
 
+		bool HasNegativeValueInformationLogLikOnDataScale() const {
+			if (!information_ll_can_be_negative_) return false;
+			if (use_random_effects_indices_of_data_) {
+				return GPBoost::HasNegativeValues<double>(information_ll_data_scale_.data(), (data_size_t)information_ll_data_scale_.size());
+			}
+			return HasNegativeValueInformationLogLik();
+		}
+
+		void LogFatalWithPotentialFisherLaplaceHint(const char* caller, const char* message) const {
+			// Recommend Fisher-Laplace only as an alternative to a currently selected observed-Hessian Laplace determinant
+			bool should_recommend_fisher_laplace = false, should_recommend_fisher_laplace_combined = false;
+			if (approximation_type_ == "laplace" && LIKELIHOODS_SUPPORTS_FISHER_MODE_FINDING_.find(likelihood_type_) != LIKELIHOODS_SUPPORTS_FISHER_MODE_FINDING_.end()) {
+				if (use_fisher_for_mode_finding_) {
+					should_recommend_fisher_laplace = true, should_recommend_fisher_laplace_combined = false;
+				}
+				else {
+					should_recommend_fisher_laplace = false, should_recommend_fisher_laplace_combined = true;
+				}
+			}
+			const bool quasi_fisher = likelihood_type_ == "negative_binomial_1" || likelihood_type_ == "zero_inflated_negative_binomial_1" ||
+				likelihood_type_ == "zero_inflated_regression_negative_binomial_1";
+			if (should_recommend_fisher_laplace) {
+				Log::REFatal("%s: %sTry likelihood '%s_fisher_laplace' to use %s information for both mode finding and log-determinant ",
+					caller, message, likelihood_type_.c_str(), quasi_fisher ? "quasi-Fisher" : "Fisher");
+			} 
+			else if (should_recommend_fisher_laplace_combined) {
+				Log::REFatal("%s: %sTry either (i) likelihood '%s_fisher_laplace_combined' to use %s information for mode finding and Hessian for log-determinant or (ii) likelihood '%s_fisher_laplace' to use %s information for both mode finding and log-determinant ",
+					caller, message, likelihood_type_.c_str(), quasi_fisher ? "quasi-Fisher" : "Fisher",
+					likelihood_type_.c_str(), quasi_fisher ? "quasi-Fisher" : "Fisher");
+			}
+			else {
+				Log::REFatal("%s: %s", caller, message);
+			}
+		}
+
 		bool HasZeroValueInformationLogLik() const {
 			if (!information_ll_can_be_exact_zero_) return false;
 			return GPBoost::HasExactZero<double>(information_ll_.data(), (data_size_t)information_ll_.size());
@@ -13338,6 +16172,10 @@ namespace GPBoost {
 			std::vector<vec_t> Tsubdiags_W_SigmaI(num_rand_vec_trace_, vec_t(cg_max_num_it_tridiag - 1));
 			if (cg_preconditioner_type_ == "fitc") {
 				const den_mat_t* cross_cov_preconditioner = re_comps_cross_cov_preconditioner_cluster_i[0]->GetSigmaPtr();
+				if (HasNegativeValueInformationLogLik()) {
+					Log::REFatal("CalcLogDetStochFSVA: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+						"Stochastic evaluation of the Laplace determinant with the 'fitc' preconditioner requires log(W) ");
+				}
 				if (HasZeroValueInformationLogLik()) {
 					Log::REFatal("CalcLogDetStochFSVA: 0's found in the (diagonal) Hessian (or Fisher information) of the negative log-likelihood. "
 						"This is not permitted for the VIF approximation and iterative methods with the '%s' preconditioner. Try using the 'vifdu' preconditioner or the Cholesky decomposition ", cg_preconditioner_type_.c_str());
@@ -13386,6 +16224,10 @@ namespace GPBoost {
 			bool initialize_to_zero,
 			bool calculate_preconditioners) {
 			if (cg_preconditioner_type_ == "pivoted_cholesky" || cg_preconditioner_type_ == "fitc" || cg_preconditioner_type_ == "vecchia_response") {
+				if (calculate_preconditioners && HasNegativeValueInformationLogLik()) {
+					Log::REFatal("Inv_SigmaI_plus_ZtWZ_Vecchia_iterative: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+						"The '%s' preconditioner is based on a positive-definite W^(-1) formulation. Try another preconditioner (e.g. 'vadu') or the Cholesky decomposition ", cg_preconditioner_type_.c_str());
+				}
 				if ((information_ll_.array() > 1e10).any() && calculate_preconditioners) {
 					has_NA_or_Inf = true;// the inversion of the preconditioner with the Woodbury identity can be numerically unstable when information_ll_ is very large
 				}
@@ -13399,6 +16241,7 @@ namespace GPBoost {
 							I_k_plus_Sigma_L_kt_W_Sigma_L_k.setIdentity();
 							I_k_plus_Sigma_L_kt_W_Sigma_L_k += Sigma_L_k_.transpose() * information_ll_.asDiagonal() * Sigma_L_k_;
 							chol_fact_I_k_plus_Sigma_L_kt_W_Sigma_L_k_vecchia_.compute(I_k_plus_Sigma_L_kt_W_Sigma_L_k);
+							CheckCholeskyFactorization(chol_fact_I_k_plus_Sigma_L_kt_W_Sigma_L_k_vecchia_, "Vecchia iterative pivoted-Cholesky preconditioner");
 						}
 						else if (cg_preconditioner_type_ == "fitc") {
 							if (HasZeroValueInformationLogLik()) {
@@ -13416,6 +16259,7 @@ namespace GPBoost {
 							sigma_woodbury = (*cross_cov).transpose() * (diagonal_approx_inv_preconditioner_.asDiagonal() * (*cross_cov));
 							sigma_woodbury += sigma_ip_stable_;
 							chol_fact_woodbury_preconditioner_.compute(sigma_woodbury);
+							CheckCholeskyFactorization(chol_fact_woodbury_preconditioner_, "Vecchia iterative FITC preconditioner");
 						}
 						else if (cg_preconditioner_type_ == "vecchia_response") {
 							sp_mat_t B_vecchia;
@@ -13492,6 +16336,10 @@ namespace GPBoost {
 			CHECK(rand_vec_trace_I_.cols() == num_rand_vec_trace_);
 			CHECK(rand_vec_trace_P_.cols() == num_rand_vec_trace_);
 			if (cg_preconditioner_type_ == "pivoted_cholesky" || cg_preconditioner_type_ == "fitc" || cg_preconditioner_type_ == "vecchia_response") {
+				if (HasNegativeValueInformationLogLik()) {
+					Log::REFatal("CalcLogDetStochVecchia: Negative values found in W (the diagonal Hessian or Fisher information of the negative log-likelihood). "
+						"Stochastic evaluation of the Laplace determinant with the '%s' preconditioner requires W to be positive ", cg_preconditioner_type_.c_str());
+				}
 				if (HasZeroValueInformationLogLik()) {
 					Log::REFatal("CalcLogDetStochVecchia: 0's found in the (diagonal) Hessian (or Fisher information) of the negative log-likelihood. "
 						"This is not permitted when using the Vecchia approximation and iterative methods with the '%s' preconditioner. Try using another preconditioner (e.g. 'vadu') or the Cholesky decomposition ", cg_preconditioner_type_.c_str());
@@ -13512,6 +16360,7 @@ namespace GPBoost {
 						I_k_plus_Sigma_L_kt_W_Sigma_L_k.setIdentity();
 						I_k_plus_Sigma_L_kt_W_Sigma_L_k += Sigma_L_k_.transpose() * information_ll_.asDiagonal() * Sigma_L_k_;
 						chol_fact_I_k_plus_Sigma_L_kt_W_Sigma_L_k_vecchia_.compute(I_k_plus_Sigma_L_kt_W_Sigma_L_k);
+						CheckCholeskyFactorization(chol_fact_I_k_plus_Sigma_L_kt_W_Sigma_L_k_vecchia_, "Vecchia iterative pivoted-Cholesky determinant preconditioner");
 					}
 				}
 				else if (cg_preconditioner_type_ == "fitc") {
@@ -13532,6 +16381,7 @@ namespace GPBoost {
 						sigma_woodbury = (*cross_cov).transpose() * (diagonal_approx_inv_preconditioner_.asDiagonal() * (*cross_cov));
 						sigma_woodbury += sigma_ip_stable_;
 						chol_fact_woodbury_preconditioner_.compute(sigma_woodbury);
+						CheckCholeskyFactorization(chol_fact_woodbury_preconditioner_, "Vecchia iterative FITC determinant preconditioner");
 					}
 					rand_vec_trace_P_ = chol_ip_cross_cov_.transpose() * rand_vec_trace_I2_ + diagonal_approx_preconditioner_.cwiseSqrt().asDiagonal() * rand_vec_trace_I_;
 				}
@@ -14286,14 +17136,39 @@ namespace GPBoost {
 
 		/*! \brief Type of likelihood  */
 		string_t likelihood_type_ = "gaussian";
-		/*! \brief List of supported covariance likelihoods */
+		static constexpr double TWEEDIE_POWER_LOWER_ = 1.01;
+		static constexpr double TWEEDIE_POWER_UPPER_ = 1.99;
+		double tweedie_sum_d_log_a_rho_ = 0.;
+		double tweedie_sum_d_log_a_theta_ = 0.;
+		// Snapshot of (phi, p) that the cached normalizer aggregates above correspond to; used to verify cache freshness in CalcGradNegLogLikAuxPars.
+		double tweedie_cached_phi_ = std::numeric_limits<double>::quiet_NaN();
+		double tweedie_cached_p_ = std::numeric_limits<double>::quiet_NaN();
+		mutable bool tweedie_boundary_warning_issued_ = false;
+		/*! \brief Cache of the EGPD unit-scale moments and the aux-parameter snapshot they correspond to (see GetEGPDMoments) */
+		EGPDMoments egpd_moments_cache_;
+		std::array<double, kMaxEGPDAuxPars> egpd_moments_cache_aux_{};
+		bool egpd_moments_cache_initialized_ = false;
+		/*! \brief List of supported likelihoods */
 		const std::set<string_t> SUPPORTED_LIKELIHOODS_{ "gaussian", "gaussian_latent", "bernoulli_probit", "bernoulli_logit", "binomial_probit", "binomial_logit", "quasi_bernoulli_probit", "quasi_bernoulli_logit",
-			"poisson", "gamma", "negative_binomial", "negative_binomial_1", "beta", "t", "gaussian_heteroscedastic", "gaussian_heteroscedastic_fixed_and_random", "lognormal", "beta_binomial",
-			"zero_inflated_gamma", "zero_censored_power_transformed_normal", "zoctn", "zero_one_censored_transformed_beta", "zero_one_censored_shifted_gamma",
-			"asymmetric_laplace" };
-		/*! \brief List of supported covariance likelihoods */
-		const std::set<string_t> LIKELIHOODS_ONLY_LAPLACE_{ "binomial_probit", "binomial_logit", "binomial_logit", "quasi_bernoulli_probit", "quasi_bernoulli_logit", "gamma", "negative_binomial", "negative_binomial_1",
-			"beta", "beta_binomial", "zero_inflated_gamma", "zero_censored_power_transformed_normal", "zoctn", "zero_one_censored_transformed_beta", "zero_one_censored_shifted_gamma" };
+			"poisson", "gamma", "tweedie", "tweedie_fixed_p", "negative_binomial", "negative_binomial_1", "beta", "t", "gaussian_heteroscedastic", "gaussian_heteroscedastic_fixed_and_random", "lognormal", "beta_binomial",
+			"hurdle_gamma", "hurdle_lognormal", "zero_censored_power_transformed_normal", "zoctn", "zero_one_censored_transformed_beta", "zero_one_censored_shifted_gamma",
+			"asymmetric_laplace", "gpd", "egpd_power", "egpd_power_mixture", "egpd_beta", "egpd_power_beta",
+			"zero_inflated_poisson", "zero_inflated_negative_binomial", "zero_inflated_negative_binomial_1",
+			"hurdle_gpd", "hurdle_egpd_power", "hurdle_egpd_power_mixture", "hurdle_egpd_beta", "hurdle_egpd_power_beta",
+			"hurdle_regression_gamma", "hurdle_regression_lognormal", "hurdle_regression_gpd", "hurdle_regression_egpd_power",
+			"hurdle_regression_egpd_power_mixture", "hurdle_regression_egpd_beta", "hurdle_regression_egpd_power_beta",
+			"zero_inflated_regression_poisson", "zero_inflated_regression_negative_binomial", "zero_inflated_regression_negative_binomial_1" };
+		/*! \brief List of likelihoods that work only for a standard Laplace approximation */
+		const std::set<string_t> LIKELIHOODS_ONLY_LAPLACE_{ "binomial_probit", "binomial_logit", "binomial_logit", "quasi_bernoulli_probit", "quasi_bernoulli_logit", "gamma", "negative_binomial",
+			"beta", "beta_binomial", "tweedie", "tweedie_fixed_p", "hurdle_gamma", "hurdle_lognormal", "zero_censored_power_transformed_normal", "zoctn", "zero_one_censored_transformed_beta", "zero_one_censored_shifted_gamma",
+			"gpd", "egpd_power", "egpd_power_mixture", "egpd_beta", "egpd_power_beta",
+			"hurdle_gpd", "hurdle_egpd_power", "hurdle_egpd_power_mixture", "hurdle_egpd_beta", "hurdle_egpd_power_beta",
+			"hurdle_regression_gamma", "hurdle_regression_lognormal", "hurdle_regression_gpd", "hurdle_regression_egpd_power",
+			"hurdle_regression_egpd_power_mixture", "hurdle_regression_egpd_beta", "hurdle_regression_egpd_power_beta" };
+		/*! \brief Likelihoods for which the (quasi-)Fisher information may be used for mode finding (use_fisher_for_mode_finding_ = true) */
+		const std::set<string_t> LIKELIHOODS_SUPPORTS_FISHER_MODE_FINDING_{ "t", "asymmetric_laplace", "negative_binomial_1",
+			"zero_inflated_poisson", "zero_inflated_negative_binomial", "zero_inflated_negative_binomial_1",
+			"zero_inflated_regression_poisson", "zero_inflated_regression_negative_binomial", "zero_inflated_regression_negative_binomial_1" };
 		/*! \brief True if response variable has int type */
 		bool has_int_label_;
 		/*! \brief Number of additional parameters for likelihoods */

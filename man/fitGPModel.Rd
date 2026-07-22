@@ -14,8 +14,9 @@ fitGPModel(likelihood = "gaussian", group_data = NULL,
   cov_fct_taper_shape = 1, num_neighbors = NULL,
   vecchia_ordering = "random", ind_points_selection = "kmeans++",
   num_ind_points = NULL, cover_tree_radius = 1, seed = 0L,
-  cluster_ids = NULL, free_raw_data = FALSE, y, X = NULL,
-  params = list(), vecchia_approx = NULL, vecchia_pred_type = NULL,
+  cluster_ids = NULL, fidelity_specific_mean = TRUE,
+  free_raw_data = FALSE, y, X = NULL, params = list(),
+  vecchia_approx = NULL, vecchia_pred_type = NULL,
   num_neighbors_pred = NULL, offset = NULL, fixed_effects = NULL,
   likelihood_additional_param = NULL)
 }
@@ -43,28 +44,57 @@ The variance is mu * (mu + r) / r, mu = mean, r = shape, with this parametrizati
 \item{ "negative_binomial_1": Negative binomial 1 (aka "nbinom1") likelihood with a log link function. 
 The variance is mu * (1 + phi), mu = mean, phi = dispersion, with this parametrization }
 \item{ "gamma": Gamma likelihood with a log link function }
+\item{ "tweedie": Compound Poisson--Gamma Tweedie likelihood with a log link, variance phi * mu^p, and 1.01 < p < 1.99. The dispersion phi and power p are estimated }
+\item{ "tweedie_fixed_p": The same Tweedie likelihood with p fixed through \code{likelihood_additional_param}; only phi is estimated. The fixed power must satisfy 1.01 < p < 1.99 }
+\item{ "gpd": Generalized Pareto likelihood for finite positive responses. The log scale parameter equals the latent predictor eta (sum of fixed and random effects), sigma = exp(eta), and the estimated auxiliary parameter is shape > -0.5 }
+\item{ "egpd_power": Naveau power-carrier extended generalized Pareto likelihood with auxiliary parameters shape and kappa }
+\item{ "egpd_power_mixture": Naveau ordered power-mixture carrier with auxiliary parameters shape, kappa1, delta_kappa, and p }
+\item{ "egpd_beta": Naveau beta-carrier extended generalized Pareto likelihood with auxiliary parameters shape and delta }
+\item{ "egpd_power_beta": Naveau power-beta carrier with auxiliary parameters shape, delta, and kappa }
+The GPD/EGPD likelihoods require finite y > 0. Response means exist for shape < 1 and response variances for shape < 0.5.
 \item{ "lognormal": Log-normal likelihood with a log link function }
 \item{ "beta" : Beta likelihood with a logit link function (parametrization of Ferrari and Cribari-Neto, 2004)}
-\item{ "t": t-distribution (e.g., for robust regression) }
+\item{ "t": t-distribution (e.g., for robust regression). The default approximation is Fisher-Laplace: Fisher information is used for both mode finding and determinant evaluation. }
 \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated
 \itemize{ \item{ The degrees-of-freedom (df) can be set via the \code{likelihood_additional_param} parameter. The default is df = 2 }}
 }
 \item{ "quantile_regression" / "asymmetric_laplace" : an asymmetric Laplace likelihood for quantile regression, aliases: "asymmetric_laplace", "quantile_regression" 
-\itemize{ \item{ The quantile can be set via the \code{likelihood_additional_param} parameter. The default is quantile = 0.5 }}
+\itemize{ \item{ The quantile must be supplied through the \code{likelihood_additional_param} parameter and must be strictly between 0 and 1 }}
+The default approximation is Fisher-Laplace: Fisher information is used for both mode finding and determinant evaluation.
+The triangular-kernel-curvature (TKC) approximation can be enabled by appending "_triangular_kernel_curvature" or the shorthand "_tkc",
+for example, "quantile_regression_tkc" or "asymmetric_laplace_triangular_kernel_curvature".
 }
-\item{ "zero_inflated_gamma": Zero-inflated gamma likelihood. 
-The log-transformed mean of the response variable equals the sum of fixed and random effects, E(y) = mu = exp(F(X) + Zb), 
-and the rate parameter equals (1-p0) * gamma / mu, where p0 is the zero-inflation probability and gamma the shape parameter. 
-I.e., the rate parameter depends on F(X) + Zb, and p0 and gamma are (univariate auxiliary) parameters that are estimated. 
-Note that E(y) = mu above refers the the mean of the entire distribution and not just the positive part }
+\item{ "hurdle_<base>" and "zero_inflated_<base>": Two-part likelihoods for response variables with an excess probability 'p0' of exact zeros.
+They combine a point mass 'p0' at zero with a base distribution for the remaining mass '1 - p0'. Use "hurdle_<base>" when the base has support 'y > 0'
+(positive continuous responses) and "zero_inflated_<base>" for counts (where the base can itself generate additional zeros). In both cases 'exp(F(X) + Zb)'
+is the mean or scale parameter of the (non-structural) base component - not the unconditional response mean - so E(y) = (1 - p0) * base_mean. The structural-zero
+probability 'p0' is estimated jointly with the base auxiliary parameters. Currently supported variants:
+\itemize{
+\item{ Hurdle (positive continuous base): "hurdle_gamma" (aux: shape), "hurdle_lognormal" (aux: log_variance), and the extreme-value bases
+"hurdle_gpd", "hurdle_egpd_power", "hurdle_egpd_power_mixture", "hurdle_egpd_beta", "hurdle_egpd_power_beta" (same aux parameters as the corresponding non-hurdle
+GPD/EGPD likelihoods, plus 'p0'). The alias "zero_inflated_gamma" maps to "hurdle_gamma". }
+\item{ Zero-inflated counts (integer y >= 0): "zero_inflated_poisson", "zero_inflated_negative_binomial" (aux: shape; aka "zero_inflated_nbinom2"),
+"zero_inflated_negative_binomial_1" (aux: dispersion; aka "zero_inflated_nbinom1"). The unsuffixed names default to combined Fisher-Laplace:
+the exact log-likelihood score and Fisher information (quasi-Fisher information for NB1) are used for mode finding, while the observed Hessian and its
+derivatives are used for the Laplace determinant. Append "_laplace" for observed-Hessian Newton mode finding, or "_fisher_laplace" to use Fisher
+(quasi-Fisher for NB1) information for both mode finding and determinant evaluation. }
+\item{ For both the hurdle (positive continuous) and the zero-inflated count families, the structural-zero probability can alternatively be modeled as a logistic
+regression on the covariates by inserting "regression" after the family prefix in the likelihood name (e.g. "hurdle_regression_gamma",
+"hurdle_regression_lognormal", "hurdle_regression_gpd", "zero_inflated_regression_poisson", "zero_inflated_regression_negative_binomial").
+The zero probability is then pi_i = 1 / (1 + exp(-x_i'alpha)), modeled through a second fixed-effects-only predictor that reuses the same design matrix
+X as the response model (the response predictor carries the random effects, the zero predictor does not). The estimated zero-model coefficients alpha are
+returned by get_coef() alongside the response-model coefficients, with the suffix "_zero". }
+}
+}
 \item{ "zero_censored_power_transformed_normal": Likelihood of a censored and power-transformed normal variable 
 for modeling data with a point mass at 0 and a continuous distribution for y > 0. 
 The model used is Y = max(0,X)^lambda, X ~ N(mu, sigma^2), where mu = F(X) + Zb, 
 and sigma and lambda are (auxiliary) parameters that are estimated. 
 For more details on this model, see Sigrist et al. (2012, AOAS) "A dynamic nonstationary spatio-temporal model for short term prediction of precipitation" }
 \item{ "zoctn": Zero-one censored transformed normal likelihood for modeling data in [0,1] with point masses at 0 and 1 
-and a continuous distribution on (0,1). The model used is Z ~ N(mu, sigma^2), W = max(min(Z,1),0), and Y = g(W), 
-where g(x) = expit(a + b * logit(x)) for x in (0,1), mu = F(X) + Zb, and sigma, a, and b are (auxiliary) parameters 
+and a continuous distribution on (0,1). The model used is T ~ N(mu, sigma^2), W = max(min(T,1),0), and Y = g(W),
+where g(x) = expit(a + b * logit(x)) for x in (0,1), mu = F(X) + Z_RE u, u denotes the random effects, Z_RE is their design matrix,
+and sigma, a, and b are (auxiliary) parameters
 that are estimated. For more details on this model, see Qiang and Sigrist (2026) }
 \item{ "zero_one_censored_transformed_beta": Zero-one censored transformed beta likelihood for modeling data in [0,1] 
 with point masses at 0 and 1 and a continuous distribution on (0,1). If T follows a beta distribution with mean 
@@ -76,10 +106,11 @@ with point masses at 0 and 1 and a continuous distribution on (0,1). The model u
 where Z follows a gamma distribution with mean mu = exp(F(X) + Zb) and shape k. The shape k and shift xi are 
 (auxiliary) parameters that are estimated. For more details on this model, see Sigrist and Stahel (2011) }
 \item{ "gaussian_heteroscedastic_fixed_and_random": Gaussian likelihood where both the mean and the variance
-are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation }
+are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation.
+Fisher-Laplace is the default and currently the only implemented approximation. }
 \item{ "gaussian_heteroscedastic": Gaussian likelihood where the mean is related to fixed and random effects and
 the log-error variance is related to fixed effects only (covariates and / or the GPBoost tree-boosting algorithm;
-no random effects / GPs for the variance) }
+no random effects / GPs for the variance). Fisher-Laplace is the default and currently the only implemented approximation. }
 \item{ Note: the first lines in the \href{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h}{likelihoods source file} contain additional comments on the specific parametrizations used }
 \item{ Note: other likelihoods can be implemented upon request }
 }}
@@ -144,6 +175,17 @@ For H = 0.5, this corresponds to Brownian motion (-> see the 'estimate_cov_par_i
 i.e., with a different range parameter for every coordinate of ``gp_coords`` except 
 for the first coordinate which has a range parameter of 1 due to identifiability with the marginal variance: 
 \eqn{ cov(s, s') = (\sigma^2/2)\left[ \left(s_1^2 + \sum_{k=2}^d (s_k/l_k)^2\right)^H + \left({s'}_1^2 + \sum_{k=2}^d ({s'}_k/l_k)^2\right)^H - \left((s_1-{s'}_1)^2 + \sum_{k=2}^d ((s_k-{s'}_k)/l_k)^2\right)^H \right] } }
+\item{ "ar1_mf_<base>": two-level autoregressive multifidelity covariance defined by
+\eqn{f_H(x)=\rho f_L(x)+\delta(x)}, where \eqn{f_L} and \eqn{\delta} are independent Gaussian processes
+using the same base covariance type but separate parameter vectors. 
+\itemize{
+\item{ For example, use "ar1_mf_matern", "ar1_mf_matern_ard", or "ar1_mf_matern_estimate_shape".}
+\item{ The last column of \code{gp_coords} must be 0 for low fidelity or 1 for high fidelity. All preceding columns are input coordinates for the GPs.}
+\item{ Covariance parameters are ordered as [low-fidelity base parameters, discrepancy base parameters, rho].
+The two base blocks use the ordinary parameter ordering of the base covariance, and rho is unrestricted and
+can be negative.} 
+\item{ Any supported base covariance except "wendland" can be used. Correlation tapering and
+Gaussian-process random coefficients are currently not supported for this model. }}}
 }}
 
 \item{cov_fct_shape}{A \code{numeric} specifying the shape parameter of the covariance function 
@@ -154,7 +196,9 @@ This parameter is irrelevant for some covariance functions such as the exponenti
 for Gaussian processes. Available options: 
 \itemize{
 \item{"none": No approximation }
-\item{"vecchia": Vecchia approximation; see Sigrist (2022, JMLR) for more details }
+\item{"vecchia": Vecchia approximation; see Sigrist (2022, JMLR) for more details.
+For "space_time_gneiting" and "ar1_mf_<base>", neighbors are selected by absolute correlation by default.
+Use gp_approx = "vecchia_euclidean" for Euclidean-distance selection. }
 \item{"full_scale_vecchia": Vecchia-inducing points full-scale (VIF) approximation; 
 see Gyger, Furrer, and Sigrist (2025) for more details }
 \item{"tapering": The covariance function is multiplied by 
@@ -251,6 +295,12 @@ for the cover tree algorithm}
 \item{cluster_ids}{A \code{vector} with elements indicating independent realizations of 
 random effects / Gaussian processes (same values = same process realization).
 The elements of 'cluster_ids' can be integer, double, or character.}
+
+\item{fidelity_specific_mean}{A \code{logical}. For an \code{ar1_mf_<base>} covariance,
+whether marginal mean models are fitted independently for low and high fidelity. If \code{TRUE}
+(the default), linear covariates supplied to \code{fit()} are internally expanded into separate
+low- and high-fidelity coefficient blocks, and the fidelity indicator is automatically added as
+a feature when the model is used in the GPBoost algorithm. Ignored for other covariance functions.}
 
 \item{free_raw_data}{A \code{boolean}. If TRUE, the data (groups, coordinates, covariate data for random coefficients) 
 is freed in R after initialization}
@@ -427,10 +477,11 @@ which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom f
 This is not to be confused with any auxiliary parameters that can be estimated and accessed through 
 the function \code{get_aux_pars} after estimation.
 Note that this \code{likelihood_additional_param} parameter is irrelevant for many likelihoods.
-If \code{likelihood_additional_param = NULL}, the following internal default values are used:
+If \code{likelihood_additional_param = NULL}, the following default and mandatory-value rules apply:
 \itemize{
 \item{ df = 2 for likelihood = "t_fix_df" }
-\item{ quantile = 0.5 for likelihood = "asymmetric_laplace" }
+\item{ No default is used for likelihood = "asymmetric_laplace"; a quantile strictly between 0 and 1 is required }
+\item{ No default is used for likelihood = "tweedie_fixed_p"; a power strictly between 1.01 and 1.99 is required }
 }}
 }
 \value{

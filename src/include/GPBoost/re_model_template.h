@@ -214,7 +214,7 @@ namespace GPBoost {
 					gp_approx_ = "vecchia";
 					vecchia_neighbor_selection_ = "correlation";
 				}
-				if (cov_fct_strg == "space_time_gneiting") {
+				if (cov_fct_strg == "space_time_gneiting" || cov_fct_strg.rfind("ar1_mf_", 0) == 0) {
 					if (gp_approx_ == "vecchia") {
 						vecchia_neighbor_selection_ = "correlation";//default is correlation-based neighbor search
 					}
@@ -507,26 +507,27 @@ namespace GPBoost {
 		* \brief Transform from the latent to the response variable scale (often this is the inverse link function)
 		*			This is only used by the 'ConvertOutput()' function in regression_objective.hpp
 		*/
-		double TransformToReponseScale(const double value) {
-			return(likelihood_[unique_clusters_[0]]->TransformToReponseScale(value));
+		double TransformToResponseScale(const double value) {
+			return(likelihood_[unique_clusters_[0]]->TransformToResponseScale(value));
 		}
 
 		/*!
 		* \brief Returns the type of covariance function
 		*/
-		string_t CovFunctionName() {
+		string_t CovFunctionName() const {
 			std::string cov_fct = "";
 			if (num_gp_total_ > 0) {
 				if (gp_approx_ == "none" || gp_approx_ == "tapering") {
-					std::shared_ptr<RECompGP<T_mat>> re_comp_gp_clus0 = std::dynamic_pointer_cast<RECompGP<T_mat>>(re_comps_[unique_clusters_[0]][0][ind_intercept_gp_]);
+					std::shared_ptr<RECompGP<T_mat>> re_comp_gp_clus0 = std::dynamic_pointer_cast<RECompGP<T_mat>>(
+						re_comps_.at(unique_clusters_[0]).at(0)[ind_intercept_gp_]);
 					cov_fct = re_comp_gp_clus0->CovFunctionName();
 				}
 				else if (gp_approx_ == "vecchia") {
-					std::shared_ptr<RECompGP<den_mat_t>> re_comp_gp_clus0 = re_comps_vecchia_[unique_clusters_[0]][0][0];
+					std::shared_ptr<RECompGP<den_mat_t>> re_comp_gp_clus0 = re_comps_vecchia_.at(unique_clusters_[0]).at(0)[0];
 					cov_fct = re_comp_gp_clus0->CovFunctionName();
 				}
 				else if (gp_approx_ == "fitc" || gp_approx_ == "full_scale_tapering" || gp_approx_ == "full_scale_vecchia") {
-					std::shared_ptr<RECompGP<den_mat_t>> re_comp_gp_clus0 = re_comps_ip_[unique_clusters_[0]][0][0];
+					std::shared_ptr<RECompGP<den_mat_t>> re_comp_gp_clus0 = re_comps_ip_.at(unique_clusters_[0]).at(0)[0];
 					cov_fct = re_comp_gp_clus0->CovFunctionName();
 				}
 				else {
@@ -2730,6 +2731,10 @@ namespace GPBoost {
 			return likelihood_[unique_clusters_[0]]->GetAuxPars();
 		}
 
+		void WarnIfTweediePowerAtBoundary() const {
+			likelihood_.at(unique_clusters_[0])->WarnIfTweediePowerAtBoundary();
+		}
+
 		/*!
 		* \brief Set aux_pars_
 		* \param aux_pars New values for aux_pars_
@@ -4067,16 +4072,16 @@ namespace GPBoost {
 							}
 							else if (vecchia_pred_type_ == "latent_order_obs_first_cond_all") {
 								if (num_gp_rand_coef_ > 0) {
-									Log::REFatal("The Vecchia approximation for latent process(es) is currently not implemented when having random coefficients");
+									Log::REFatal("The Vecchia approximation for latent process(es) is currently not implemented when having random coefficients ");
 								}
 								if (gp_approx_ == "full_scale_vecchia") {
-									Log::REFatal("The full-scale Vecchia approximation for latent process(es) is currently not implemented");
+									Log::REFatal("The full-scale Vecchia approximation for latent process(es) is currently not implemented ");
 								}
 								if (sample_posterior) {
-									Log::REFatal("Posterior sampling is not implemented for latent process(es).");
+									Log::REFatal("Posterior sampling is not implemented for latent process(es) ");
 								}
 								if (sample_prior) {
-									Log::REFatal("Prior sampling is not implemented for latent process(es).");
+									Log::REFatal("Prior sampling is not implemented for latent process(es) ");
 								}
 								CalcPredVecchiaLatentObservedFirstOrder(false,
 									re_comp_gp->coords_, gp_coords_mat_pred, num_neighbors_pred_, vecchia_neighbor_selection_,
@@ -4084,7 +4089,7 @@ namespace GPBoost {
 									predict_cov_mat, predict_var, predict_response, mean_pred_id[0], cov_mat_pred_vecchia_id, var_pred_id[0], save_distances_isotropic_cov_fct_Vecchia_, GPU_use_);
 							}
 							else {
-								Log::REFatal("Prediction type '%s' is not supported for the Veccia approximation.", vecchia_pred_type_.c_str());
+								Log::REFatal("Prediction type '%s' is not supported for the Veccia approximation ", vecchia_pred_type_.c_str());
 							}
 							if (predict_var || predict_cov_mat) {
 								// subtract nugget variance in case latent process is predicted
@@ -4149,7 +4154,7 @@ namespace GPBoost {
 											predict_cov_mat, predict_var_or_response, false, false, GPU_use_);
 									}
 									else {
-										Log::REFatal("Prediction type '%s' is not supported for the Veccia approximation.", vecchia_pred_type_.c_str());
+										Log::REFatal("Prediction type '%s' is not supported for the Veccia approximation ", vecchia_pred_type_.c_str());
 									}
 								}
 								else if (gp_approx_ == "vecchia") {
@@ -4337,7 +4342,6 @@ namespace GPBoost {
 						}
 						likelihood_[unique_clusters_[0]]->PredictResponse(mean_pred_id[0], var_pred_id[0], mean_pred_id[1], var_pred_id[1], predict_var);
 					}
-
 					// Write on output
 					int idx_start_post_sample = 0;
 					if (!sample_prior) {
@@ -7353,6 +7357,13 @@ namespace GPBoost {
 					}
 				}
 			}
+			if (likelihood_.size() > 0 && likelihood_[unique_clusters_[0]]->IsZeroInflatedCount()) {
+				// The full-scale-Vecchia approximation is not supported for zero-inflated counts.
+				if (gp_approx_ == "full_scale_vecchia") {
+					Log::REFatal("gp_approx = 'full_scale_vecchia' is not supported for the zero-inflated count likelihood '%s'. Use gp_approx = 'vecchia' (with matrix_inversion_method = 'cholesky'), gp_approx = 'none', or grouped random effects ",
+						(likelihood_[unique_clusters_[0]]->GetLikelihood()).c_str());
+				}
+			}
 			CHECK((int)estimate_cov_par_index_.size() == num_cov_par_);
 			if (grouped_RE_and_vecchia_GP_) {
 				CHECK(num_gp_total_ == 1);//currently only for one GP implemented
@@ -7770,7 +7781,17 @@ namespace GPBoost {
 			CHECK(cov_pars_orig.size() == num_cov_par_);
 			double other_var = 0.;
 			for (int j = 0; j < num_comps_total_; ++j) {
-				other_var += cov_pars_orig[ind_par_[j]];
+				if (IsAR1MultifidelityComponent(j)) {
+					const int num_par_component = ind_par_[j + 1] - ind_par_[j];
+					const int num_par_base = (num_par_component - 1) / 2;
+					const double var_low = cov_pars_orig[ind_par_[j]];
+					const double var_discrepancy = cov_pars_orig[ind_par_[j] + num_par_base];
+					const double rho = cov_pars_orig[ind_par_[j] + 2 * num_par_base];
+					other_var += std::max(var_low, rho * rho * var_low + var_discrepancy);
+				}
+				else {
+					other_var += cov_pars_orig[ind_par_[j]];
+				}
 			}
 			return other_var;
 		}
@@ -7799,7 +7820,7 @@ namespace GPBoost {
 			}
 			const double nugget_min = MIN_NUGGET_VAR_RATIO_ / (1. - MIN_NUGGET_VAR_RATIO_) * other_var;
 			if (std::isfinite(nugget_min) && cov_pars_orig[0] < nugget_min) {
-				Log::REWarning("The Gaussian error (nugget) variance was increased from %g to %g while %s "
+				Log::REDebug("The Gaussian error (nugget) variance was increased from %g to %g while %s "
 					"to enforce (error variance) / (error variance + marginal variance of random effects) >= %g ",
 					cov_pars_orig[0], nugget_min, context, MIN_NUGGET_VAR_RATIO_);
 				cov_pars_orig[0] = nugget_min;
@@ -7819,10 +7840,18 @@ namespace GPBoost {
 				CHECK((int)cov_pars_set_first_time_.size() == num_cov_par_);
 				for (int igp = 0; igp < num_sets_re_; ++igp) {
 					for (int j = 0; j < num_comps_total_; ++j) {
-						if ((estimate_cov_par_index_[0] > 0) && (estimate_cov_par_index_[ind_par_[j]] <= 0)) {
-							// gaussian likelihood, the nugget effect is estimated, but this marginal variance parameter not
-							// -> avoid that the marginal variance changes due to reparametrizing / factoring out the nugget effect variance
-							cov_pars_out[ind_par_[j]] = cov_pars_set_first_time_[ind_par_[j]] * cov_pars_set_first_time_[0] / cov_pars[0];
+						std::vector<int> marginal_variance_indices{ ind_par_[j] + igp * num_cov_par_per_set_re_ };
+						if (IsAR1MultifidelityComponent(j)) {
+							const int num_par_component = ind_par_[j + 1] - ind_par_[j];
+							const int num_par_base = (num_par_component - 1) / 2;
+							marginal_variance_indices.push_back(ind_par_[j] + num_par_base + igp * num_cov_par_per_set_re_);
+						}
+						for (const int variance_index : marginal_variance_indices) {
+							if ((estimate_cov_par_index_[0] > 0) && (estimate_cov_par_index_[variance_index] <= 0)) {
+								// gaussian likelihood, the nugget effect is estimated, but this marginal variance parameter not
+								// -> avoid that the marginal variance changes due to reparametrizing / factoring out the nugget effect variance
+								cov_pars_out[variance_index] = cov_pars_set_first_time_[variance_index] * cov_pars_set_first_time_[0] / cov_pars[0];
+							}
 						}
 					}
 				}
@@ -7886,12 +7915,28 @@ namespace GPBoost {
 			TransformBackCovPars(cov_pars, cov_pars_orig);
 			double tot_var = 0.;
 			for (int j = 0; j < num_comps_total_; ++j) {
-				tot_var += cov_pars_orig[ind_par_[j] + ind_set_re * num_cov_par_per_set_re_];
+				const int component_start = ind_par_[j] + ind_set_re * num_cov_par_per_set_re_;
+				if (IsAR1MultifidelityComponent(j)) {
+					const int num_par_component = ind_par_[j + 1] - ind_par_[j];
+					const int num_par_base = (num_par_component - 1) / 2;
+					const double var_low = cov_pars_orig[component_start];
+					const double var_discrepancy = cov_pars_orig[component_start + num_par_base];
+					const double rho = cov_pars_orig[component_start + 2 * num_par_base];
+					tot_var += std::max(var_low, rho * rho * var_low + var_discrepancy);
+				}
+				else {
+					tot_var += cov_pars_orig[component_start];
+				}
 			}
 			if (gauss_likelihood_) {
 				tot_var += cov_pars_orig[0];
 			}
 			return(tot_var);
+		}
+
+		bool IsAR1MultifidelityComponent(int component_index) const {
+			return num_gp_total_ == 1 && component_index == ind_intercept_gp_ &&
+				CovFunctionName().rfind("ar1_mf_", 0) == 0;
 		}
 
 		/*!
@@ -9257,6 +9302,10 @@ namespace GPBoost {
 		void CalcCovFactor(bool transf_scale,
 			double nugget_var) {
 			if (gp_approx_ == "vecchia" || gp_approx_ == "full_scale_vecchia") {
+				if (!nearest_neighbors_determined_ &&
+					ShouldRedetermineNearestNeighborsVecchiaInducingPointsFITC(true)) {
+					RedetermineNearestNeighborsVecchiaInducingPointsFITC(true);
+				}
 				if (gp_approx_ == "full_scale_vecchia") {
 					CalcSigmaComps();
 				}
@@ -9482,6 +9531,11 @@ namespace GPBoost {
 		void CalcGradientVecchia(bool transf_scale,
 			double nugget_var,
 			bool calc_gradient_nugget) {
+			if (!nearest_neighbors_determined_ &&
+				ShouldRedetermineNearestNeighborsVecchiaInducingPointsFITC(true)) {
+				RedetermineNearestNeighborsVecchiaInducingPointsFITC(true);
+				CalcCovFactorVecchia(transf_scale, nugget_var);
+			}
 			CHECK(cov_factor_vecchia_calculated_on_transf_scale_ == transf_scale);
 			std::vector<int> estimate_cov_par_index_gp;
 			if (grouped_RE_and_vecchia_GP_) {
@@ -10869,7 +10923,7 @@ namespace GPBoost {
 		/*!
 		* \brief Analogous to 'CalcDCovParsOrigDLogTrans' but for the auxiliary (additional) parameters of non-Gaussian
 		*		 likelihoods (see 'TransformAuxPars' / 'BackTransformAuxPars' in likelihoods.h, e.g. a logit-type
-		*		 reparametrization for the second parameter of the "zero_inflated_gamma" likelihood).
+		*		 reparametrization for the second parameter of the "hurdle_gamma" likelihood).
 		* \param aux_pars_trans Auxiliary parameters on the internal (transformed) scale used for optimization (as returned by 'GetAuxPars')
 		* \param[out] d_orig_d_log_trans Vector of the same length as aux_pars_trans with d(BackTransformAuxPars(aux_pars_trans)_i) / d(log(aux_pars_trans_i))
 		*/
