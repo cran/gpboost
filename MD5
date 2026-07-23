@@ -1,4 +1,4 @@
-3cb1e314f66d7b84bfef0111bf22ce0e *DESCRIPTION
+657258d7eb7a62c9ba1b6e39f4b30afe *DESCRIPTION
 62aa7e7a29985341875a00e6ac33d872 *LICENSE
 4afba45e4f9fccfadd08609928132d7a *NAMESPACE
 8f751efea8d33b5967e6e78c1aecbccc *R/GPModel.R
@@ -24,7 +24,7 @@ e6f5f6822844a214bb4427c85d60662c *R/readRDS.gpb.Booster.R
 22f8721a4e23f8192a4185dc461fc72b *README.md
 6071edd604dbeb75308cfbedc7790398 *cleanup
 6857b3bb4dbeafb7051c9deda8f550a5 *configure
-cc71589bb44326f0db1381ee69d6733b *configure.ac
+632bc22912398ddec506d19a381b158d *configure.ac
 07e48765eaf61544ba7b8f41c8e94dab *configure.win
 0276a7e04cef5f86e4146107bfb24e98 *data/GPBoost_data.RData
 05e29359ef24243df589703588987c0e *data/agaricus.test.rda
@@ -448,9 +448,9 @@ c7eef640f237b52355d68d5530034786 *src/include/GPBoost/GP_utils.h
 e06dad389831cabb6cb5dc71bc6376f3 *src/include/GPBoost/Vecchia_utils.h
 5ad6c1059d0d2c0b2f405f3c782c7772 *src/include/GPBoost/cov_fcts.h
 cf9d3688cbba02a2899b79cb9fd698e8 *src/include/GPBoost/egpd_utils.h
-01414377d2af71381d1c6882ecc26ac2 *src/include/GPBoost/likelihoods.h
+b97b981af8d06048fe72404788fd94d4 *src/include/GPBoost/likelihoods.h
 9956cfc7cbdc32087c1d66a3b5a0b2ba *src/include/GPBoost/optim_utils.h
-7f2f4cf5514f3791741b72eeab6d0948 *src/include/GPBoost/re_comp.h
+70121df3c3a97373df19430b26587404 *src/include/GPBoost/re_comp.h
 3aa79513ad6005b39e976b17a7a7409d *src/include/GPBoost/re_model.h
 c23067187a3a146029aab2337c365fb7 *src/include/GPBoost/re_model_template.h
 133e7b42e1306d238a66eba852e67381 *src/include/GPBoost/sparse_matrix_utils.h
@@ -662,11 +662,11 @@ c8606cbab7c133c043c2bdb7b357361d *src/treelearner/voting_parallel_tree_learner.c
 5b3c62e2513a889cc9d042a650717a33 *tests/testthat/Rplots.pdf
 ae5b1b1645d535aa92fbef687c71d2b1 *tests/testthat/test_GPModel_ar1_multifidelity.R
 8349a9de368e2f4466a535644db06bfd *tests/testthat/test_GPModel_combined_GP_random_effects.R
-ffa0f8848595074897084e9a9741f39d *tests/testthat/test_GPModel_egpd.R
+0b68929d76c201749c834ce19f656d6a *tests/testthat/test_GPModel_egpd.R
 23d68e9de95c482eff57e70006afe063 *tests/testthat/test_GPModel_gaussian_process.R
 65d76eacf7a69b2b4b8dd69e21f061aa *tests/testthat/test_GPModel_grouped_random_effects.R
 da8326986ee8301d208a0a5969c349e6 *tests/testthat/test_GPModel_non_Gaussian_data.R
-2ba2b85d2791d8d2b1435ea6e395c744 *tests/testthat/test_GPModel_tweedie.R
+611581597af4939d19a1e44eb7e019b6 *tests/testthat/test_GPModel_tweedie.R
 daaea69c60a3e15f38b5b216c8c35002 *tests/testthat/test_GPModel_zero_inflated_hurdle.R
 d55b9b82673aa69172ab628ee920f120 *tests/testthat/test_Grabit_mean-scale_regression.R
 2e0ebc22bf1d6b01b447519db44696ba *tests/testthat/test_Predictor.R
