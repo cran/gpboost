@@ -12,6 +12,10 @@
 #include <GPBoost/CG_utils.h>
 #include <cmath>
 #include <algorithm> // copy
+#include <iterator> // std::inserter, std::begin, std::end
+#include <numeric> // std::iota
+#include <limits> // std::numeric_limits
+#include <atomic> // std::atomic
 #include <LightGBM/utils/log.h>
 using LightGBM::Log;
 
@@ -282,7 +286,7 @@ namespace GPBoost {
 				if (Q_dist[jj] < nn_dist[k - 1]) {
 					nn_dist[k - 1] = Q_dist[jj];
 					neighbors_i[k - 1] = Q[jj];
-					SortVectorsDecreasing<double>(nn_dist.data(), neighbors_i.data(), k);
+					SortVectorsIncreasing<double>(nn_dist.data(), neighbors_i.data(), k);
 				}
 			}
 		}
@@ -299,7 +303,7 @@ namespace GPBoost {
 				if (dist_vect[0] < nn_dist[k - 1]) {
 					nn_dist[k - 1] = dist_vect[0];
 					neighbors_i[k - 1] = jj;
-					SortVectorsDecreasing<double>(nn_dist.data(), neighbors_i.data(), k);
+					SortVectorsIncreasing<double>(nn_dist.data(), neighbors_i.data(), k);
 				}
 			}
 		}
@@ -344,7 +348,8 @@ namespace GPBoost {
 			num_neighbors = end_search_at + 1;
 		}
 		int num_nearest_neighbors = num_neighbors;
-		bool has_duplicates = false;
+		//atomic: written and read concurrently in the parallel loops below
+		std::atomic<bool> has_duplicates(false);
 		// For correlation matrix
 		std::shared_ptr<RECompGP<den_mat_t>> re_comp = std::dynamic_pointer_cast<RECompGP<den_mat_t>>(re_comps_vecchia_cluster_i[0]);
 		std::vector<den_mat_t> dummy_mat_grad;//help matrix
@@ -433,7 +438,7 @@ namespace GPBoost {
 					if (dist_vect[0] < nn_corr[num_neighbors - 1]) {
 						nn_corr[num_neighbors - 1] = dist_vect[0];
 						neighbors[i - start_at][num_neighbors - 1] = jj;
-						SortVectorsDecreasing<double>(nn_corr.data(), neighbors[i - start_at].data(), num_neighbors);
+						SortVectorsIncreasing<double>(nn_corr.data(), neighbors[i - start_at].data(), num_neighbors);
 					}
 				}
 				//Save distances between points and neighbors
@@ -447,10 +452,7 @@ namespace GPBoost {
 					}
 					if (check_has_duplicates && !has_duplicates) {
 						if (dij < EPSILON_NUMBERS) {
-#pragma omp critical
-							{
 								has_duplicates = true;
-							}
 						}
 					}//end check_has_duplicates
 				}
@@ -594,7 +596,7 @@ namespace GPBoost {
 										if (dist_vect[0] < dist_of_neighbors_per_tree[ii][size_smaller_k - 1]) {
 											dist_of_neighbors_per_tree[ii][size_smaller_k - 1] = dist_vect[0];
 											neighbors_per_tree[ii][size_smaller_k - 1] = jj;
-											SortVectorsDecreasing<double>(dist_of_neighbors_per_tree[ii].data(), neighbors_per_tree[ii].data(), size_smaller_k);
+											SortVectorsIncreasing<double>(dist_of_neighbors_per_tree[ii].data(), neighbors_per_tree[ii].data(), size_smaller_k);
 										}
 									}
 								}
@@ -637,10 +639,7 @@ namespace GPBoost {
 							}
 							if (check_has_duplicates && !has_duplicates) {
 								if (dij < EPSILON_NUMBERS) {
-#pragma omp critical
-									{
 										has_duplicates = true;
-									}
 								}
 							}//end check_has_duplicates
 						}
@@ -682,10 +681,7 @@ namespace GPBoost {
 					}
 					if (check_has_duplicates && !has_duplicates) {
 						if (dist_ij.value() < EPSILON_NUMBERS) {
-#pragma omp critical
-							{
 								has_duplicates = true;
-							}
 						}
 					}//end check_has_duplicates
 				}
@@ -727,7 +723,7 @@ namespace GPBoost {
 					if (dist(i, j) < nn_dist[num_neighbors - 1]) {
 						nn_dist[num_neighbors - 1] = dist(i, j);
 						neighbors[i][num_neighbors - 1] = j;
-						SortVectorsDecreasing<double>(nn_dist.data(), neighbors[i].data(), num_neighbors);
+						SortVectorsIncreasing<double>(nn_dist.data(), neighbors[i].data(), num_neighbors);
 					}
 				}
 			}
@@ -772,7 +768,8 @@ namespace GPBoost {
 		else if (neighbor_selection != "nearest") {
 			Log::REFatal("find_nearest_neighbors_Vecchia_fast: neighbor_selection = '%s' is not supported ", neighbor_selection.c_str());
 		}
-		bool has_duplicates = false;
+		//atomic: written and read concurrently in the parallel loops below
+		std::atomic<bool> has_duplicates(false);
 		int dim_coords = (int)coords.cols();
 		//Sort along the sum of the coordinates
 		std::vector<double> coords_sum(num_data);
@@ -837,7 +834,7 @@ namespace GPBoost {
 								if (dist < nn_corr[num_neighbors - 1]) {
 									nn_corr[num_neighbors - 1] = dist;
 									neighbors[i - start_at][num_neighbors - 1] = jj;
-									SortVectorsDecreasing<double>(nn_corr.data(), neighbors[i - start_at].data(), num_neighbors);
+									SortVectorsIncreasing<double>(nn_corr.data(), neighbors[i - start_at].data(), num_neighbors);
 								}
 							}
 							//Save distances between points and neighbors
@@ -851,10 +848,7 @@ namespace GPBoost {
 								}
 								if (check_has_duplicates && !has_duplicates) {
 									if (dij < EPSILON_NUMBERS) {
-#pragma omp critical
-										{
 											has_duplicates = true;
-										}
 									}
 								}//end check_has_duplicates
 							}
@@ -872,9 +866,12 @@ namespace GPBoost {
 							0, 0., EPSILON_NUMBERS, 3, neighbors, 0);
 					}
 					else {
+						//the GPU function takes a 'bool&', so a temporary is passed and written back
+						bool has_duplicates_gpu = has_duplicates.load(std::memory_order_relaxed);
 						success = find_nearest_neighbors_Vecchia_fast_GPU(coords, num_data, num_neighbors, num_close_neighbors,
-							start_at, end_search_at, dim_coords, sort_sum, sort_inv_sum, coords_sum, neighbors, dist_obs_neighbors, save_distances, has_duplicates,
+							start_at, end_search_at, dim_coords, sort_sum, sort_inv_sum, coords_sum, neighbors, dist_obs_neighbors, save_distances, has_duplicates_gpu,
 							check_has_duplicates);
+						has_duplicates.store(has_duplicates_gpu, std::memory_order_relaxed);
 					}
 #endif 
 					if (!success) {
@@ -912,10 +909,7 @@ namespace GPBoost {
 						}
 						if (check_has_duplicates && !has_duplicates) {
 							if (dij < EPSILON_NUMBERS) {
-#pragma omp critical
-								{
 									has_duplicates = true;
-								}
 							}
 						}//end check_has_duplicates
 					}
@@ -946,10 +940,7 @@ namespace GPBoost {
 							}
 							if (check_has_duplicates && !has_duplicates) {
 								if (dij < EPSILON_NUMBERS) {
-#pragma omp critical
-									{
 										has_duplicates = true;
-									}
 								}
 							}//end check_has_duplicates
 						}
@@ -979,10 +970,7 @@ namespace GPBoost {
 					}
 					if (check_has_duplicates && !has_duplicates) {
 						if (dij < EPSILON_NUMBERS) {
-#pragma omp critical
-							{
 								has_duplicates = true;
-							}
 						}
 					}//end check_has_duplicates
 				}
@@ -1078,7 +1066,7 @@ namespace GPBoost {
 						if (sed < nn_square_dist[num_nearest_neighbors - 1]) {
 							nn_square_dist[num_nearest_neighbors - 1] = sed;
 							neighbors_i[num_nearest_neighbors - 1] = sort_sum[down_i];
-							SortVectorsDecreasing<double>(nn_square_dist.data(), neighbors_i.data(), num_nearest_neighbors);
+							SortVectorsIncreasing<double>(nn_square_dist.data(), neighbors_i.data(), num_nearest_neighbors);
 						}
 					}
 				}
@@ -1096,7 +1084,7 @@ namespace GPBoost {
 						if (sed < nn_square_dist[num_nearest_neighbors - 1]) {
 							nn_square_dist[num_nearest_neighbors - 1] = sed;
 							neighbors_i[num_nearest_neighbors - 1] = sort_sum[up_i];
-							SortVectorsDecreasing<double>(nn_square_dist.data(), neighbors_i.data(), num_nearest_neighbors);
+							SortVectorsIncreasing<double>(nn_square_dist.data(), neighbors_i.data(), num_nearest_neighbors);
 						}
 					}
 				}

@@ -148,6 +148,7 @@
 
 #define _USE_MATH_DEFINES // for M_SQRT1_2 and M_PI
 #include <cmath>
+#include <limits>
 
 #include <GPBoost/type_defs.h>
 #include <GPBoost/sparse_matrix_utils.h>
@@ -262,6 +263,7 @@ namespace GPBoost {
 				}
 			}
 			likelihood_type_ = likelihood;
+			CacheLikelihoodTypeDerivedQuantities();
 			if (user_defined_approximation_type_ != "none") {
 				approximation_type_ = user_defined_approximation_type_;
 			}
@@ -1056,6 +1058,23 @@ namespace GPBoost {
 		/*! \brief Recover the underlying constant-zero base likelihood name from a regression zero-model name by removing the
 		* "regression_" token that follows the family prefix, e.g. "hurdle_regression_gamma" -> "hurdle_gamma" and
 		* "zero_inflated_regression_poisson" -> "zero_inflated_poisson". Returns the input unchanged if the token is absent. */
+		/*! \brief Cache the quantities that only depend on 'likelihood_type_'. 'StripRegressionInfix' allocates and
+		* concatenates strings, and 'EGPDBaseType()' / 'GetEGPDVariant()' were called once PER OBSERVATION via
+		* 'EvaluateEGPD' and the hurdle / zero-inflated regression dispatch functions. Must be called whenever
+		* 'likelihood_type_' is assigned */
+		void CacheLikelihoodTypeDerivedQuantities() {
+			regression_base_type_ = StripRegressionInfix(likelihood_type_);
+			string_t t = regression_base_type_;
+			const string_t prefix = "hurdle_";
+			if (t.size() > prefix.size() && t.compare(0, prefix.size(), prefix) == 0) t = t.substr(prefix.size());
+			egpd_base_type_ = t;
+			if (t == "gpd") egpd_variant_ = EGPDVariant::kGPD;
+			else if (t == "egpd_power") egpd_variant_ = EGPDVariant::kPower;
+			else if (t == "egpd_power_mixture") egpd_variant_ = EGPDVariant::kPowerMixture;
+			else if (t == "egpd_beta") egpd_variant_ = EGPDVariant::kBeta;
+			else egpd_variant_ = EGPDVariant::kPowerBeta;
+		}
+
 		static string_t StripRegressionInfix(const string_t& name) {
 			const string_t infix = "_regression_";
 			const size_t pos = name.find(infix);
@@ -1064,8 +1083,8 @@ namespace GPBoost {
 		}
 
 		/*! \brief For a hurdle regression likelihood, the underlying constant-zero hurdle type (with the "regression_" token removed). */
-		string_t HurdleRegressionBaseType() const {
-			return StripRegressionInfix(likelihood_type_);
+		const string_t& HurdleRegressionBaseType() const {
+			return regression_base_type_;
 		}
 
 		/*! \brief True for hurdle likelihoods with a positive continuous base (point mass at zero + positive density; the zero part fully decouples from the response predictor eta). Includes both the constant-zero and the regression (fixed-effects) zero models. */
@@ -1074,11 +1093,8 @@ namespace GPBoost {
 		}
 
 		/*! \brief The underlying EGPD base type of a (possibly hurdle / hurdle-regression) EGPD likelihood, i.e. with any "hurdle_" prefix and "regression_" token stripped. */
-		string_t EGPDBaseType() const {
-			string_t t = StripRegressionInfix(likelihood_type_);
-			const string_t prefix = "hurdle_";
-			if (t.size() > prefix.size() && t.compare(0, prefix.size(), prefix) == 0) t = t.substr(prefix.size());
-			return t;
+		const string_t& EGPDBaseType() const {
+			return egpd_base_type_;
 		}
 
 		/*! \brief True for zero-inflated count likelihoods (constant or regression structural-zero model). The base count component can itself generate zeros. */
@@ -1097,8 +1113,8 @@ namespace GPBoost {
 		}
 
 		/*! \brief The underlying constant-zero count type for a zero-inflated count regression likelihood (with the "regression_" token removed). */
-		string_t ZICountRegressionBaseType() const {
-			return StripRegressionInfix(likelihood_type_);
+		const string_t& ZICountRegressionBaseType() const {
+			return regression_base_type_;
 		}
 
 		/*! \brief Stable log(exp(a) + exp(b)) */
@@ -1109,16 +1125,11 @@ namespace GPBoost {
 		}
 
 		EGPDVariant GetEGPDVariant() const {
-			const string_t base = EGPDBaseType();
-			if (base == "gpd") return EGPDVariant::kGPD;
-			if (base == "egpd_power") return EGPDVariant::kPower;
-			if (base == "egpd_power_mixture") return EGPDVariant::kPowerMixture;
-			if (base == "egpd_beta") return EGPDVariant::kBeta;
-			return EGPDVariant::kPowerBeta;
+			return egpd_variant_;
 		}
 
 		EGPDParams GetEGPDParams() const {
-			const string_t base = EGPDBaseType();
+			const string_t& base = EGPDBaseType();
 			EGPDParams pars;
 			pars.shape_shift = aux_pars_[0];
 			if (base == "egpd_power") pars.kappa = aux_pars_[1];
@@ -1145,12 +1156,18 @@ namespace GPBoost {
 			return result;
 		}
 
-		// The EGPD unit-scale moments depend only on the auxiliary parameters, not on the location or the
-		// data, but they require numerical quadrature. Refresh this cache only in single-threaded parameter
-		// update paths; response-scale consumers can then safely read it concurrently.
+		// The EGPD unit-scale moments depend only on the BASE EGPD auxiliary parameters (those read by
+		// GetEGPDParams(), i.e. the leading NumEGPDBaseAuxPars() entries of aux_pars_), not on the location, the
+		// data, or a hurdle structural-zero parameter p0. They require numerical quadrature, so they are cached.
+		// Note: the cache key must be indexed by NumEGPDBaseAuxPars() and not by num_aux_pars_ -- the latter is 5
+		// for 'hurdle_egpd_power_mixture' and would write past the end of the kMaxEGPDAuxPars(=4)-sized array.
+		// Refresh this cache only in single-threaded parameter update paths; response-scale consumers can then
+		// safely read it concurrently.
 		bool EGPDMomentsCacheMatchesAuxPars() const {
 			if (!egpd_moments_cache_initialized_) return false;
-			for (int i = 0; i < num_aux_pars_; ++i) {
+			const int nb = NumEGPDBaseAuxPars();
+			CHECK(nb <= kMaxEGPDAuxPars);
+			for (int i = 0; i < nb; ++i) {
 				if (egpd_moments_cache_aux_[i] != aux_pars_[i]) return false;
 			}
 			return true;
@@ -1158,7 +1175,9 @@ namespace GPBoost {
 
 		void RefreshEGPDMomentsCache() {
 			egpd_moments_cache_ = CalcEGPDUnitScaleMoments(GetEGPDParams(), GetEGPDVariant());
-			for (int i = 0; i < num_aux_pars_; ++i) egpd_moments_cache_aux_[i] = aux_pars_[i];
+			const int nb = NumEGPDBaseAuxPars();
+			CHECK(nb <= kMaxEGPDAuxPars);
+			for (int i = 0; i < nb; ++i) egpd_moments_cache_aux_[i] = aux_pars_[i];
 			egpd_moments_cache_initialized_ = true;
 		}
 
@@ -1193,6 +1212,7 @@ namespace GPBoost {
 				Log::REFatal("Likelihood of type '%s' is not supported.", likelihood.c_str());
 			}
 			likelihood_type_ = likelihood;
+			CacheLikelihoodTypeDerivedQuantities();
 			chol_fact_pattern_analyzed_ = false;
 			DetermineWhetherToCapChangeModeNewton();
 		}
@@ -1436,7 +1456,11 @@ namespace GPBoost {
 			const data_size_t num_data,
 			double rand_eff_var,
 			const double* fixed_effects,
-			int ind_set_re) const {
+			int ind_set_re,
+			const double* weights = nullptr) const {
+			//'weights' can be used to pass weights that do not correspond to 'weights_' of this object
+			//	(e.g. the weights of ALL clusters and not only the ones of the cluster of this object)
+			const double* weights_ptr = (weights != nullptr) ? weights : weights_;
 			CHECK(rand_eff_var > 0.);
 			double init_intercept = 0.;
 			if (likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "bernoulli_logit" ||
@@ -1446,7 +1470,7 @@ namespace GPBoost {
 				double sw = 0.0, swy = 0.0;
 #pragma omp parallel for schedule(static) reduction(+:sw,swy)
 				for (data_size_t i = 0; i < num_data; ++i) {
-					const double w = has_weights_ ? weights_[i] : 1.0;
+					const double w = has_weights_ ? weights_ptr[i] : 1.0;
 					swy += w * y_data[i];
 					sw += w;
 				}
@@ -1473,7 +1497,7 @@ namespace GPBoost {
 #pragma omp parallel for schedule(static) reduction(+:avg, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
 						if (y_data[i] > 0.) {
-							const double w = has_weights_ ? weights_[i] : 1.0;
+							const double w = has_weights_ ? weights_ptr[i] : 1.0;
 							avg += w * y_data[i];
 							sw += w;
 						}
@@ -1483,7 +1507,7 @@ namespace GPBoost {
 #pragma omp parallel for schedule(static) reduction(+:avg, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
 						if (y_data[i] > 0.) {
-							const double w = has_weights_ ? weights_[i] : 1.0;
+							const double w = has_weights_ ? weights_ptr[i] : 1.0;
 							avg += w * y_data[i] / std::exp(fixed_effects[i]);
 							sw += w;
 						}
@@ -1502,7 +1526,7 @@ namespace GPBoost {
 				if (fixed_effects == nullptr) {
 #pragma omp parallel for schedule(static) reduction(+:avg, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						avg += w * y_data[i];
 						sw += w;
 					}
@@ -1510,7 +1534,7 @@ namespace GPBoost {
 				else {
 #pragma omp parallel for schedule(static) reduction(+:avg, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						avg += w * y_data[i] / std::exp(fixed_effects[i]);
 						sw += w;
 					}
@@ -1539,7 +1563,7 @@ namespace GPBoost {
 				if (fixed_effects == nullptr) {
 #pragma omp parallel for schedule(static) reduction(+:init_intercept, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						init_intercept += w * y_data[i];
 						sw += w;
 					}
@@ -1547,7 +1571,7 @@ namespace GPBoost {
 				else {
 #pragma omp parallel for schedule(static) reduction(+:init_intercept, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						init_intercept += w * (y_data[i] - fixed_effects[i]);
 						sw += w;
 					}
@@ -1559,7 +1583,7 @@ namespace GPBoost {
 				if (fixed_effects == nullptr) {
 #pragma omp parallel for schedule(static) reduction(+:avg, sum_sq, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						avg += w * y_data[i];
 						sum_sq += w * y_data[i] * y_data[i];
 						sw += w;
@@ -1569,7 +1593,7 @@ namespace GPBoost {
 				else {
 #pragma omp parallel for schedule(static) reduction(+:avg, sum_sq, sw, avg_exp_var_offset)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						double y_min_FE = y_data[i] - fixed_effects[i];
 						avg += w * y_min_FE;
 						sum_sq += w * y_min_FE * y_min_FE;
@@ -1600,7 +1624,7 @@ namespace GPBoost {
 				double sum_w_u_pos = 0.0;
 #pragma omp parallel for schedule(static) reduction(+:W, W0, Wpos, sum_w_u_pos)
 				for (data_size_t i = 0; i < num_data_; ++i) {
-					const double w = has_weights_ ? weights_[i] : 1.0;
+					const double w = has_weights_ ? weights_ptr[i] : 1.0;
 					const double yi = y_data[i];
 					W += w;
 					if (yi <= 0.0) {
@@ -1652,7 +1676,7 @@ namespace GPBoost {
 				// Positive-part contributions: Score: sum w * ( (u - mu) / sigma^2 ), Info : sum w * ( 1 / sigma^2 )
 #pragma omp parallel for schedule(static) reduction(+:S, I)
 				for (data_size_t i = 0; i < num_data_; ++i) {
-					const double w = has_weights_ ? weights_[i] : 1.0;
+					const double w = has_weights_ ? weights_ptr[i] : 1.0;
 					const double yi = y_data[i];
 					if (yi > 0.0) {
 						const double u = std::exp((1.0 / lambda) * std::log(yi));
@@ -1675,7 +1699,7 @@ namespace GPBoost {
 				double W = 0.0, W0 = 0.0, W1 = 0.0;
 #pragma omp parallel for schedule(static) reduction(+:sw_int,sum_x,W,W0,W1)
 				for (data_size_t i = 0; i < num_data; ++i) {
-					const double w = has_weights_ ? weights_[i] : 1.0;
+					const double w = has_weights_ ? weights_ptr[i] : 1.0;
 					const double yi = y_data[i];
 					W += w;
 					if (yi <= 0.0) {
@@ -1742,7 +1766,7 @@ namespace GPBoost {
 				if (fixed_effects == nullptr) {
 #pragma omp parallel for schedule(static) reduction(+:sumz,cnt)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						const double yi = y_data[i];
 						if (!TwoNumbersAreEqual<double>(yi, 0.) && !TwoNumbersAreEqual<double>(yi, 1.)) {
 							sumz += w * (yi + xi);
@@ -1753,7 +1777,7 @@ namespace GPBoost {
 				else {
 #pragma omp parallel for schedule(static) reduction(+:sumz,cnt)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						const double yi = y_data[i];
 						if (!TwoNumbersAreEqual<double>(yi, 0.) && !TwoNumbersAreEqual<double>(yi, 1.)) {
 							sumz += w * (yi + xi) / std::exp(fixed_effects[i]);
@@ -1799,7 +1823,8 @@ namespace GPBoost {
 		bool ShouldHaveIntercept(const double* y_data,
 			const data_size_t num_data,
 			double rand_eff_var,
-			const double* fixed_effects) const {
+			const double* fixed_effects,
+			const double* weights = nullptr) const {
 			bool ret_val = false;
 			if (likelihood_type_ == "poisson" || likelihood_type_ == "gamma" || likelihood_type_ == "tweedie" || likelihood_type_ == "tweedie_fixed_p" || IsEGPDLikelihood() ||
 				likelihood_type_ == "negative_binomial" || likelihood_type_ == "negative_binomial_1" || IsZeroInflatedCount() ||
@@ -1811,7 +1836,7 @@ namespace GPBoost {
 				ret_val = true;
 			}
 			else {
-				double beta_zero = FindInitialIntercept(y_data, num_data, rand_eff_var, fixed_effects, 0);
+				double beta_zero = FindInitialIntercept(y_data, num_data, rand_eff_var, fixed_effects, 0, weights);
 				if (std::abs(beta_zero) > 0.1) {
 					ret_val = true;
 				}
@@ -2268,24 +2293,24 @@ namespace GPBoost {
 				const double eps_p = 1e-6;// probability clipping
 				const double eps_sigma = 1e-6;// lower bound for sigma
 				const double eps_var = 1e-12;// variance floor
-				double W = 0.0, W0 = 0.0, Wpos = 0.0;
+				double W = 0.0, W0 = 0.0;
 				double sw_mu = 0.0; // for pooled mu if fixed_effects != nullptr
 				if (fixed_effects == nullptr) {
-#pragma omp parallel for schedule(static) reduction(+:W,W0,Wpos)
+#pragma omp parallel for schedule(static) reduction(+:W,W0)
 					for (data_size_t i = 0; i < num_data; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
 						const double yi = y_data[i];
 						W += w;
-						if (yi <= 0.0) W0 += w; else Wpos += w;
+						if (yi <= 0.0) W0 += w;
 					}
 				}
 				else {
-#pragma omp parallel for schedule(static) reduction(+:W,W0,Wpos,sw_mu)
+#pragma omp parallel for schedule(static) reduction(+:W,W0,sw_mu)
 					for (data_size_t i = 0; i < num_data; ++i) {
 						const double w = has_weights_ ? weights_[i] : 1.0;
 						const double yi = y_data[i];
 						W += w;
-						if (yi <= 0.0) W0 += w; else Wpos += w;
+						if (yi <= 0.0) W0 += w;
 						sw_mu += w * fixed_effects[i];
 					}
 				}
@@ -2294,12 +2319,12 @@ namespace GPBoost {
 				double sigma_init = 1.0;
 				CHECK(W0 > 0.0 && W0 < W);
 				double p0 = std::max(std::min(W0 / W, 1.0 - eps_p), eps_p);
-				const double a = GPBoost::normalQF(p0); // a = Phi^{-1}(p0)
-				if (std::fabs(a) > 1e-6) {
-					sigma_init = std::fabs(mu_pooled / a);
+				const double a_p0 = GPBoost::normalQF(p0); // a_p0 = Phi^{-1}(p0)
+				if (std::fabs(a_p0) > 1e-6) {
+					sigma_init = std::fabs(mu_pooled / a_p0);
 				}
 				else {
-					sigma_init = 1.0; // avoid division by near-zero a
+					sigma_init = 1.0; // avoid division by near-zero a_p0
 				}
 				sigma_init = std::max(sigma_init, eps_sigma);
 				// Helpers for tau, E[X|X>0], Var[X|X>0] at given (mu, sigma)
@@ -2594,7 +2619,9 @@ namespace GPBoost {
 			const data_size_t num_data,
 			const double* fixed_effects,
 			double& C_mu,
-			double& C_sigma2) const {
+			double& C_sigma2,
+			const double* weights = nullptr) const {
+			const double* weights_ptr = (weights != nullptr) ? weights : weights_;
 			if (likelihood_type_ == "bernoulli_probit" || likelihood_type_ == "bernoulli_logit" ||
 				likelihood_type_ == "binomial_probit" || likelihood_type_ == "binomial_logit" ||
 				likelihood_type_ == "beta" || likelihood_type_ == "beta_binomial" || likelihood_type_ == "zoctn" ||
@@ -2608,7 +2635,7 @@ namespace GPBoost {
 #pragma omp parallel for schedule(static) reduction(+:mean, sec_mom, sw)
 				for (data_size_t i = 0; i < num_data; ++i) {
 					if (y_data[i] > 0.) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						mean += w * y_data[i];
 						sec_mom += w * y_data[i] * y_data[i];
 						sw += w;
@@ -2625,7 +2652,7 @@ namespace GPBoost {
 				double sw = 0.0, mean = 0., sec_mom = 0;
 #pragma omp parallel for schedule(static) reduction(+:mean, sec_mom, sw)
 				for (data_size_t i = 0; i < num_data; ++i) {
-					const double w = has_weights_ ? weights_[i] : 1.0;
+					const double w = has_weights_ ? weights_ptr[i] : 1.0;
 					mean += w * y_data[i];
 					sec_mom += w * y_data[i] * y_data[i];
 					sw += w;
@@ -2682,7 +2709,7 @@ namespace GPBoost {
 				if (fixed_effects == nullptr) {
 #pragma omp parallel for schedule(static) reduction(+:mean, sec_mom, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						mean += w * y_data[i];
 						sec_mom += w * y_data[i] * y_data[i];
 						sw += w;
@@ -2691,7 +2718,7 @@ namespace GPBoost {
 				else {
 #pragma omp parallel for schedule(static) reduction(+:mean, sec_mom, sw)
 					for (data_size_t i = 0; i < num_data; ++i) {
-						const double w = has_weights_ ? weights_[i] : 1.0;
+						const double w = has_weights_ ? weights_ptr[i] : 1.0;
 						mean += w * y_data[i] - fixed_effects[i];
 						sec_mom += w * (y_data[i] - fixed_effects[i]) * (y_data[i] - fixed_effects[i]);
 						sw += w;
@@ -2784,6 +2811,18 @@ namespace GPBoost {
 			for (int i = 1; i < num_aux_pars_; ++i) {
 				name += "_SEP_" + names_aux_pars_[i];
 			}
+		}
+
+		/*! \brief True if (effective) weights are used */
+		bool HasWeights() const {
+			return(has_weights_);
+		}
+
+		/*! \brief Returns a pointer to the EFFECTIVE weights of this object (i.e. including a potential
+		* scaling by 'likelihood_learning_rate_'). The array has length 'num_data_', i.e. it only contains
+		* the weights of the cluster of this object. Returns nullptr if no weights are used */
+		const double* GetWeights() const {
+			return(has_weights_ ? weights_ : nullptr);
 		}
 
 		bool AuxParsHaveBeenSet() const {
@@ -3502,8 +3541,14 @@ namespace GPBoost {
 							cg_max_num_it, it == 0, cg_delta_conv_, ZERO_RHS_CG_THRESHOLD, cg_preconditioner_type_, false);
 						mode_update = information_ll_inv.asDiagonal() * mode_update_part;
 					}
+					if (has_NA_or_Inf) {
+						//'mode_update' has not (fully) been calculated and must not be used below
+						approx_marginal_ll_new = std::numeric_limits<double>::quiet_NaN();
+						Log::REDebug(NA_OR_INF_WARNING_);
+						break;
+					}
 				}//end iterative
-				else { // start Cholesky 
+				else { // start Cholesky
 					information_ll_inv.array() = information_ll_.array().inverse();
 					if (it == 0 || information_changes_during_mode_finding_) {
 						SigmaI_plus_W = SigmaI;
@@ -4475,7 +4520,7 @@ namespace GPBoost {
 			const sp_mat_t& D_inv,
 			const std::vector<sp_mat_t>& B_grad,
 			const std::vector<sp_mat_t>& D_grad,
-			std::vector<data_size_t> cum_num_rand_eff_cluster_i,
+			const std::vector<data_size_t>& cum_num_rand_eff_cluster_i,
 			bool calc_cov_grad,
 			bool calc_F_grad,
 			bool calc_aux_par_grad,
@@ -5257,8 +5302,8 @@ namespace GPBoost {
 			bool call_for_std_dev_coef,
 			const std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_ip_preconditioner_cluster_i,
 			const std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_cross_cov_preconditioner_cluster_i,
-			const den_mat_t chol_ip_cross_cov_preconditioner,
-			const chol_den_mat_t chol_fact_sigma_ip_preconditioner,
+			const den_mat_t& chol_ip_cross_cov_preconditioner,
+			const chol_den_mat_t& chol_fact_sigma_ip_preconditioner,
 			const std::vector<int>& estimate_cov_par_index,
 			bool GPU_use) {
 			const den_mat_t* cross_cov = re_comps_cross_cov_cluster_i[0]->GetSigmaPtr();
@@ -8222,7 +8267,7 @@ namespace GPBoost {
 							vec_t D_sqrt = D_inv_rm_.diagonal().cwiseInverse().cwiseSqrt();
 							Sigma_sqrt_rand_vec += B_rm_.triangularView<Eigen::UpLoType::UnitLower>().solve(D_sqrt.cwiseProduct(rand_vec_pred_I_1));
 							//z_i ~ N(0,Sigma^{-1})
-							vec_t Bt_D_inv_Sigma_sqrt_rand_vec = B_t_D_inv_rm_ * B_rm_ * Sigma_sqrt_rand_vec;
+							vec_t Bt_D_inv_Sigma_sqrt_rand_vec = B_t_D_inv_rm_ * (B_rm_ * Sigma_sqrt_rand_vec);
 							vec_t Sigma_inv_Sigma_sqrt_rand_vec = Bt_D_inv_Sigma_sqrt_rand_vec - Bt_D_inv_B_cross_cov * chol_fact_sigma_woodbury.solve((*cross_cov).transpose() * Bt_D_inv_Sigma_sqrt_rand_vec);
 							//z_i ~ N(0,(Sigma^{-1} + W))
 							vec_t rand_vec_pred_SigmaI_plus_W = Sigma_inv_Sigma_sqrt_rand_vec + W_diag_sqrt.cwiseProduct(rand_vec_pred_I_2);
@@ -9076,7 +9121,7 @@ namespace GPBoost {
 				vec_t W_diag_sqrt = information_ll_.cwiseSqrt();
 				vec_t D_sqrt = D_inv_rm_.diagonal().cwiseInverse().cwiseSqrt();
 				vec_t W_D_inv, W_D_inv_inv, information_ll_inv;
-				const den_mat_t* cross_cov_preconditioner;
+				const den_mat_t* cross_cov_preconditioner = nullptr;
 				if (cg_preconditioner_type_ == "vifdu" || cg_preconditioner_type_ == "none") {
 					W_D_inv = (information_ll_ + D_inv_rm_.diagonal());
 					W_D_inv_inv = W_D_inv.cwiseInverse();
@@ -9103,7 +9148,7 @@ namespace GPBoost {
 					vec_t Sigma_sqrt_rand_vec = chol_ip_cross_cov.transpose() * rand_vec_I_2_sim_post_.col(i);
 					Sigma_sqrt_rand_vec += B_rm_.triangularView<Eigen::UpLoType::UnitLower>().solve(D_sqrt.cwiseProduct(rand_vec_I_sim_post_.col(i)));
 					//z_i ~ N(0,Sigma^{-1})
-					vec_t Bt_D_inv_Sigma_sqrt_rand_vec = B_t_D_inv_rm_ * B_rm_ * Sigma_sqrt_rand_vec;
+					vec_t Bt_D_inv_Sigma_sqrt_rand_vec = B_t_D_inv_rm_ * (B_rm_ * Sigma_sqrt_rand_vec);
 					vec_t Sigma_inv_Sigma_sqrt_rand_vec = Bt_D_inv_Sigma_sqrt_rand_vec - Bt_D_inv_B_cross_cov * chol_fact_sigma_woodbury.solve((*cross_cov).transpose() * Bt_D_inv_Sigma_sqrt_rand_vec);
 					//z_i ~ N(0,(Sigma^{-1} + W))
 					vec_t rand_vec_pred_SigmaI_plus_W = Sigma_inv_Sigma_sqrt_rand_vec + W_diag_sqrt.cwiseProduct(rand_vec_I_3_sim_post_.col(i));
@@ -11928,9 +11973,13 @@ namespace GPBoost {
 		inline double LogLikGammaZeroInflated(double y, double location_par, bool incl_norm_const) const {
 			double ll = 0.0;
 			if (y > 0.0) {
-				const double q = 1. - aux_pars_original_[1];// = 1 - p0
 				ll = -aux_pars_[0] * (location_par + y * std::exp(-location_par));
 				if (incl_norm_const) {
+					//note: 'aux_pars_original_[1]' (= p0) must only be accessed if the normalizing constant is needed.
+					//	This function is also called for 'hurdle_regression_gamma' (via 'HurdleRegressionBaseLogLikLocDep',
+					//	always with incl_norm_const = false), where the structural zero is modeled by a second fixed-effects
+					//	block instead of by p0, i.e. where 'aux_pars_' only contains the shape parameter and index 1 does not exist
+					const double q = 1. - aux_pars_original_[1];// = 1 - p0
 					ll += std::log(q) + aux_pars_[0] * std::log(aux_pars_[0]) - std::lgamma(aux_pars_[0]) + (aux_pars_[0] - 1.0) * std::log(y);
 				}
 			}
@@ -15989,18 +16038,16 @@ namespace GPBoost {
 			//#endif
 						// the above can lead to compiler crashes on some compilers
 			std::sort(idx.begin(), idx.end(), cmp);
-			num_groups_partition_data_ = num_data_ / group_size_;// ceiling division
+			// Floor division, but always at least one group as long as there is data: any remaining points
+			// (in particular all of them when num_data_ < group_size_) are merged into the last group below
+			num_groups_partition_data_ = (num_data_ > 0) ? std::max<data_size_t>(1, num_data_ / group_size_) : 0;
 			group_indices_data_.resize(num_groups_partition_data_);
 #pragma omp parallel for schedule(static)
 			for (data_size_t g = 0; g < num_groups_partition_data_; ++g) {
 				const data_size_t first = g * group_size_;
-				const data_size_t last = first + group_size_;
+				//the last group takes all remaining points, so it can be larger than group_size_
+				const data_size_t last = (g == num_groups_partition_data_ - 1) ? num_data_ : (first + group_size_);
 				group_indices_data_[g].assign(idx.begin() + first, idx.begin() + last);
-			}
-			//merge remaing points to last group
-			if (num_data_ % group_size_ != 0) {
-				const data_size_t tail_first = num_groups_partition_data_ * group_size_;
-				group_indices_data_.back().insert(group_indices_data_.back().end(), idx.begin() + tail_first, idx.end());
 			}
 		}//end DetermineGroupsOrderedMode_Inner
 
@@ -16189,20 +16236,24 @@ namespace GPBoost {
 					rand_vec_trace_I_, Tdiags_W_SigmaI, Tsubdiags_W_SigmaI, SigmaI_plus_W_inv_Z_, has_NA_or_Inf, num_data, num_rand_vec_trace_, cg_max_num_it_tridiag, cg_delta_conv_,
 					cg_preconditioner_type_);
 			}
-			LogDetStochTridiag(Tdiags_W_SigmaI, Tsubdiags_W_SigmaI, log_det_Sigma_W_plus_I, num_data, num_rand_vec_trace_);
-			if (cg_preconditioner_type_ == "fitc") {
-				log_det_Sigma_W_plus_I -= 2. * (((den_mat_t)chol_fact_sigma_ip_preconditioner.matrixL()).diagonal().array().log().sum());
-				log_det_Sigma_W_plus_I += information_ll_.array().log().sum();
-				log_det_Sigma_W_plus_I += 2. * ((den_mat_t)chol_fact_woodbury_preconditioner_.matrixL()).diagonal().array().log().sum();
-				log_det_Sigma_W_plus_I += diagonal_approx_preconditioner_.array().log().sum();
-			}
-			else {
-				log_det_Sigma_W_plus_I -= 2. * (((den_mat_t)chol_fact_sigma_ip.matrixL()).diagonal().array().log().sum()) + D_inv_rm_.diagonal().array().log().sum();
-				if (cg_preconditioner_type_ == "vifdu") {
-					log_det_Sigma_W_plus_I += W_D_inv.array().log().sum() + 2. * ((den_mat_t)chol_fact_sigma_woodbury_woodbury.matrixL()).diagonal().array().log().sum();
+			//'Tdiags_W_SigmaI' / 'Tsubdiags_W_SigmaI' are only fully valid if the CG did not find an
+			//	NA or Inf. The caller sets the log-likelihood to NA in that case anyway
+			if (!has_NA_or_Inf) {
+				LogDetStochTridiag(Tdiags_W_SigmaI, Tsubdiags_W_SigmaI, log_det_Sigma_W_plus_I, num_data, num_rand_vec_trace_);
+				if (cg_preconditioner_type_ == "fitc") {
+					log_det_Sigma_W_plus_I -= 2. * (((den_mat_t)chol_fact_sigma_ip_preconditioner.matrixL()).diagonal().array().log().sum());
+					log_det_Sigma_W_plus_I += information_ll_.array().log().sum();
+					log_det_Sigma_W_plus_I += 2. * ((den_mat_t)chol_fact_woodbury_preconditioner_.matrixL()).diagonal().array().log().sum();
+					log_det_Sigma_W_plus_I += diagonal_approx_preconditioner_.array().log().sum();
 				}
 				else {
-					log_det_Sigma_W_plus_I += 2. * ((den_mat_t)chol_fact_sigma_woodbury.matrixL()).diagonal().array().log().sum();
+					log_det_Sigma_W_plus_I -= 2. * (((den_mat_t)chol_fact_sigma_ip.matrixL()).diagonal().array().log().sum()) + D_inv_rm_.diagonal().array().log().sum();
+					if (cg_preconditioner_type_ == "vifdu") {
+						log_det_Sigma_W_plus_I += W_D_inv.array().log().sum() + 2. * ((den_mat_t)chol_fact_sigma_woodbury_woodbury.matrixL()).diagonal().array().log().sum();
+					}
+					else {
+						log_det_Sigma_W_plus_I += 2. * ((den_mat_t)chol_fact_sigma_woodbury.matrixL()).diagonal().array().log().sum();
+					}
 				}
 			}
 		}//end CalcLogDetStochFSVA
@@ -17136,6 +17187,10 @@ namespace GPBoost {
 
 		/*! \brief Type of likelihood  */
 		string_t likelihood_type_ = "gaussian";
+		/*! \brief Cached quantities derived from 'likelihood_type_' (see CacheLikelihoodTypeDerivedQuantities) */
+		string_t regression_base_type_ = "gaussian";
+		string_t egpd_base_type_ = "gaussian";
+		EGPDVariant egpd_variant_ = EGPDVariant::kGPD;
 		static constexpr double TWEEDIE_POWER_LOWER_ = 1.01;
 		static constexpr double TWEEDIE_POWER_UPPER_ = 1.99;
 		double tweedie_sum_d_log_a_rho_ = 0.;

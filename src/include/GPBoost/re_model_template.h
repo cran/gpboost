@@ -28,8 +28,11 @@
 
 #include <memory>
 #include <mutex>
+#include <atomic>
 #include <vector>
 #include <algorithm>    // std::shuffle
+#include <iterator>     // std::inserter, std::begin, std::end
+#include <numeric>      // std::iota
 #include <chrono>  // only for debugging
 #include <thread> // only for debugging
 
@@ -1035,10 +1038,14 @@ namespace GPBoost {
 							optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
 					}
 					else if (optimizer_cov_pars_has_been_set_ && !coef_optimizer_has_been_set_) {
+						//'optimizer_cov_pars_' is assigned to 'optimizer_coef_' below -> check that 'optimizer_cov_pars_'
+						//	(and not 'optimizer_coef_', which is only the default here) is supported for the coefficients
 						if ((gauss_likelihood_ && SUPPORTED_OPTIM_COEF_GAUSS_.find(optimizer_cov_pars_) == SUPPORTED_OPTIM_COEF_GAUSS_.end()) ||
-							(!gauss_likelihood_ && SUPPORTED_OPTIM_COEF_NONGAUSS_.find(optimizer_coef_) == SUPPORTED_OPTIM_COEF_NONGAUSS_.end())) {
-							Log::REFatal("Cannot use optimizer_cov = '%s' when optimizer_coef = '%s' ",
-								optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
+							(!gauss_likelihood_ && SUPPORTED_OPTIM_COEF_NONGAUSS_.find(optimizer_cov_pars_) == SUPPORTED_OPTIM_COEF_NONGAUSS_.end())) {
+							Log::REFatal("optimizer_cov = '%s' is not supported for the linear regression coefficients, but the same optimizer is used "
+								"for the covariance parameters and the coefficients if one of them is an external optimizer. "
+								"Set 'optimizer_coef' explicitly (e.g. to 'gradient_descent') if you want to use optimizer_cov = '%s' ",
+								optimizer_cov_pars_.c_str(), optimizer_cov_pars_.c_str());
 						}
 						else {
 							Log::REDebug("'%s' is also used for estimating regression coefficients (optimizer_coef = '%s' is ignored) ",
@@ -1059,6 +1066,12 @@ namespace GPBoost {
 					}
 				}
 			}//end has_covariates_
+			// The reconciliation above can set 'optimizer_cov_pars_' = 'optimizer_coef_'. Since the two lists of supported
+			// optimizers can differ, this can result in an unsupported optimizer for the covariance parameters -> re-check here
+			if (SUPPORTED_OPTIM_COV_PAR_.find(optimizer_cov_pars_) == SUPPORTED_OPTIM_COV_PAR_.end()) {
+				Log::REFatal("Optimizer option '%s' is not supported for covariance parameters. Note that the same optimizer is used for "
+					"the covariance parameters and the regression coefficients if one of them is an external optimizer ", optimizer_cov_pars_.c_str());
+			}
 			if (optimizer_cov_pars_ == "fisher_scoring" || optimizer_cov_pars_ == "newton" || optimizer_cov_pars_ == "nelder_mead") {
 				bool has_cov_par_not_estimated = std::any_of(estimate_cov_par_index_.begin(), estimate_cov_par_index_.end(), [](int x) { return x <= 0; });
 				if (has_cov_par_not_estimated) {
@@ -1103,15 +1116,13 @@ namespace GPBoost {
 				num_covariates_ = num_covariates;
 				X_ = Eigen::Map<const den_mat_t>(covariate_data, num_data_, num_covariates_);
 				for (int icol = 0; icol < num_covariates_; ++icol) {
-					bool var_is_constant = true;
+					//atomic: written and read concurrently in the parallel loop below
+					std::atomic<bool> var_is_constant(true);
 #pragma omp parallel for schedule(static)
 					for (data_size_t i = 1; i < num_data_; ++i) {
-						if (var_is_constant) {
+						if (var_is_constant.load(std::memory_order_relaxed)) {
 							if (!(TwoNumbersAreEqual<double>(X_.coeff(i, icol), X_.coeff(0, icol)))) {
-#pragma omp critical
-								{
-									var_is_constant = false;
-								}
+								var_is_constant.store(false, std::memory_order_relaxed);
 							}
 						}
 					}
@@ -1235,6 +1246,11 @@ namespace GPBoost {
 				else {
 					beta_ = Eigen::Map<const vec_t>(init_coef, num_covariates_ * num_sets_fixed_effects_);
 				}
+				// The 'likelihood_' objects only hold the weights of their own cluster, but the functions below
+				//	calculate statistics over ALL data points (in the original order of 'y_data') -> collect the
+				//	effective weights (including a potential scaling by 'likelihood_learning_rate_') of all clusters
+				vec_t weights_all;
+				const double* weights_all_ptr = GetWeightsAllClusters(weights_all);
 				if (init_coef == nullptr || only_intercept_for_GPBoost_algo) {
 					if (has_intercept_) {
 						double tot_var_mean_re = GetTotalVarComps(cov_aux_pars.segment(0, num_cov_par_), 0);
@@ -1245,10 +1261,10 @@ namespace GPBoost {
 							if (y_data == nullptr) {
 								vec_t y_temp(num_data_);
 								GetY(y_temp.data());
-								beta_[num_covariates * igp + intercept_col_] = likelihood_[unique_clusters_[0]]->FindInitialIntercept(y_temp.data(), num_data_, tot_var_mean_re, fixed_effects, igp);
+								beta_[num_covariates * igp + intercept_col_] = likelihood_[unique_clusters_[0]]->FindInitialIntercept(y_temp.data(), num_data_, tot_var_mean_re, fixed_effects, igp, weights_all_ptr);
 							}
 							else {
-								beta_[num_covariates * igp + intercept_col_] = likelihood_[unique_clusters_[0]]->FindInitialIntercept(y_data, num_data_, tot_var_mean_re, fixed_effects, igp);
+								beta_[num_covariates * igp + intercept_col_] = likelihood_[unique_clusters_[0]]->FindInitialIntercept(y_data, num_data_, tot_var_mean_re, fixed_effects, igp, weights_all_ptr);
 							}
 						}
 					}
@@ -1264,14 +1280,24 @@ namespace GPBoost {
 				if (!gauss_likelihood_) {
 					fixed_effects_ptr = fixed_effects_vec.data();
 				}
-				// Determine constants C_mu and C_sigma2 used for checking whether step sizes for linear regression coefficients are clearly too large
-				if (y_data == nullptr) {
-					vec_t y_temp(num_data_);
-					GetY(y_temp.data());
-					likelihood_[unique_clusters_[0]]->FindConstantsCapTooLargeLearningRateCoef(y_temp.data(), num_data_, fixed_effects, C_mu_, C_sigma2_);
-				}
-				else {
-					likelihood_[unique_clusters_[0]]->FindConstantsCapTooLargeLearningRateCoef(y_data, num_data_, fixed_effects, C_mu_, C_sigma2_);
+				// Determine constants C_mu and C_sigma2 used for checking whether step sizes for linear regression coefficients
+				//	are clearly too large. These are only used in 'MaximalLearningRateCoef()', which is called from
+				//	'AvoidTooLargeLearningRateCoef()' (only for optimizer_coef_ == "gradient_descent") and from
+				//	'GetMaximalLearningRate()' of the lbfgs optimizers (only if the coefficients are not profiled out)
+				//	-> the (not entirely cheap) calculation can be skipped for all other optimizers
+				bool need_constants_cap_lr_coef = (optimizer_coef_ == "gradient_descent") ||
+					((optimizer_cov_pars_ == "lbfgs" || optimizer_cov_pars_ == "lbfgs_linesearch_nocedal_wright" ||
+						optimizer_cov_pars_ == "lbfgs_not_profile_out_nugget") && !(optimizer_coef_ == "wls" && gauss_likelihood_));
+				if (need_constants_cap_lr_coef) {
+					if (y_data == nullptr) {
+						vec_t y_temp(num_data_);
+						GetY(y_temp.data());
+						likelihood_[unique_clusters_[0]]->FindConstantsCapTooLargeLearningRateCoef(y_temp.data(), num_data_, fixed_effects, C_mu_, C_sigma2_, weights_all_ptr);
+					}
+					else {
+						likelihood_[unique_clusters_[0]]->FindConstantsCapTooLargeLearningRateCoef(y_data, num_data_, fixed_effects, C_mu_, C_sigma2_, weights_all_ptr);
+					}
+					C_mu_C_sigma2_have_been_calculated_ = true;
 				}
 			}//end if has_covariates_
 			if (!has_intercept_ && !called_in_GPBoost_algorithm && !find_learning_rate_for_GPBoost_algo && fixed_effects == nullptr) {
@@ -1282,7 +1308,9 @@ namespace GPBoost {
 				}
 				else {
 					double tot_var = GetTotalVarComps(cov_aux_pars.segment(0, num_cov_par_), 0);
-					if (likelihood_[unique_clusters_[0]]->ShouldHaveIntercept(y_data, num_data_, tot_var, fixed_effects)) {
+					vec_t weights_all_ic;
+					const double* weights_all_ic_ptr = GetWeightsAllClusters(weights_all_ic);
+					if (likelihood_[unique_clusters_[0]]->ShouldHaveIntercept(y_data, num_data_, tot_var, fixed_effects, weights_all_ic_ptr)) {
 						string_t msg = "There is no intercept (= a column of 1's) included in the covariates 'X' or there are no covariates. Consider including an intercept ";
 						if (has_covariates_) {
 							Log::REWarning(msg.c_str());
@@ -1450,6 +1478,13 @@ namespace GPBoost {
 							else if (optimizer_coef_ == "wls") {// coordinate descent using generalized least squares (only for Gaussian data)
 								ProfileOutCoef(fixed_effects, fixed_effects_vec);
 								EvalNegLogLikelihoodOnlyUpdateFixedEffects(cov_aux_pars[0], neg_log_likelihood_after_lin_coef_update_);
+							}
+							else {
+								//Only 'gradient_descent' and 'wls' update the coefficients in this internal optimization loop
+								//	(external optimizers do not reach this code). Without this check, any other value of
+								//	'optimizer_coef_' would silently leave the coefficients at their initial values
+								Log::REFatal("optimizer_coef = '%s' is not supported for estimating the linear regression coefficients "
+									"when using optimizer_cov = '%s' ", optimizer_coef_.c_str(), optimizer_cov_pars_.c_str());
 							}
 							// Reset lr_cov_ to its initial values in case beta changes substantially after lr_cov_ is very small
 							bool mode_hast_just_been_recalculated = false;
@@ -3943,7 +3978,7 @@ namespace GPBoost {
 						std::vector<int> uniques;//unique points
 						std::vector<int> unique_idx;//used for constructing incidence matrix Z_ if there are duplicates
 						DetermineUniqueDuplicateCoordsFast(gp_coords_mat_pred, num_data_per_cluster_pred[cluster_i], uniques, unique_idx);
-#pragma omp for schedule(static)
+#pragma omp parallel for schedule(static)
 						for (int i = 0; i < num_data_per_cluster_pred[cluster_i]; ++i) {
 							random_effects_indices_of_data_pred[i] = unique_idx[i];
 						}
@@ -5392,6 +5427,13 @@ namespace GPBoost {
 		*/
 		double MaximalLearningRateCoef(const vec_t& beta,
 			const vec_t& neg_step_dir) const {
+			//'C_mu_' and 'C_sigma2_' are only calculated for the optimizers that need them (see 'OptimLinRegrCoefCovPar').
+			//	If this function is reached for another optimizer, they would be used uninitialized
+			if (!C_mu_C_sigma2_have_been_calculated_) {
+				Log::REFatal("MaximalLearningRateCoef: 'C_mu_' and 'C_sigma2_' have not been calculated. "
+					"'FindConstantsCapTooLargeLearningRateCoef' needs to be called for optimizer_cov = '%s' and optimizer_coef = '%s' ",
+					optimizer_cov_pars_.c_str(), optimizer_coef_.c_str());
+			}
 			vec_t lp_change = vec_t(num_data_ * num_sets_re_);
 			for (int igp = 0; igp < num_sets_re_; ++igp) {
 				lp_change.segment(igp * num_data_, num_data_) = X_ * (neg_step_dir.segment(num_covariates_ * igp, num_covariates_));
@@ -5746,6 +5788,9 @@ namespace GPBoost {
 		double C_mu_;
 		/*! \brief Constant C_sigma2_ used for checking whether step sizes for linear regression coefficients are clearly too large */
 		double C_sigma2_;
+		/*! \brief True if 'C_mu_' and 'C_sigma2_' have been calculated (this is only done for the optimizers that need them,
+		* see 'FindConstantsCapTooLargeLearningRateCoef' in 'OptimLinRegrCoefCovPar') */
+		bool C_mu_C_sigma2_have_been_calculated_ = false;
 		/*! \brief Constant used for checking whether step sizes for linear regression coefficients are clearly too large */
 		double C_MAX_CHANGE_COEF_ = 10.;
 		/*! \brief True if covariance parameters and potential auxiliary parameters have been etimated before in a previous boosting iteration (applies only to the GPBoost algorithm) */
@@ -5769,17 +5814,17 @@ namespace GPBoost {
 		/*! \brief Constant c for Armijo's condition for the Nesterov momentum part. Needs to be in (0,1) */
 		const double C_ARMIJO_MOM_DEFAULT_ = 1e-4;
 		/*! \brief Directional derivative wrt covariance parameters for Armijo / Wolfe condition */
-		double dir_deriv_armijo_cov_pars_;
+		double dir_deriv_armijo_cov_pars_ = 0.;
 		/*! \brief Directional derivativet wrt auxiliary coefficients for Armijo / Wolfe condition */
-		double dir_deriv_armijo_aux_pars_;
+		double dir_deriv_armijo_aux_pars_ = 0.;
 		/*! \brief Directional derivative linear regression coefficients for Armijo / Wolfe condition */
-		double dir_deriv_armijo_coef_;
+		double dir_deriv_armijo_coef_ = 0.;
 		/*! \brief Momentum term directional derivative wrt covariance parameters for Armijo / Wolfe condition */
-		double mom_dir_deriv_armijo_cov_pars_;
+		double mom_dir_deriv_armijo_cov_pars_ = 0.;
 		/*! \brief Momentum term directional derivativet wrt auxiliary coefficients for Armijo / Wolfe condition */
-		double mom_dir_deriv_armijo_aux_pars_;
+		double mom_dir_deriv_armijo_aux_pars_ = 0.;
 		/*! \brief Momentum term directional derivative linear regression coefficients for Armijo / Wolfe condition */
-		double mom_dir_deriv_armijo_coef_;
+		double mom_dir_deriv_armijo_coef_ = 0.;
 		/*! \brief If true, the initial learning rates in every iteration are set such that there is a constant first order change */
 		bool learning_rate_constant_first_order_change_ = false;
 		/*! \brief If true, the learning rates are reset to initial values in every iteration (only for gradient_descent) */
@@ -7127,7 +7172,7 @@ namespace GPBoost {
 		* \brief Initialize matrices Z_ and related quantities used, e.g. when use_woodbury_identity_==true
 		*/
 		void InitializeMatricesForUseWoodburyIdentity() {
-			CHECK(use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_ || grouped_RE_and_vecchia_GP_);
+			CHECK((use_woodbury_identity_ && !only_one_grouped_RE_calculations_on_RE_scale_) || grouped_RE_and_vecchia_GP_);
 			Zt_ = std::map<data_size_t, sp_mat_t>();
 			cum_num_rand_eff_ = std::map<data_size_t, std::vector<data_size_t>>();
 			if (gauss_likelihood_) {
@@ -7908,9 +7953,7 @@ namespace GPBoost {
 			vec_t cov_pars;
 			MaybeKeepVarianceConstant(cov_pars_in, cov_pars);
 			CHECK(cov_pars.size() == num_cov_par_);
-			if (ind_set_re > 0) {
-				CHECK(ind_set_re <= num_sets_re_);
-			}
+			CHECK(ind_set_re >= 0 && ind_set_re < num_sets_re_);// 0-based index into the sets of REs / GPs
 			vec_t cov_pars_orig;
 			TransformBackCovPars(cov_pars, cov_pars_orig);
 			double tot_var = 0.;
@@ -8331,6 +8374,30 @@ namespace GPBoost {
 		}//end AvoidTooLargeLearningRatesCovAuxPars
 
 		/*!
+		* \brief Collect the effective weights of ALL clusters in the original order of the data
+		*		Every 'likelihood_[cluster_i]' object only holds the weights of its own cluster (and in the order of
+		*		that cluster), but several functions of the likelihood calculate statistics over all data points in
+		*		the original order (e.g. 'FindInitialIntercept'). Passing the weights of a single cluster together
+		*		with the response variable of all clusters would read past the end of that array.
+		* \param[out] weights_all Vector of length num_data_ to which the weights are written (not changed if there are no weights)
+		* \return Pointer to 'weights_all', or nullptr if no weights are used
+		*/
+		const double* GetWeightsAllClusters(vec_t& weights_all) const {
+			if (unique_clusters_.size() == 0 || !(likelihood_.at(unique_clusters_[0])->HasWeights())) {
+				return(nullptr);
+			}
+			weights_all = vec_t(num_data_);
+			for (const auto& cluster_i : unique_clusters_) {
+				const double* weights_cluster_i = likelihood_.at(cluster_i)->GetWeights();
+				CHECK(weights_cluster_i != nullptr);
+				for (int j = 0; j < num_data_per_cluster_.at(cluster_i); ++j) {
+					weights_all[data_indices_per_cluster_.at(cluster_i)[j]] = weights_cluster_i[j];
+				}
+			}
+			return(weights_all.data());
+		}//end GetWeightsAllClusters
+
+		/*!
 		* \brief Avoid too large learning rates for linear regression coefficients
 		* \param beta Current / lag1 value of beta
 		* \param neg_step_dir Negative step direction for making updates. E.g., neg_step_dir = grad for gradient descent and neg_step_dir = FI^-1 * grad for Fisher scoring (="natural" gradient)
@@ -8426,6 +8493,9 @@ namespace GPBoost {
 			}
 			if (armijo_condition_ && use_nesterov_acc) {
 				mom_dir_deriv_armijo_coef_ = grad.dot(beta - beta_after_grad_aux);
+			}
+			else {//as in 'CalcDirDerivArmijoAndLearningRateConstChangeCovAuxPars': the momentum term is not used
+				mom_dir_deriv_armijo_coef_ = 0.;
 			}
 		}//end CalcDirDerivArmijoAndLearningRateConstChangeCoef
 
@@ -11855,7 +11925,24 @@ namespace GPBoost {
 					coords_pred_sum[i] = gp_coords_mat_pred(i, Eigen::all).sum();
 				}
 				den_mat_t sigma_ip_inv_cross_cov_T;
-#pragma omp parallel for schedule(static)
+				//every thread collects its triplets in its own vector and they are concatenated afterwards
+				int num_threads_fitc_corr;
+#ifdef _OPENMP
+				num_threads_fitc_corr = omp_get_max_threads();
+#else
+				num_threads_fitc_corr = 1;
+#endif
+				std::vector<std::vector<Triplet_t>> triplets_private(num_threads_fitc_corr);
+#pragma omp parallel
+				{
+					int thread_nb;
+#ifdef _OPENMP
+					thread_nb = omp_get_thread_num();
+#else
+					thread_nb = 0;
+#endif
+					std::vector<Triplet_t>& triplets_local = triplets_private[thread_nb];
+#pragma omp for schedule(static)
 				for (int ii = 0; ii < num_REs_pred; ++ii) {
 					double Sigma_ii;
 					if (re_comps_cross_cov_[cluster_i][0][0]->VarianceOnDiagonal()) {
@@ -11876,16 +11963,18 @@ namespace GPBoost {
 								{
 									if (!has_fitc_correction) {
 										has_fitc_correction = true;
-										sigma_ip_inv_cross_cov_T = chol_fact_sigma_ip_[cluster_i][0].solve((*cross_cov).transpose());
 										GPBoost::solve_linear_sys(chol_fact_sigma_ip_[cluster_i][0], (*cross_cov).transpose(), sigma_ip_inv_cross_cov_T, GPU_use_);
 									}
 								}
 								double fitc_corr_ij = Sigma_ii - (cross_cov_pred_ip.row(ii)).dot(sigma_ip_inv_cross_cov_T.col(jj));
-#pragma omp critical
-								triplets.push_back(Triplet_t(ii, jj, fitc_corr_ij));
+								triplets_local.push_back(Triplet_t(ii, jj, fitc_corr_ij));
 							}
 						}
 					}
+				}
+				}//end #pragma omp parallel
+				for (auto& triplets_local : triplets_private) {
+					triplets.insert(triplets.end(), std::make_move_iterator(triplets_local.begin()), std::make_move_iterator(triplets_local.end()));
 				}
 				if (has_fitc_correction) {
 					fitc_resid_pred_obs = sp_mat_t(num_REs_pred, num_REs_obs);
@@ -12256,6 +12345,15 @@ namespace GPBoost {
 								}
 #pragma omp parallel
 								{
+									//every thread accumulates into its own vectors, added up in one '#pragma omp critical' at the end
+									vec_t stoch_part_pred_var_private = vec_t::Zero(stoch_part_pred_var.size());
+									vec_t diag_P_stoch_private, c_var_private, c_p_z_private, c_p_private;
+									if (cg_preconditioner_type_ == "fitc") {
+										diag_P_stoch_private = vec_t::Zero(diag_P_stoch.size());
+										c_var_private = vec_t::Zero(c_var.size());
+										c_p_z_private = vec_t::Zero(c_p_z.size());
+										c_p_private = vec_t::Zero(c_p.size());
+									}
 #pragma omp for nowait
 									for (int i = 0; i < nsim_var_pred; ++i) {
 										//z_i ~ N(0,I)
@@ -12289,17 +12387,21 @@ namespace GPBoost {
 											vec_t preconditioner_rand_vec_probe = diagonal_approx_inv_preconditioner_[cluster_i].asDiagonal() * rand_vec_probe_pred;
 											vec_t rand_vec_probe_cv = sigma_resid_pred_obs * preconditioner_rand_vec_probe;
 											vec_t sample_P = rand_vec_probe_cv.cwiseProduct(rand_vec_probe_init);
-#pragma omp critical
-											{
-												diag_P_stoch += sample_P;
-												c_var.array() += (sample_P - diag_P).array().square();
-												c_p_z += (sample_P - diag_P).cwiseProduct(sample_sigma);
-												c_p += (sample_P - diag_P);
-											}
+											diag_P_stoch_private += sample_P;
+											c_var_private.array() += (sample_P - diag_P).array().square();
+											c_p_z_private += (sample_P - diag_P).cwiseProduct(sample_sigma);
+											c_p_private += (sample_P - diag_P);
 										}
+										stoch_part_pred_var_private += sample_sigma;
+									}
 #pragma omp critical
-										{
-											stoch_part_pred_var += sample_sigma;
+									{
+										stoch_part_pred_var += stoch_part_pred_var_private;
+										if (cg_preconditioner_type_ == "fitc") {
+											diag_P_stoch += diag_P_stoch_private;
+											c_var += c_var_private;
+											c_p_z += c_p_z_private;
+											c_p += c_p_private;
 										}
 									}
 								}

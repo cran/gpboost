@@ -13,6 +13,7 @@
 #include <GPBoost/cov_fcts.h>
 #include <GPBoost/GP_utils.h>
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -164,13 +165,13 @@ namespace GPBoost {
 			int num_data_pred,
 			const double* const rand_coef_data_pred) const {
 			if (this->is_rand_coef_) {
-#pragma omp for schedule(static)
+#pragma omp parallel for schedule(static)
 				for (int i = 0; i < num_data_pred; ++i) {
 					pred_uncond_var[i] += this->cov_pars_[0] * rand_coef_data_pred[i] * rand_coef_data_pred[i];
 				}
 			}
 			else {
-#pragma omp for schedule(static)
+#pragma omp parallel for schedule(static)
 				for (int i = 0; i < num_data_pred; ++i) {
 					pred_uncond_var[i] += this->cov_pars_[0];
 				}
@@ -874,7 +875,7 @@ namespace GPBoost {
 				num_random_effects_ = (data_size_t)coords_.rows();
 				if (save_random_effects_indices_of_data_and_no_Z) {// create random_effects_indices_of_data_
 					this->random_effects_indices_of_data_ = std::vector<data_size_t>(this->num_data_);
-#pragma omp for schedule(static)
+#pragma omp parallel for schedule(static)
 					for (int i = 0; i < this->num_data_; ++i) {
 						this->random_effects_indices_of_data_[i] = unique_idx[i];
 					}
@@ -1065,7 +1066,7 @@ namespace GPBoost {
 					coords_ = coords(uniques, Eigen::all);
 				}
 				this->random_effects_indices_of_data_ = std::vector<data_size_t>(this->num_data_);
-#pragma omp for schedule(static)
+#pragma omp parallel for schedule(static)
 				for (int i = 0; i < this->num_data_; ++i) {
 					this->random_effects_indices_of_data_[i] = unique_idx[i];
 				}
@@ -1271,11 +1272,16 @@ namespace GPBoost {
 		*/
 		void CalcSigma() override {
 			if (this->cov_pars_.size() == 0) { Log::REFatal("Covariance parameters are not specified. Call 'SetCovPars' first."); }
+			//'dist_' is a null pointer if no distances have been saved ('dist_saved_ = false'). 'CalculateCovMat' only reads
+			//	'dist' if the distances have been precomputed, but '*dist_' on a null pointer is undefined behavior in any case
+			//	(UBSan: "reference binding to null pointer") -> use an empty dummy matrix instead
+			const T_mat dist_dummy;
+			const T_mat& dist_ref = (dist_ == nullptr) ? dist_dummy : *dist_;
 			if (is_cross_covariance_IP_) {
-				(*cov_function_).template CalculateCovMat<T_mat>(*dist_, coords_ind_point_, coords_, this->cov_pars_, sigma_, false);
+				(*cov_function_).template CalculateCovMat<T_mat>(dist_ref, coords_ind_point_, coords_, this->cov_pars_, sigma_, false);
 			}
 			else {
-				(*cov_function_).template CalculateCovMat<T_mat>(*dist_, coords_, coords_, this->cov_pars_, sigma_, true);
+				(*cov_function_).template CalculateCovMat<T_mat>(dist_ref, coords_, coords_, this->cov_pars_, sigma_, true);
 			}
 			sigma_defined_ = true;
 			if (apply_tapering_) {
@@ -1432,12 +1438,16 @@ namespace GPBoost {
 			}
 			T_mat Z_sigma_grad_Zt;
 			T_mat sigma_grad;
+			//see 'CalcSigma()': 'dist_' is a null pointer if no distances have been saved, and '*dist_' on a null
+			//	pointer is undefined behavior even if 'CalculateGradientCovMatFull' does not read the distances
+			const T_mat dist_dummy;
+			const T_mat& dist_ref = (dist_ == nullptr) ? dist_dummy : *dist_;
 			if (is_cross_covariance_IP_) {
-				(*cov_function_).CalculateGradientCovMatFull(*dist_, coords_ind_point_, coords_, sigma_, this->cov_pars_,
+				(*cov_function_).CalculateGradientCovMatFull(dist_ref, coords_ind_point_, coords_, sigma_, this->cov_pars_,
 					sigma_grad, transf_scale, nugget_var, ind_par, false);
 			}
 			else {
-				(*cov_function_).CalculateGradientCovMatFull(*dist_, coords_, coords_, sigma_, this->cov_pars_,
+				(*cov_function_).CalculateGradientCovMatFull(dist_ref, coords_, coords_, sigma_, this->cov_pars_,
 					sigma_grad, transf_scale, nugget_var, ind_par, true);
 			}
 			if (this->has_Z_) {
@@ -1704,36 +1714,31 @@ namespace GPBoost {
 		* \brief Checks whether there are duplicates in the coordinates
 		*/
 		bool HasDuplicatedCoords() const {
-			bool has_duplicates = false;
+			//atomic: the early-exit flag is read by all threads while one of them writes it
+			std::atomic<bool> has_duplicates(false);
 			if (this->has_Z_) {
 				has_duplicates = (this->Z_).cols() != (this->Z_).rows();
 			}
 			else if (dist_saved_) {
-#pragma omp for schedule(static)
+#pragma omp parallel for schedule(static)
 				for (int i = 0; i < (int)dist_->rows(); ++i) {
-					if (has_duplicates) continue;
+					if (has_duplicates.load(std::memory_order_relaxed)) continue;
 					for (int j = i + 1; j < (int)dist_->cols(); ++j) {
-						if (has_duplicates) continue;
+						if (has_duplicates.load(std::memory_order_relaxed)) continue;
 						if ((*dist_).coeffRef(i, j) < EPSILON_NUMBERS) {
-#pragma omp critical
-							{
-								has_duplicates = true;
-							}
+							has_duplicates.store(true, std::memory_order_relaxed);
 						}
 					}
 				}
 			}//end dist_saved_
 			else if (coord_saved_) {
-#pragma omp for schedule(static)
+#pragma omp parallel for schedule(static)
 				for (int i = 0; i < (int)coords_.rows(); ++i) {
-					if (has_duplicates) continue;
+					if (has_duplicates.load(std::memory_order_relaxed)) continue;
 					for (int j = i + 1; j < (int)coords_.rows(); ++j) {
-						if (has_duplicates) continue;
+						if (has_duplicates.load(std::memory_order_relaxed)) continue;
 						if ((coords_.row(i) - coords_.row(j)).norm() < EPSILON_NUMBERS) {
-#pragma omp critical
-							{
-								has_duplicates = true;
-							}
+							has_duplicates.store(true, std::memory_order_relaxed);
 						}
 					}
 				}
@@ -1741,7 +1746,7 @@ namespace GPBoost {
 			else {
 				Log::REFatal("HasDuplicatedCoords: not implemented if !has_Z_ && !dist_saved_ && !coord_saved_");
 			}
-			return(has_duplicates);
+			return(has_duplicates.load(std::memory_order_relaxed));
 		}
 
 		const den_mat_t& GetCoords() const {
@@ -1762,7 +1767,7 @@ namespace GPBoost {
 		* \param ind Index vector of data points
 		* \param[out] coords_sub Subset of coordinates
 		*/
-		void GetSubSetCoords(std::vector<int> ind, 
+		void GetSubSetCoords(const std::vector<int>& ind, 
 			den_mat_t& coords_sub) const {
 			coords_sub = coords_(ind, Eigen::all);
 		}
