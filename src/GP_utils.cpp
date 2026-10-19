@@ -10,9 +10,10 @@
 #include <GPBoost/utils.h>
 #include <GPBoost/sparse_matrix_utils.h>
 #include <cmath>
-#include <algorithm> // std::set_difference
+#include <algorithm> // std::set_difference, std::lower_bound
 #include <iterator> // std::inserter, std::begin, std::end
 #include <numeric> // std::iota
+#include <limits> // std::numeric_limits
 
 #ifdef USE_CUDA_GP
 #include <cuda_runtime.h>
@@ -335,9 +336,12 @@ namespace GPBoost {
 			}
 		}
 		//Tree depth
-		int L = (int)(ceil(log2(max_dist_d / eps)));
-		if (L < 1) {
-			L = 1;
+		// the quotient is not finite when all points coincide, and converting such a value to
+		// an int is undefined behaviour, so the depth is determined before the conversion
+		double tree_depth = std::ceil(std::log2(max_dist_d / eps));
+		int L = 1;
+		if (tree_depth > 1. && tree_depth < (double)std::numeric_limits<int>::max()) {
+			L = (int)tree_depth;
 		}
 		//number of nodes
 		int M_l_minus = 1;
@@ -380,8 +384,10 @@ namespace GPBoost {
 					if ((int)covert_points_old[p].size() == 0) {
 						break;
 					}
+					CHECK(c < (int)means.rows());
 					int v = std::uniform_int_distribution<>(0, (int)(covert_points_old[p].size()) - 1)(gen);
-					means(c, Eigen::all) = data(covert_points_old[p][v], Eigen::all);
+					int index_center_point = covert_points_old[p][v];
+					means(c, Eigen::all) = data(index_center_point, Eigen::all);
 					std::vector<int> indices_ball;
 					data_in_ball(data, covert_points_old[p], R_l, means(c, Eigen::all), indices_ball);
 
@@ -412,6 +418,14 @@ namespace GPBoost {
 							indices_ball_c.begin(), indices_ball_c.end(),
 							std::inserter(diff_vect, diff_vect.begin()));
 						covert_points_old[index_R_neighbors] = diff_vect;
+					}
+					//The node is moved to the centroid of its ball above, which can lie further than 'R_l' away from
+					//the point from which the node has been created. That point is covered by the node in any case,
+					//and removing it explicitly makes every node remove at least one point. The number of nodes of a
+					//level can thus not exceed the number of data points, which is the number of rows of 'means'
+					auto center_point = std::lower_bound(covert_points_old[p].begin(), covert_points_old[p].end(), index_center_point);
+					if (center_point != covert_points_old[p].end() && *center_point == index_center_point) {
+						covert_points_old[p].erase(center_point);
 					}
 
 
@@ -476,12 +490,26 @@ namespace GPBoost {
 		CHECK((data_size_t)coords.rows() == num_data)
 			unique_idx = std::vector<int>(num_data);
 		double EPSILON_NUMBERS_SQUARE = EPSILON_NUMBERS * EPSILON_NUMBERS;
+		// The points are sorted by a weighted sum of their coordinates, and duplicates are searched among the points whose weighted
+		//	sums are close. The weights differ among the coordinates, since distinct points often have the same unweighted sum (e.g.,
+		//	on a grid or on a line with x_1 + x_2 = const), and every point would then be compared with all of them. Two points at a
+		//	distance below EPSILON_NUMBERS have weighted sums that differ by less than 2 * sqrt(d) * EPSILON_NUMBERS (weights in [1, 2))
+		const int dim_coords = (int)coords.cols();
+		std::vector<double> weights(dim_coords);
+		for (int ic = 0; ic < dim_coords; ++ic) {
+			weights[ic] = 1. + std::fmod((ic + 1) * 0.6180339887498949, 1.);
+		}
+		const double window_distance = 2. * std::sqrt((double)dim_coords) * EPSILON_NUMBERS;
 		std::vector<double> coords_sum(num_data);
 		std::vector<int> sort_sum(num_data);
 		std::vector<int> uniques_sorted;//index of unique points on sorted mean scale
 #pragma omp parallel for schedule(static)
 		for (int i = 0; i < num_data; ++i) {
-			coords_sum[i] = coords(i, Eigen::all).sum();
+			double weighted_sum = 0.;
+			for (int ic = 0; ic < dim_coords; ++ic) {
+				weighted_sum += weights[ic] * coords.coeff(i, ic);
+			}
+			coords_sum[i] = weighted_sum;
 		}
 		SortIndeces<double>(coords_sum, sort_sum);
 		for (int i_sort = 0; i_sort < num_data; ++i_sort) {
@@ -490,9 +518,11 @@ namespace GPBoost {
 			uniques_sorted.push_back(i_actual);//assume that 'i_sort' / 'i_actual' is a new unique point -> add it to 'uniques_sorted' (might be changed below)
 			unique_idx[i_actual] = (int)uniques_sorted.size() - 1;//'i_sort' / 'i_actual' is a new unique point -> its index stored in 'unique_idx' is its position in 'uniques_sorted', i.e., the last position of 'uniques_sorted' 
 			int j_sort;
-			//check for potential duplicates: find all points that have the same mean / 'coords_sum' value as 'i_actual'
+			//check for potential duplicates: find all points whose 'coords_sum' value is within the window of the one of 'i_actual'
+			//	(the window also covers the rounding errors of the weighted sums)
+			const double window_i = window_distance + EPSILON_NUMBERS * std::max(1., std::abs(coords_sum[i_actual]));
 			for (j_sort = i_sort + 1; j_sort < num_data; ++j_sort) {
-				if (NumberIsSmallerThan<double>(coords_sum[i_actual], coords_sum[sort_sum[j_sort]])) {
+				if (coords_sum[sort_sum[j_sort]] - coords_sum[i_actual] > window_i) {
 					break;//the loop end when 'j_sort' > 'i_sort' is for sure not a duplicate
 				}
 			}
@@ -546,5 +576,79 @@ namespace GPBoost {
 			unique_idx[i] = inv_order_uniques[unique_idx[i]];
 		}
 	}//end DetermineUniqueDuplicateCoordsFast
+
+	double ProjectCoordinatesNeighborSearch(const den_mat_t& coords,
+		bool allow_principal_direction,
+		std::vector<double>& projections) {
+		const int num_data = (int)coords.rows();
+		const int dim_coords = (int)coords.cols();
+		projections.resize(num_data);
+#pragma omp parallel for schedule(static)
+		for (int i = 0; i < num_data; ++i) {
+			projections[i] = coords(i, Eigen::all).sum();
+		}
+		// Above this dimension, the eigendecomposition of the covariance matrix of the points is not calculated
+		const int max_dim_principal_direction = 1000;
+		if (!allow_principal_direction || dim_coords < 2 || dim_coords > max_dim_principal_direction || num_data < 3) {
+			return (double)dim_coords;
+		}
+		// The variance of the projections on the unit vector (1, ..., 1) / sqrt(d) is compared with the one on the first principal
+		//	direction, i.e., the largest eigenvalue of the covariance matrix C of the points, which is at most trace(C). The
+		//	eigendecomposition is thus only needed if the former is small compared with trace(C). The calculations are sequential such
+		//	that the decision does not depend on the number of threads
+		vec_t mean = vec_t::Zero(dim_coords);
+		double mean_sum = 0.;
+		for (int i = 0; i < num_data; ++i) {
+			mean += coords.row(i).transpose();
+			mean_sum += projections[i];
+		}
+		mean /= num_data;
+		mean_sum /= num_data;
+		double var_sum = 0., trace_cov = 0.;
+		for (int i = 0; i < num_data; ++i) {
+			var_sum += (projections[i] - mean_sum) * (projections[i] - mean_sum);
+			trace_cov += (coords.row(i).transpose() - mean).squaredNorm();
+		}
+		var_sum /= ((double)num_data * dim_coords);
+		trace_cov /= num_data;
+		const double min_rel_var_sum = 0.1;
+		if (!(trace_cov > 0.) || var_sum >= min_rel_var_sum * trace_cov) {
+			return (double)dim_coords;
+		}
+		den_mat_t cov = den_mat_t::Zero(dim_coords, dim_coords);
+		vec_t centered(dim_coords);
+		for (int i = 0; i < num_data; ++i) {
+			centered = coords.row(i).transpose() - mean;
+			for (int c2 = 0; c2 < dim_coords; ++c2) {
+				for (int c1 = c2; c1 < dim_coords; ++c1) {
+					cov(c1, c2) += centered[c1] * centered[c2];
+				}
+			}
+		}
+		cov /= num_data;
+		Eigen::SelfAdjointEigenSolver<den_mat_t> eigen_solver(cov);//only the lower triangle is used
+		if (eigen_solver.info() != Eigen::Success) {
+			return (double)dim_coords;
+		}
+		const double var_largest = eigen_solver.eigenvalues()[dim_coords - 1];
+		if (var_sum >= min_rel_var_sum * var_largest) {
+			return (double)dim_coords;
+		}
+		vec_t direction = eigen_solver.eigenvectors().col(dim_coords - 1);
+		int ind_max;
+		direction.cwiseAbs().maxCoeff(&ind_max);
+		if (direction[ind_max] < 0.) {
+			direction = -direction;
+		}
+#pragma omp parallel for schedule(static)
+		for (int i = 0; i < num_data; ++i) {
+			double projection = 0.;
+			for (int c = 0; c < dim_coords; ++c) {
+				projection += coords.coeff(i, c) * direction[c];
+			}
+			projections[i] = projection;
+		}
+		return 1.;
+	}//end ProjectCoordinatesNeighborSearch
 
 }  // namespace GPBoost

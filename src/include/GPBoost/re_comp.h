@@ -101,6 +101,14 @@ namespace GPBoost {
 		virtual double GetZSigmaZtij(int i, int j) const = 0;
 
 		/*!
+		* \brief Virtual function that calculates the diagonal of the covariance matrix Z*Sigma*Z^T without calculating the
+		*		matrix, i.e., 'CalcSigma' does not need to be called before
+		* \param[out] diag Diagonal of Z*Sigma*Z^T
+		* \return False if the diagonal cannot be calculated in this way for this component
+		*/
+		virtual bool CalcZSigmaZtDiag(vec_t& diag) const = 0;
+
+		/*!
 		* \brief Get the marginal variance
 		* \return marginal variance
 		*/
@@ -196,6 +204,12 @@ namespace GPBoost {
 		* \param cov_pars Covariance parameters (on transformed scale)
 		*/
 		virtual void CovarianceParameterRangeWarning(const vec_t& pars) = 0;
+
+		/*!
+		* \brief Cap the covariance parameters to the range that is used when they are set (see 'SetCovPars')
+		* \param[out] pars Covariance parameters (on transformed scale)
+		*/
+		virtual void CapCovPars(vec_t& pars) const = 0;
 
 	protected:
 		/*! \brief Number of data points */
@@ -447,6 +461,21 @@ namespace GPBoost {
 				Log::REFatal("Matrix ZZt_ not defined");
 			}
 			return(this->cov_pars_[0] * ZZt_.coeff(i, j));
+		}
+
+		bool CalcZSigmaZtDiag(vec_t& diag) const override {
+			if (this->cov_pars_.size() == 0) {
+				Log::REFatal("Covariance parameters are not specified. Call 'SetCovPars' first.");
+			}
+			if (this->has_Z_) {
+				// every row of Z has one non-zero entry, so diag(Z * Sigma * Z^T) = sigma2 * Z.^2 * 1
+				diag = this->cov_pars_[0] * (this->Z_.cwiseAbs2() * vec_t::Ones(num_group_));
+			}
+			else {
+				// calculations on the random effects scale (one entry per group)
+				diag = vec_t::Constant(num_group_, this->cov_pars_[0]);
+			}
+			return true;
 		}
 
 		/*!
@@ -716,6 +745,8 @@ namespace GPBoost {
 
 		void CovarianceParameterRangeWarning(const vec_t& ) override { }
 
+		void CapCovPars(vec_t& ) const override { }
+
 	private:
 		/*! \brief Number of groups */
 		data_size_t num_group_;
@@ -821,6 +852,7 @@ namespace GPBoost {
 		* \param coords Coordinates (features) for Gaussian process
 		* \param cov_fct Type of covariance function
 		* \param shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+		* \param order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 		* \param taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param apply_tapering If true, tapering is applied to the covariance function (element-wise multiplication with a compactly supported Wendland correlation function)
@@ -837,6 +869,7 @@ namespace GPBoost {
 		RECompGP(const den_mat_t& coords,
 			string_t cov_fct,
 			double shape,
+			int order,
 			double taper_range,
 			double taper_shape,
 			bool apply_tapering,
@@ -859,7 +892,7 @@ namespace GPBoost {
 			is_cross_covariance_IP_ = false;
 			apply_tapering_ = apply_tapering;
 			apply_tapering_manually_ = apply_tapering_manually;
-			cov_function_ = std::shared_ptr<CovFunction<T_mat>>(new CovFunction<T_mat>(cov_fct, shape, taper_range, taper_shape, taper_mu, apply_tapering, (int)coords.cols(), use_precomputed_dist_for_calc_cov));
+			cov_function_ = std::shared_ptr<CovFunction<T_mat>>(new CovFunction<T_mat>(cov_fct, shape, order, taper_range, taper_shape, taper_mu, apply_tapering, (int)coords.cols(), use_precomputed_dist_for_calc_cov));
 			has_compact_cov_fct_ = (COMPACT_SUPPORT_COVS_.find(cov_function_->cov_fct_type_) != COMPACT_SUPPORT_COVS_.end()) || apply_tapering_;
 			this->num_cov_par_ = cov_function_->num_cov_par_;
 			if (use_Z_for_duplicates) {
@@ -917,12 +950,14 @@ namespace GPBoost {
 
 		/*!
 		* \brief Constructor for random coefficient Gaussian processes
-		* \param dist Pointer to distance matrix of corresponding base intercept GP
+		* \param dist Pointer to distance matrix of corresponding base intercept GP (can be a null pointer if no distances have been saved, e.g., for non-isotropic covariance functions)
+		* \param coords Coordinates (=features) of corresponding base intercept GP. These are needed for covariance functions which are not calculated based on precomputed distances (e.g., non-isotropic ones)
 		* \param base_effect_has_Z Indicate whether the corresponding base GP has an incidence matrix Z or not
 		* \param Z Pointer to incidence matrix Z of corresponding base intercept GP
 		* \param rand_coef_data Covariate data for random coefficient
 		* \param cov_fct Type of covariance function
 		* \param shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+		* \param order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 		* \param taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param taper_mu Parameter \mu of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -931,11 +966,13 @@ namespace GPBoost {
 		* \param dim_coordinates Dimension of input coordinates / features
 		*/
 		RECompGP(std::shared_ptr<T_mat> dist,
+			const den_mat_t& coords,
 			bool base_effect_has_Z,
 			sp_mat_t* Z,
 			const std::vector<double>& rand_coef_data,
 			string_t cov_fct,
 			double shape,
+			int order,
 			double taper_range,
 			double taper_shape,
 			double taper_mu,
@@ -947,14 +984,21 @@ namespace GPBoost {
 			}
 			this->num_data_ = (data_size_t)rand_coef_data.size();
 			dist_ = dist;
-			dist_saved_ = true;
+			//Distances are not saved for all covariance functions (e.g., non-isotropic ones). In this case, 'dist' is a
+			//	null pointer and the covariances are calculated based on the coordinates of the base intercept GP
+			dist_saved_ = (dist_ != nullptr);
+			coords_ = coords;
+			coord_saved_ = coords_.rows() > 0;
+			if (!dist_saved_ && !coord_saved_) {
+				Log::REFatal("RECompGP: neither distances nor coordinates are given for a random coefficient Gaussian process");
+			}
 			this->rand_coef_data_ = rand_coef_data;
 			this->is_rand_coef_ = true;
 			this->has_Z_ = true;
 			is_cross_covariance_IP_ = false;
 			apply_tapering_ = apply_tapering;
 			apply_tapering_manually_ = apply_tapering_manually;
-			cov_function_ = std::shared_ptr<CovFunction<T_mat>>(new CovFunction<T_mat>(cov_fct, shape, taper_range, taper_shape, taper_mu, apply_tapering, dim_coordinates, true));
+			cov_function_ = std::shared_ptr<CovFunction<T_mat>>(new CovFunction<T_mat>(cov_fct, shape, order, taper_range, taper_shape, taper_mu, apply_tapering, dim_coordinates, dist_saved_));
 			has_compact_cov_fct_ = (COMPACT_SUPPORT_COVS_.find(cov_function_->cov_fct_type_) != COMPACT_SUPPORT_COVS_.end()) || apply_tapering_;
 			this->num_cov_par_ = cov_function_->num_cov_par_;
 			sp_mat_t coef_W(this->num_data_, this->num_data_);
@@ -967,8 +1011,10 @@ namespace GPBoost {
 			else {
 				this->Z_ = coef_W;
 			}
-			coord_saved_ = false;
 			num_random_effects_ = (data_size_t)this->Z_.cols();
+			if (coord_saved_) {
+				CHECK((data_size_t)coords_.rows() == num_random_effects_);
+			}
 		}
 
 		/*!
@@ -977,6 +1023,7 @@ namespace GPBoost {
 		* \param rand_coef_data Covariate data for random coefficient
 		* \param cov_fct Type of covariance function
 		* \param shape Shape parameter of covariance function (=smoothness parameter for Matern covariance, irrelevant for some covariance functions such as the exponential or Gaussian)
+		* \param order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 		* \param taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param taper_mu Parameter \mu of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -989,6 +1036,7 @@ namespace GPBoost {
 		RECompGP(const std::vector<double>& rand_coef_data,
 			string_t cov_fct,
 			double shape,
+			int order,
 			double taper_range,
 			double taper_shape,
 			double taper_mu,
@@ -1006,7 +1054,7 @@ namespace GPBoost {
 			is_cross_covariance_IP_ = false;
 			apply_tapering_ = apply_tapering;
 			apply_tapering_manually_ = apply_tapering_manually;
-			cov_function_ = std::shared_ptr<CovFunction<T_mat>>(new CovFunction<T_mat>(cov_fct, shape, taper_range, taper_shape, taper_mu, apply_tapering, dim_coordinates, use_precomputed_dist_for_calc_cov));
+			cov_function_ = std::shared_ptr<CovFunction<T_mat>>(new CovFunction<T_mat>(cov_fct, shape, order, taper_range, taper_shape, taper_mu, apply_tapering, dim_coordinates, use_precomputed_dist_for_calc_cov));
 			has_compact_cov_fct_ = (COMPACT_SUPPORT_COVS_.find(cov_function_->cov_fct_type_) != COMPACT_SUPPORT_COVS_.end()) || apply_tapering_;
 			this->num_cov_par_ = cov_function_->num_cov_par_;
 			dist_saved_ = false;
@@ -1024,6 +1072,7 @@ namespace GPBoost {
 		* \param coords_ind_point Coordinates of inducing points
 		* \param cov_fct Type of covariance function
 		* \param shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. For the Wendland covariance function, we follow the notation of Bevilacqua et al. (2019, AOS)). This parameter is irrelevant for some covariance functions such as the exponential or Gaussian.
+		* \param order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 				* \param taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param apply_tapering If true, tapering is applied to the covariance function (element-wise multiplication with a compactly supported Wendland correlation function)
@@ -1034,6 +1083,7 @@ namespace GPBoost {
 			const den_mat_t& coords_ind_point,
 			string_t cov_fct,
 			double shape,
+			int order,
 			double taper_range,
 			double taper_shape,
 			bool apply_tapering,
@@ -1051,7 +1101,7 @@ namespace GPBoost {
 			apply_tapering_ = apply_tapering;
 			apply_tapering_manually_ = apply_tapering_manually;
 			bool save_distances = false;
-			cov_function_ = std::shared_ptr<CovFunction<T_mat>>(new CovFunction<T_mat>(cov_fct, shape, taper_range, taper_shape, taper_mu, apply_tapering, (int)coords.cols(), save_distances));
+			cov_function_ = std::shared_ptr<CovFunction<T_mat>>(new CovFunction<T_mat>(cov_fct, shape, order, taper_range, taper_shape, taper_mu, apply_tapering, (int)coords.cols(), save_distances));
 			has_compact_cov_fct_ = (COMPACT_SUPPORT_COVS_.find(cov_function_->cov_fct_type_) != COMPACT_SUPPORT_COVS_.end()) || apply_tapering_;
 			this->num_cov_par_ = cov_function_->num_cov_par_;
 			coords_ind_point_ = coords_ind_point;
@@ -1104,6 +1154,10 @@ namespace GPBoost {
 
 		double CovFunctionShape() const {
 			return(cov_function_->CovFunctionShape());
+		}
+
+		int CovFunctionOrder() const {
+			return(cov_function_->CovFunctionOrder());
 		}
 
 		double CovFunctionTaperRange() const {
@@ -1411,6 +1465,44 @@ namespace GPBoost {
 			}
 		} // end GetZSigmaZtij
 
+		bool CalcZSigmaZtDiag(vec_t& diag) const override {
+			if (this->cov_pars_.size() == 0) { Log::REFatal("Covariance parameters are not specified. Call 'SetCovPars' first."); }
+			if (is_cross_covariance_IP_) {
+				return false;
+			}
+			// Variances at the unique locations (the taper function is one on the diagonal)
+			vec_t sigma_diag(num_random_effects_);
+			if (cov_function_->variance_on_the_diagonal_) {
+				sigma_diag.setConstant(this->cov_pars_[0]);
+			}
+			else {
+				if (!coord_saved_) {
+					return false;
+				}
+#pragma omp parallel for schedule(static)
+				for (int i = 0; i < num_random_effects_; ++i) {
+					const vec_t coords_i = coords_.row(i).transpose();
+					sigma_diag[i] = cov_function_->CalculateCovarianceOneEntry(0., coords_i, coords_i, this->cov_pars_);
+				}
+			}
+			if (this->is_rand_coef_ || this->has_Z_) {
+				// diag(Z * Sigma * Z^T) = Z.^2 * diag(Sigma) requires at most one non-zero per row of Z
+				std::vector<int> num_non_zeros_row((size_t)this->Z_.rows(), 0);
+				for (int k = 0; k < this->Z_.outerSize(); ++k) {
+					for (sp_mat_t::InnerIterator it(this->Z_, k); it; ++it) {
+						if (++num_non_zeros_row[it.row()] > 1) {
+							return false;
+						}
+					}
+				}
+				diag = this->Z_.cwiseAbs2() * sigma_diag;
+			}
+			else {
+				diag = sigma_diag;
+			}
+			return true;
+		}//end CalcZSigmaZtDiag
+
 		double CalculateCovarianceOneEntry(const vec_t& coords,
 			const vec_t& coords_pred) const {
 			const double dist = 0.;
@@ -1449,6 +1541,11 @@ namespace GPBoost {
 			else {
 				(*cov_function_).CalculateGradientCovMatFull(dist_ref, coords_, coords_, sigma_, this->cov_pars_,
 					sigma_grad, transf_scale, nugget_var, ind_par, true);
+			}
+			if (apply_tapering_ && !apply_tapering_manually_ && ind_par > 0 && !cov_function_->GradientIsMultipleOfCov()) {
+				// The gradient of the tapered covariance matrix is the tapered gradient. The derivative with respect to the variance
+				//	(ind_par = 0) and the gradients that are multiples of the entries of the tapered 'sigma_' contain the taper already
+				(*cov_function_).template MultiplyWendlandCorrelationTaper<T_mat>(dist_ref, sigma_grad, !is_cross_covariance_IP_);
 			}
 			if (this->has_Z_) {
 				Z_sigma_grad_Zt = this->Z_ * sigma_grad * this->Z_.transpose();
@@ -1774,6 +1871,10 @@ namespace GPBoost {
 
 		void CovarianceParameterRangeWarning(const vec_t& pars) override { 
 			cov_function_->CovarianceParameterRangeWarning(pars);
+		}
+
+		void CapCovPars(vec_t& pars) const override {
+			cov_function_->CapPars(pars);
 		}
 
 	private:

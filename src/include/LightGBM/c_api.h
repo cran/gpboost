@@ -1335,6 +1335,7 @@ GPBOOST_C_EXPORT int LGBM_NetworkInitWithFunctions(int num_machines,
 * \param num_gp_rand_coef Number of Gaussian process random coefficients
 * \param cov_fct Type of covariance function for Gaussian process (GP)
 * \param cov_fct_shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+* \param cov_fct_order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 * \param gp_approx Type of GP-approximation for handling large data
 * \param cov_fct_taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 * \param cov_fct_taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -1353,6 +1354,9 @@ GPBOOST_C_EXPORT int LGBM_NetworkInitWithFunctions(int num_machines,
 * \param weights Sample weights. For Gaussian likelihoods, the error variance of observation i is divided by weights[i].
 *                For non-Gaussian likelihoods, the conditional log-likelihood contribution of observation i is multiplied by weights[i].
 * \param likelihood_learning_rate Likelihood learning rate for generalized Bayesian inference (only non-Gaussian likelihoods)
+* \param num_additional_likelihood_data Number of columns of 'additional_likelihood_data' (0 = none)
+* \param additional_likelihood_data Observation-level data required by some likelihoods in addition to the response variable
+*                (column-major, num_data x num_additional_likelihood_data), e.g., the number of events for "tweedie_joint"
 * \param[out] out Created REModel
 * \return 0 when succeed, -1 when failure happens
 */
@@ -1371,6 +1375,7 @@ GPBOOST_C_EXPORT int GPB_CreateREModel(int32_t num_data,
     int32_t num_gp_rand_coef,
     const char* cov_fct,
     double cov_fct_shape,
+    int cov_fct_order,
     const char* gp_approx,
     double cov_fct_taper_range,
     double cov_fct_taper_shape,
@@ -1388,6 +1393,8 @@ GPBOOST_C_EXPORT int GPB_CreateREModel(int32_t num_data,
     bool has_weights,
     const double* weights,
     double likelihood_learning_rate,
+    int num_additional_likelihood_data,
+    const double* additional_likelihood_data,
     REModelHandle* out);
 
 /*!
@@ -1401,7 +1408,7 @@ GPBOOST_C_EXPORT int GPB_REModelFree(REModelHandle handle);
 * \brief Set configuration parameters for the optimizer
 * \param handle Handle of REModel
 * \param init_cov_pars Initial values for covariance parameters of RE components
-* \param lr Learning rate for covariance parameters. If lr = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise)
+* \param lr Learning rate for covariance parameters. If lr = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise). For "lbfgs", this is not a learning rate which multiplies every update but the length of the first trial step: it is divided by the norm of the gradient in the first iteration
 * \param acc_rate_cov Acceleration rate for covariance parameters for Nesterov acceleration (only relevant if nesterov_schedule_version == 0). If acc_rate_cov = -999, internal default values are used
 * \param max_iter Maximal number of iterations. If max_iter = -999, internal default values are used
 * \param delta_rel_conv Convergence tolerance. The algorithm stops if the relative change in eiher the log-likelihood or the parameters is below this value. For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. If delta_rel_conv = -999, internal default values are used
@@ -1431,7 +1438,14 @@ GPBOOST_C_EXPORT int GPB_REModelFree(REModelHandle handle);
 *        only regression coefficients are initialized from an iid model.
 * \param estimate_cov_par_index If estimate_cov_par_index[0] >= 0, some covariance parameters might not be estimated, estimate_cov_par_index[i] is then bool and indicates which ones are estimated
 * \param m_lbfgs Number of corrections to approximate the inverse Hessian matrix for the lbfgs optimizer. If m_lbfgs = -999, internal default values are used
+* \param max_num_restarts_lbfgs Maximal number of restarts of the lbfgs optimizers after they have terminated. If max_num_restarts_lbfgs = -999, internal default values are used
+* \param cold_restart_lbfgs If true, restarts of the lbfgs optimizers are "cold" restarts, otherwise "warm" restarts (only relevant if max_num_restarts_lbfgs > 0)
 * \param delta_conv_mode_finding Used for checking convergence in mode finding algorithm for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
+* \param cg_convergence_criterion Stopping rule of conjugate gradient algorithms: "absolute" (stop when ||r||_2 < cg_delta_conv) or "relative" (stop when ||r||_2 <= max(cg_abs_tol, cg_rel_tol * ||b||_2), where b is the right-hand side of the linear system)
+* \param cg_rel_tol Relative tolerance of the "relative" stopping rule. If cg_rel_tol = -999, internal default values are used (= 1e-6)
+* \param cg_abs_tol Absolute tolerance floor of the "relative" stopping rule, which makes it robust for right-hand sides that are zero or very small. Independent of cg_delta_conv. If cg_abs_tol = -999, internal default values are used (= 1e-8)
+* \param cg_multi_rhs_convergence How the stopping rule is aggregated over the columns of a linear system with several right-hand sides, such as the stochastic Lanczos quadrature: "average", "max", or "per_rhs"
+* \param reset_modes_line_search_lbfgs If true, the mode finding of every trial point of the line search of the "lbfgs" optimizers starts at the modes of the current iterate, and the objective function value of the optimizer is kept separate from the negative log-likelihood stored in the model
 * \return 0 when succeed, -1 when failure happens
 */
 GPBOOST_C_EXPORT int GPB_SetOptimConfig(REModelHandle handle,
@@ -1464,7 +1478,14 @@ GPBOOST_C_EXPORT int GPB_SetOptimConfig(REModelHandle handle,
     bool init_coef_aux_pars_from_iid_model,
     const int* estimate_cov_par_index,
     int m_lbfgs,
-    double delta_conv_mode_finding);
+    double delta_conv_mode_finding,
+    int max_num_restarts_lbfgs,
+    bool cold_restart_lbfgs,
+    const char* cg_convergence_criterion,
+    double cg_rel_tol,
+    double cg_abs_tol,
+    const char* cg_multi_rhs_convergence,
+    bool reset_modes_line_search_lbfgs);
 
 /*!
 * \brief Find parameters that minimize the negative log-ligelihood (=MLE)
@@ -1558,10 +1579,22 @@ GPBOOST_C_EXPORT int GPB_GetCoef(REModelHandle handle,
     bool calc_std_dev);
 
 /*!
-* \brief Get / export the number of iterations until convergence
-*   Note: You should pre-allocate memory for num_it (length = 1)
+* \brief Get / export the convergence status of the last parameter estimation
+*   Note: You should pre-allocate memory for convergence_status (length = 1)
 * \param handle Handle of REModel
-* \param[out] num_it Number of iterations for convergence
+* \param[out] convergence_status 0 = converged, 1 = the maximal number of iterations has been reached,
+*   2 = no convergence since the line search of an lbfgs optimizer has not been successful and it could not
+*   be verified that nothing more can be gained (i.e., restarts have either not been done or they still
+*   improved the objective function when the last one was done)
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_GetConvergenceStatus(REModelHandle handle,
+    int* convergence_status);
+
+/*!
+* \brief Get the number of iterations for parameter estimation
+* \param handle Handle of REModel
+* \param[out] num_it Number of iterations for parameter estimation
 * \return 0 when succeed, -1 when failure happens
 */
 GPBOOST_C_EXPORT int GPB_GetNumIt(REModelHandle handle,
@@ -1579,6 +1612,73 @@ GPBOOST_C_EXPORT int GPB_GetNumIt(REModelHandle handle,
 GPBOOST_C_EXPORT int GPB_HasStdCylBesselK(int* has_bessel);
 
 /*!
+* \brief Get the current maximum number of threads of OpenMP, as returned by 'omp_get_max_threads()'. A team
+*   of threads can be smaller than this if the OpenMP runtime limits it, in particular through the limit of the
+*   contention group ('OMP_THREAD_LIMIT')
+*   Note: You should pre-allocate memory for num_threads (length = 1)
+* \param[out] num_threads Number of threads
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_GetNumParallelThreads(int* num_threads);
+
+/*!
+* \brief Set the number of threads used by OMP and Eigen for the entire process. Note: models for which a number
+*   of threads has been specified ('num_parallel_threads') are not affected by this, since they set (and reset)
+*   the number of threads themselves whenever they do calculations
+* \param num_threads Number of threads. If num_threads <= 0, the default number of threads is used
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_SetNumParallelThreads(int num_threads);
+
+/*!
+* \brief Get the number of threads that models use when no number of threads is specified for them. This is the
+*   number of threads that has been set for the session, if there is one, and the automatically selected number
+*   of threads otherwise
+*   Note: You should pre-allocate memory for num_threads (length = 1)
+* \param[out] num_threads Number of threads
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_GetDefaultNumParallelThreads(int* num_threads);
+
+/*!
+* \brief Get the automatically selected number of threads, i.e., the number of physical performance cores of the
+*   CPU limited by the number of threads that OMP uses and, unless 'OMP_NUM_THREADS' is set, by a CPU quota. An
+*   explicitly requested 'OMP_NUM_THREADS' takes precedence over the cores and the quota, and the limits of the
+*   OpenMP runtime itself ('OMP_THREAD_LIMIT') apply in either case
+*   Note: You should pre-allocate memory for num_threads (length = 1)
+* \param[out] num_threads Number of threads
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_GetAutoNumParallelThreads(int* num_threads);
+
+/*!
+* \brief Get the largest number of threads that GPBoost uses on its own, i.e., the number of threads that OMP uses
+*   when the automatically selected number of threads is determined. This is the upper limit for a number of
+*   threads that is set for the session
+*   Note: You should pre-allocate memory for num_threads (length = 1)
+* \param[out] num_threads Number of threads
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_GetMaxNumParallelThreads(int* num_threads);
+
+/*!
+* \brief Set the number of threads that models use when no number of threads is specified for them. In contrast to
+*   'GPB_SetNumParallelThreads', this does not change the number of threads of the process: it only changes the
+*   number of threads that is used when nothing else is requested
+* \param num_threads Number of threads. It is limited by 'GPB_GetMaxNumParallelThreads'. If num_threads <= 0, the
+*   automatically selected number of threads is used again
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_SetDefaultNumParallelThreads(int num_threads);
+
+/*!
+* \brief Do not write the message about the automatically selected number of threads. The message is written once
+*   per process when a model uses the automatically selected number of threads for the first time
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_SuppressAutoNumParallelThreadsMessage();
+
+/*!
 * \brief Set the data used for making predictions (useful if the same data is used repeatedly, e.g., in validation of GPBoost)
 * \param handle Handle of REModel
 * \param num_data_pred Number of data points for which predictions are made
@@ -1593,6 +1693,9 @@ GPBOOST_C_EXPORT int GPB_HasStdCylBesselK(int* has_bessel);
 * \param cg_delta_conv_pred Tolerance level for L2 norm of residuals for checking convergence in conjugate gradient algorithm when being used for prediction
 * \param nsim_var_pred Number of samples when simulation is used for calculating predictive variances
 * \param rank_pred_approx_matrix_lanczos Rank of the matrix for approximating predictive covariances obtained using the Lanczos algorithm
+* \param cg_convergence_criterion_pred Stopping rule of conjugate gradient algorithms when being used for prediction, see cg_convergence_criterion. If nullptr, the rule used for the parameter estimation is inherited
+* \param cg_rel_tol_pred Relative tolerance of the "relative" stopping rule when being used for prediction. If cg_rel_tol_pred = -1, the value used for the parameter estimation is inherited
+* \param cg_abs_tol_pred Absolute tolerance floor of the "relative" stopping rule when being used for prediction. If cg_abs_tol_pred = -1, the value used for the parameter estimation is inherited
 */
 GPBOOST_C_EXPORT int GPB_SetPredictionData(REModelHandle handle,
     int32_t num_data_pred,
@@ -1606,7 +1709,10 @@ GPBOOST_C_EXPORT int GPB_SetPredictionData(REModelHandle handle,
     int num_neighbors_pred,
     double cg_delta_conv_pred,
     int nsim_var_pred,
-    int rank_pred_approx_matrix_lanczos);
+    int rank_pred_approx_matrix_lanczos,
+    const char* cg_convergence_criterion_pred,
+    double cg_rel_tol_pred,
+    double cg_abs_tol_pred);
 
 /*!
 * \brief Make predictions: calculate conditional mean and variances or covariance matrix
@@ -1757,6 +1863,15 @@ GPBOOST_C_EXPORT int GPB_SetLikelihood(REModelHandle handle,
     const char* likelihood);
 
 /*!
+* \brief Mark the model as being used in the GPBoost algorithm. Standard errors of covariance and
+*        auxiliary parameters cannot be calculated for such a model since they require the fixed effects
+*        of the location parameter, which are given by the tree ensemble
+* \param handle Handle of REModel
+* \return 0 when succeed, -1 when failure happens
+*/
+GPBOOST_C_EXPORT int GPB_SetUsedInGPBoostAlgorithm(REModelHandle handle);
+
+/*!
 * \brief Return (last used) response variable data
 * \param handle Handle of REModel
 * \param[out] response_data Response variable data (memory needs to be preallocated)
@@ -1834,7 +1949,7 @@ GPBOOST_C_EXPORT int GPB_GetInitAuxPars(REModelHandle handle,
  * \brief Handle of error message.
  * \return Error message
  */
-static char* LastErrorMsg() { static THREAD_LOCAL char err_msg[512] = "Everything is fine"; return err_msg; }
+static char* LastErrorMsg() { static THREAD_LOCAL char err_msg[2048] = "Everything is fine"; return err_msg; }
 
 #ifdef _MSC_VER
 
@@ -1844,7 +1959,7 @@ static char* LastErrorMsg() { static THREAD_LOCAL char err_msg[512] = "Everythin
  * \param msg Error message
  */
 inline void LGBM_SetLastError(const char* msg) {
-  const int err_buf_len = 512;
+  const int err_buf_len = 2048;
   snprintf(LastErrorMsg(), err_buf_len, "%s", msg);
 }
 

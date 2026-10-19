@@ -80,15 +80,6 @@ struct TweedieSpecialFunctionCache {
 	}
 };
 
-struct TweedieLocationResult {
-	double canonical = 0.;
-	double score = 0.;
-	double information = 0.;
-	double deriv_information_eta = 0.;
-	double log_scaled_a = 0.;
-	double log_scaled_b = -std::numeric_limits<double>::infinity();
-};
-
 inline double TweedieExpFromLog(double log_value) {
 	if (log_value > std::log(std::numeric_limits<double>::max())) return std::numeric_limits<double>::infinity();
 	if (log_value < std::log(std::numeric_limits<double>::denorm_min())) return 0.;
@@ -112,15 +103,44 @@ inline double TweedieSignedLogSum(double coefficient_a, double log_a, double coe
 	return std::copysign(magnitude, a_is_larger ? coefficient_a : coefficient_b);
 }
 
-inline TweedieLocationResult EvaluateTweedieLocation(double y, double eta, double rho, double p) {
-	TweedieLocationResult ans;
-	ans.log_scaled_a = (2. - p) * eta - rho;
-	if (y > 0.) ans.log_scaled_b = std::log(y) + (1. - p) * eta - rho;
-	ans.canonical = TweedieSignedLogSum(-1. / (2. - p), ans.log_scaled_a, -1. / (p - 1.), ans.log_scaled_b);
-	ans.score = TweedieSignedLogSum(-1., ans.log_scaled_a, 1., ans.log_scaled_b);
-	ans.information = TweedieSignedLogSum(2. - p, ans.log_scaled_a, p - 1., ans.log_scaled_b);
-	ans.deriv_information_eta = TweedieSignedLogSum((2. - p) * (2. - p), ans.log_scaled_a, -(p - 1.) * (p - 1.), ans.log_scaled_b);
-	return ans;
+/*!
+* \brief The location-dependent quantities of the Tweedie log-density with mu = exp(eta) and phi = exp(rho):
+*	kCanonical: the part of the log-density that depends on eta, (y * mu^(1-p) / (1-p) - mu^(2-p) / (2-p)) / phi,
+*	kScore: its first derivative wrt eta, kInformation: its negative second derivative wrt eta,
+*	kDerivInformationEta: the first derivative of kInformation wrt eta
+*/
+enum class TweedieLocationQuantity { kCanonical, kScore, kInformation, kDerivInformationEta };
+
+/*! \brief log(mu^(2-p) / phi) with mu = exp(eta) and phi = exp(rho) */
+inline double TweedieLogScaledA(double eta, double rho, double p) {
+	return (2. - p) * eta - rho;
+}
+
+/*! \brief log(y * mu^(1-p) / phi) with mu = exp(eta) and phi = exp(rho), -inf for y = 0 */
+inline double TweedieLogScaledB(double y, double eta, double rho, double p) {
+	return (y > 0.) ? std::log(y) + (1. - p) * eta - rho : -std::numeric_limits<double>::infinity();
+}
+
+/*! \brief One location-dependent quantity of the Tweedie log-density from 'TweedieLogScaledA' and 'TweedieLogScaledB' */
+inline double TweedieLocationQuantityFromLogScaled(TweedieLocationQuantity quantity, double log_scaled_a, double log_scaled_b, double p) {
+	switch (quantity) {
+	case TweedieLocationQuantity::kCanonical:
+		return TweedieSignedLogSum(-1. / (2. - p), log_scaled_a, -1. / (p - 1.), log_scaled_b);
+	case TweedieLocationQuantity::kScore:
+		return TweedieSignedLogSum(-1., log_scaled_a, 1., log_scaled_b);
+	case TweedieLocationQuantity::kInformation:
+		return TweedieSignedLogSum(2. - p, log_scaled_a, p - 1., log_scaled_b);
+	default:// kDerivInformationEta
+		return TweedieSignedLogSum((2. - p) * (2. - p), log_scaled_a, -(p - 1.) * (p - 1.), log_scaled_b);
+	}
+}
+
+/*!
+* \brief One location-dependent quantity of the Tweedie log-density. Callers that need several quantities at the same point
+*	calculate 'TweedieLogScaledA' and 'TweedieLogScaledB' once and use 'TweedieLocationQuantityFromLogScaled'
+*/
+inline double EvaluateTweedieLocationQuantity(TweedieLocationQuantity quantity, double y, double eta, double rho, double p) {
+	return TweedieLocationQuantityFromLogScaled(quantity, TweedieLogScaledA(eta, rho, p), TweedieLogScaledB(y, eta, rho, p), p);
 }
 
 inline TweediePowerTransform TransformTweediePowerFromQ(double q, double lower, double upper) {
@@ -241,6 +261,48 @@ inline TweedieSeriesResult EvaluateTweedieLogNormalizer(double y, double rho, do
 		ans.d2_rho = std::max(0., er2 - er * er);
 		ans.d2_rho_theta = e_second_rt + ert - er * et;
 		ans.d2_theta = e_second_t + et2 - et * et;
+	}
+	return ans;
+}
+
+/*!
+* \brief Joint log-density of (Y, N) of the compound Poisson--Gamma representation, N ~ Poisson(mu^(2-p) / (phi * (2-p))),
+*	Y | N = n ~ Gamma(n * (2-p) / (p-1), scale = phi * (p-1) * mu^(p-1)), without the part that depends on the location.
+*	The location-dependent part equals the one of the marginal Tweedie density ('TweedieLocationQuantity::kCanonical'), and
+*	the remaining part is the n-th term of the series of the marginal normalizer, i.e. log(a_n(y, phi, p)) with
+*	a(y, phi, p) = sum_n a_n(y, phi, p). For n = 0, y has to be 0 and the result is 0.
+*	The derivatives are wrt rho = log(phi) and the transformed power theta (dp/dtheta = 'dp_dtheta'), with the same
+*	fields and conventions as 'EvaluateTweedieLogNormalizer'. Since log(a_n) is linear in rho, d2_rho = 0
+*/
+inline TweedieSeriesResult EvaluateTweedieJointLogNormalizer(double y, double n, double rho, double p,
+	double dp_dtheta, double d2p_dtheta2, TweedieDerivativeOrder order, bool calculate_power_derivatives) {
+	TweedieSeriesResult ans;
+	ans.lower = ans.upper = static_cast<int64_t>(n);
+	if (n == 0.) {
+		ans.converged = (y == 0.);
+		return ans;
+	}
+	if (!(y > 0.) || !std::isfinite(y) || !std::isfinite(rho) || !(p > 1. && p < 2.) || !(n > 0.)) {
+		ans.converged = false;
+		return ans;
+	}
+	const double log_y = std::log(y);
+	const double alpha = (2. - p) / (p - 1.);
+	ans.log_a = TweedieSeriesLogTerm(static_cast<int64_t>(n), log_y, rho, p) - log_y;
+	if (order == TweedieDerivativeOrder::kValue) return ans;
+	ans.d_rho = -n / (p - 1.);
+	if (calculate_power_derivatives) {
+		const double alpha_p = -1. / ((p - 1.) * (p - 1.));
+		const double H = log_y - std::log(p - 1.) - rho - GPBoost::digamma(n * alpha);
+		const double lp = n * (alpha_p * H - alpha / (p - 1.) + 1. / (2. - p));
+		ans.d_theta = dp_dtheta * lp;
+		if (order == TweedieDerivativeOrder::kSecond) {
+			const double alpha_pp = 2. / ((p - 1.) * (p - 1.) * (p - 1.));
+			const double lpp = n * (alpha_pp * H - 2. * alpha_p / (p - 1.) - n * alpha_p * alpha_p * GPBoost::trigamma(n * alpha) +
+				alpha / ((p - 1.) * (p - 1.)) + 1. / ((2. - p) * (2. - p)));
+			ans.d2_rho_theta = dp_dtheta * n / ((p - 1.) * (p - 1.));
+			ans.d2_theta = dp_dtheta * dp_dtheta * lpp + d2p_dtheta2 * lp;
+		}
 	}
 	return ans;
 }

@@ -47,6 +47,7 @@ namespace GPBoost {
 		* \param num_gp_rand_coef Number of Gaussian process random coefficients
 		* \param cov_fct Type of covariance function for Gaussian process (GP)
 		* \param cov_fct_shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+		* \param cov_fct_order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 		* \param gp_approx Type of GP-approximation for handling large data
 		* \param cov_fct_taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param cov_fct_taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -65,6 +66,9 @@ namespace GPBoost {
 		* \param weights Sample weights. For Gaussian likelihoods, the error variance of observation i is divided by weights[i].
 		*                For non-Gaussian likelihoods, the conditional log-likelihood contribution of observation i is multiplied by weights[i].
 		* \param likelihood_learning_rate Likelihood learning rate for generalized Bayesian inference (only non-Gaussian likelihoods)
+		* \param num_additional_likelihood_data Number of columns of 'additional_likelihood_data' (0 = none)
+		* \param additional_likelihood_data Observation-level data required by some likelihoods in addition to the response variable
+		*		(column-major, num_data x num_additional_likelihood_data), e.g., the number of events for "tweedie_joint"
 		*/
 		LIGHTGBM_EXPORT REModel(data_size_t num_data,
 			const data_size_t* cluster_ids_data,
@@ -81,6 +85,7 @@ namespace GPBoost {
 			data_size_t num_gp_rand_coef,
 			const char* cov_fct,
 			double cov_fct_shape,
+			int cov_fct_order,
 			const char* gp_approx,
 			double cov_fct_taper_range,
 			double cov_fct_taper_shape,
@@ -97,7 +102,9 @@ namespace GPBoost {
 			bool GPU_use,
 			bool has_weights,
 			const double* weights,
-			double likelihood_learning_rate);
+			double likelihood_learning_rate,
+			int num_additional_likelihood_data = 0,
+			const double* additional_likelihood_data = nullptr);
 
 		/*! \brief Destructor */
 		LIGHTGBM_EXPORT ~REModel();
@@ -159,7 +166,7 @@ namespace GPBoost {
 		/*!
 		* \brief Set configuration parameters for the optimizer
 		* \param init_cov_pars Initial values for covariance parameters of RE components
-		* \param lr Learning rate for covariance parameters. If lr = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise)
+		* \param lr Learning rate for covariance parameters. If lr = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise). For "lbfgs", this is not a learning rate which multiplies every update but the length of the first trial step: it is divided by the norm of the gradient in the first iteration
 		* \param acc_rate_cov Acceleration rate for covariance parameters for Nesterov acceleration (only relevant if nesterov_schedule_version == 0). If acc_rate_cov = -999, internal default values are used
 		* \param max_iter Maximal number of iterations. If max_iter = -999, internal default values are used
 		* \param delta_rel_conv Convergence tolerance. The algorithm stops if the relative change in eiher the log-likelihood or the parameters is below this value. For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. If delta_rel_conv = -999, internal default values are used
@@ -190,6 +197,15 @@ namespace GPBoost {
 		* \param estimate_cov_par_index If estimate_cov_par_index[0] >= 0, some covariance parameters might not be estimated, estimate_cov_par_index[i] is then bool and indicates which ones are estimated
 		* \param m_lbfgs Number of corrections to approximate the inverse Hessian matrix for the lbfgs optimizer. If m_lbfgs = -999, internal default values are used
 		* \param delta_conv_mode_finding Used for checking convergence in mode finding algorithm for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
+		* \param max_num_restarts_lbfgs Maximal number of restarts of the lbfgs optimizers after they have terminated. If max_num_restarts_lbfgs = -999, internal default values are used
+		* \param cold_restart_lbfgs If true, restarts of the lbfgs optimizers are "cold" restarts, otherwise "warm" restarts (only relevant if max_num_restarts_lbfgs > 0)
+		* \param cg_convergence_criterion Convergence criterion of the conjugate gradient algorithm ("absolute" or "relative")
+		* \param cg_rel_tol Relative tolerance of the conjugate gradient algorithm
+		* \param cg_abs_tol Absolute tolerance of the conjugate gradient algorithm
+		* \param cg_multi_rhs_convergence How the stopping rule is aggregated over the columns of a linear system with several right-hand sides
+		* \param reset_modes_line_search_lbfgs If true, the mode finding of every trial point of the line search of the "lbfgs" optimizers starts
+		*		at the modes of the current iterate, and the objective function value of the optimizer is kept separate from the negative
+		*		log-likelihood stored in the model
 		*/
 		void SetOptimConfig(double* init_cov_pars,
 			double lr,
@@ -220,7 +236,14 @@ namespace GPBoost {
 			bool init_coef_aux_pars_from_iid_model,
 			const int* estimate_cov_par_index,
 			int m_lbfgs,
-			double delta_conv_mode_finding);
+			double delta_conv_mode_finding,
+			int max_num_restarts_lbfgs,
+			bool cold_restart_lbfgs,
+			const char* cg_convergence_criterion,
+			double cg_rel_tol,
+			double cg_abs_tol,
+			const char* cg_multi_rhs_convergence,
+			bool reset_modes_line_search_lbfgs);
 
 		/*!
 		* \brief Reset cov_pars_ (to their initial values).
@@ -348,6 +371,11 @@ namespace GPBoost {
 		*/
 		void SetOffsetData(const double* fixed_effects);
 
+		/*!
+		* \brief Mark the model as being used in the GPBoost algorithm (see 'SetUsedInGPBoostAlgorithm' in 're_model_template.h')
+		*/
+		void SetUsedInGPBoostAlgorithm();
+
 		bool CanCalculateStandardErrorsCovPars() const;
 
 		/*!
@@ -396,7 +424,10 @@ namespace GPBoost {
 			int num_neighbors_pred,
 			double cg_delta_conv_pred,
 			int nsim_var_pred,
-			int rank_pred_approx_matrix_lanczos);
+			int rank_pred_approx_matrix_lanczos,
+			const char* cg_convergence_criterion_pred,
+			double cg_rel_tol_pred,
+			double cg_abs_tol_pred);
 
 		/*!
 		* \brief Make predictions: calculate conditional mean and variances or covariance matrix
@@ -460,11 +491,23 @@ namespace GPBoost {
 			const double* y_obs,
 			double* out_predict,
 			const double* fixed_effects,
-			bool calc_var) const;
+			bool calc_var);
 
 		int GetNumIt() const;
 
+		/*!
+		* \brief Convergence status of the last parameter estimation
+		* \return 0 = converged, 1 = the maximal number of iterations has been reached, 2 = no convergence since
+		*		the line search of an lbfgs optimizer has not been successful and it could not be verified that
+		*		nothing more can be gained (i.e., restarts have either not been done or they still improved the
+		*		objective function when the last one was done)
+		*/
+		int GetConvergenceStatus() const;
+
 		int GetNumSetsFixedEffects() const;
+
+		/*! \brief Number of sets of random effects / GPs (1 unless several location parameter blocks have random effects) */
+		int GetNumSetsRE();
 
 		int GetNumData() const;
 
@@ -483,8 +526,50 @@ namespace GPBoost {
 		* \brief If cov_pars_ is is not defined, define them as init_cov_pars_ or if init_cov_pars_ is not given, find "reasonable" default values for the intial values of the covariance parameters
 		* \param y_data Response variable data used for finding intial values if cov_pars_ is not defined
 		* \param fixed_effects Additional fixed effects that are added to the linear predictor (= offset)
+		* \param covariate_data Covariate data (column-major), used by 'InitFromHomoscedasticModel()' if given
+		* \param num_covariates Number of covariates
 		*/
 		void InitializeCovParsIfNotDefined(const double* y_data,
+			const double* fixed_effects,
+			const double* covariate_data = nullptr,
+			int num_covariates = 0);
+
+		/*!
+		* \brief Initial covariance parameters for likelihood = 'gaussian_heteroscedastic_fixed_and_random' from a homoscedastic
+		*		Gaussian process model with the same Gaussian process: the GP of the mean gets its parameters, the GP of the
+		*		log-error variance its ranges and small marginal variances. The estimates of this model are also kept for
+		*		'InitCoefFromHomoscedasticModel()'. Otherwise, the default initial values explain all variation by the error
+		*		variance, and the optimization can end at a local optimum at which the GP of the log-error variance explains
+		*		part of the variation of the mean
+		* \param y_data Response variable data. If nullptr (GPBoost algorithm), the response variable that has been set
+		*		before is used, and the homoscedastic model has an intercept if there are no covariates
+		* \param covariate_data Covariate data (column-major), can be nullptr
+		* \param num_covariates Number of covariates
+		* \param fixed_effects Additional fixed effects that are added to the linear predictor (= offset), can be nullptr
+		* \return True if cov_pars_ has been set, false if this is not applicable (see 'HomoscedasticModelCanInitCovPars()')
+		*/
+		bool InitCovParsFromHomoscedasticModel(const double* y_data,
+			const double* covariate_data,
+			int num_covariates,
+			const double* fixed_effects);
+
+		/*!
+		* \brief True if 'InitCovParsFromHomoscedasticModel()' is applicable: likelihood = 'gaussian_heteroscedastic_fixed_and_random',
+		*		the arguments of the Gaussian process have been kept, and no weight is zero (a Gaussian likelihood requires positive weights)
+		*/
+		bool HomoscedasticModelCanInitCovPars() const;
+
+		/*!
+		* \brief Initial linear regression coefficients for likelihood = 'gaussian_heteroscedastic_fixed_and_random' from the
+		*		homoscedastic model of 'InitCovParsFromHomoscedasticModel()': its coefficients for the mean and the logarithm
+		*		of its error variance for the intercept of the log-error variance
+		* \param covariate_data Covariate data (column-major)
+		* \param num_covariates Number of covariates
+		* \param fixed_effects Additional fixed effects that are added to the linear predictor (= offset), can be nullptr
+		* \return True if coef_ has been set, false if this is not possible (e.g., no intercept or no such model with these covariates)
+		*/
+		bool InitCoefFromHomoscedasticModel(const double* covariate_data,
+			int num_covariates,
 			const double* fixed_effects);
 
 		/*!
@@ -538,17 +623,20 @@ namespace GPBoost {
 		* \param pred_mean Predictive mean of latent random effects
 		* \param pred_var Predictive variances of latent random effects
 		* \param num_data Number of data points
+		* \param extra_location_par Values of the additional fixed-effects-only location parameter blocks at the test points
+		*		(num_data x (number of sets of fixed effects - 1), column-major; nullptr if there are none)
 		*/
 		double TestNegLogLikelihoodAdaptiveGHQuadrature(const label_t* y_test,
 			const double* pred_mean,
 			const double* pred_var,
-			const data_size_t num_data);
+			const data_size_t num_data,
+			const double* extra_location_par = nullptr);
 
 	private:
 
 		string_t matrix_format_ = "den_mat_t";//den_mat_t, sp_mat_t, sp_mat_rm_t
-		std::unique_ptr<REModelTemplate<sp_mat_t, chol_sp_mat_t>> re_model_sp_;
-		std::unique_ptr<REModelTemplate<sp_mat_rm_t, chol_sp_mat_rm_t>> re_model_sp_rm_;
+		std::unique_ptr<REModelTemplate<sp_mat_t, chol_cholmod_sp_mat_t>> re_model_sp_;
+		std::unique_ptr<REModelTemplate<sp_mat_rm_t, chol_cholmod_sp_mat_rm_t>> re_model_sp_rm_;
 		std::unique_ptr<REModelTemplate<den_mat_t, chol_den_mat_t>> re_model_den_;
 		/*! \brief List of covariance functions wtih compact support */
 		const std::set<string_t> COMPACT_SUPPORT_COVS_{ "wendland", "exponential_tapered" };
@@ -560,6 +648,10 @@ namespace GPBoost {
 		bool GPU_use_ = false;
 		bool has_weights_ = false;
 		std::vector<double> weights_;
+		/*! \brief Number of columns of 'additional_likelihood_data_' */
+		int num_additional_likelihood_data_ = 0;
+		/*! \brief Additional likelihood data (column-major, original ordering), kept for the auxiliary iid model */
+		std::vector<double> additional_likelihood_data_;
 		double likelihood_learning_rate_ = 1.;
 		bool trace_ = false;
 		int num_it_ = 0; //Number of iterations done for covariance and linear regression parameter estimation
@@ -592,6 +684,37 @@ namespace GPBoost {
 		bool init_coef_aux_pars_from_iid_model_ = false;
 		bool model_has_been_estimated_ = false;
 		std::vector<double> init_score_boosting_;
+		/*! \brief Arguments of the Gaussian process, kept for the auxiliary homoscedastic model of 'InitCovParsFromHomoscedasticModel()' */
+		struct GPArgsAuxModel {
+			std::vector<data_size_t> cluster_ids;
+			std::vector<double> gp_coords;
+			int dim_gp_coords = 0;
+			string_t cov_fct;
+			double cov_fct_shape = 0.;
+			int cov_fct_order = 1;
+			string_t gp_approx;
+			double cov_fct_taper_range = 1.;
+			double cov_fct_taper_shape = 1.;
+			int num_neighbors = -1;
+			string_t vecchia_ordering;
+			int num_ind_points = -1;
+			double cover_tree_radius = 1.;
+			string_t ind_points_selection;
+		};
+		/*! \brief Only set for likelihood = 'gaussian_heteroscedastic_fixed_and_random' */
+		std::unique_ptr<GPArgsAuxModel> gp_args_aux_model_;
+		/*! \brief Linear regression coefficients of the homoscedastic model of 'InitCovParsFromHomoscedasticModel()' (empty if it has no
+		*		covariates). This and the following two members are only set within the call of 'OptimLinRegrCoefCovPar()' that has estimated this model */
+		vec_t coef_homoscedastic_model_;
+		/*! \brief Intercept column of the covariates of the homoscedastic model (-1 if there is none) */
+		int intercept_col_homoscedastic_model_ = -1;
+		/*! \brief Error variance of the homoscedastic model (<= 0 if it has not been fitted) */
+		double error_var_homoscedastic_model_ = -1.;
+		/*! \brief True if the initial covariance parameters of the GPBoost algorithm are obtained from the homoscedastic model in
+		*		'FindInitialValueBoosting()', where the offset (initial score) is known, and not in 'InitializeCovParsIfNotDefined()' */
+		bool homoscedastic_model_deferred_to_boosting_ = false;
+		/*! \brief Initial variance of the GP of the log-error variance when the initial values are obtained from the homoscedastic model */
+		const double INIT_VAR_LOG_ERROR_VAR_GP_ = 0.01;
 	};
 
 }  // namespace GPBoost

@@ -182,7 +182,7 @@ internal::gd_basic_impl(
     }
 
     Vec_t grad = OPTIM_MATOPS_ZERO_VEC(n_vals);//ChangedForGPBoost: zero-initialized, 'EvalLLforOptimLib' reads the first entries before they are set // gradient
-    box_objfn(x,&grad,opt_data);
+    double fx = box_objfn(x,&grad,opt_data); // ChangedForGPBoost: kept for the early return below
 
     double grad_err = OPTIM_MATOPS_L2NORM(grad);
 
@@ -192,6 +192,13 @@ internal::gd_basic_impl(
     for (int i = 0; i < std::min((int)x.size(), 5); ++i) { Log::REDebug("(Transformed) parameter[%d]: %g", i, x[i]); }
 
     if (grad_err <= grad_err_tol) {
+        // ChangedForGPBoost: this returns before 'error_reporting()', which is what writes the values that
+        //	the caller reads afterwards. They are set here, since the starting point is the result in this case
+        if (settings_inp) {
+            settings_inp->opt_iter = 0;
+            settings_inp->opt_error_value = grad_err;
+            settings_inp->opt_fn_value = fx;
+        }
         return true;
     }
 
@@ -256,9 +263,16 @@ internal::gd_basic_impl(
         x = inv_transform(x, bounds_type, lower_bounds, upper_bounds);
     }
 
-    error_reporting(init_out_vals, x, opt_objfn, opt_data, 
-                    success, grad_err, grad_err_tol, iter, iter_max, 
+    error_reporting(init_out_vals, x, opt_objfn, opt_data,
+                    success, grad_err, grad_err_tol, iter, iter_max,
                     conv_failure_switch, settings_inp);
+
+    // ChangedForGPBoost: 'success' is determined by 'grad_err' alone, the second convergence criterion of
+    //	this algorithm is reported separately. Set after 'error_reporting', which overwrites the other
+    //	returned values
+    if (settings_inp) {
+        settings_inp->opt_rel_sol_change = rel_sol_change;
+    }
 
     //
 

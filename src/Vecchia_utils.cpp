@@ -32,7 +32,7 @@ namespace GPBoost {
 		const std::vector<int>& coords_ind_j,
 		const den_mat_t& coords,
 		const vec_t& corr_diag,
-		const den_mat_t& chol_ip_cross_cov,
+		const ColumnBlocksView& chol_ip_cross_cov,
 		std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
 		vec_t& distances,
 		string_t dist_function,
@@ -96,7 +96,7 @@ namespace GPBoost {
 	}
 
 	void CoverTree_kNN(const den_mat_t& coords_mat,
-		const den_mat_t& chol_ip_cross_cov,
+		const ColumnBlocksView& chol_ip_cross_cov,
 		const vec_t& corr_diag,
 		const int start,
 		std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
@@ -104,7 +104,7 @@ namespace GPBoost {
 		int& level,
 		bool distances_saved,
 		string_t dist_function) {
-		den_mat_t coords = coords_mat;
+		const den_mat_t& coords = coords_mat;
 		// Distances already computed
 		std::shared_ptr<RECompGP<den_mat_t>> re_comp = std::dynamic_pointer_cast<RECompGP<den_mat_t>>(re_comps_vecchia_cluster_i[0]);
 		//Select data point with index 0 as root
@@ -175,18 +175,20 @@ namespace GPBoost {
 		const int levels,
 		const bool distances_saved,
 		const den_mat_t& coords,
-		const den_mat_t& chol_ip_cross_cov,
+		const ColumnBlocksView& chol_ip_cross_cov,
 		const vec_t& corr_diag,
 		std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
 		std::vector<int>& neighbors_i,
 		std::vector<double>& dist_of_neighbors_i,
-		std::map<int, std::vector<int>>& cover_tree,
-		string_t dist_function) {
+		const std::map<int, std::vector<int>>& cover_tree,
+		string_t dist_function,
+		int first_candidate,
+		int end_candidates) {
 		// Initialize distance and help matrices
 		// query point
 		den_mat_t coords_i = coords(i, Eigen::all);
 		// Initialize vectors
-		int root = cover_tree[-1][0];
+		int root = cover_tree.at(-1)[0];
 		std::vector<int> Q;
 		std::vector<double> Q_dist;
 		std::vector<int> diff_rev = { root };
@@ -205,7 +207,7 @@ namespace GPBoost {
 				diff_rev_interim.push_back(root);
 			}
 			for (int j : diff_rev) {
-				for (int jj : cover_tree[j]) {
+				for (int jj : cover_tree.at(j)) {
 					if (jj < i) {
 						if (jj != j) {
 							Q.push_back(jj);
@@ -291,18 +293,21 @@ namespace GPBoost {
 			}
 		}
 		else {
-			vec_t dist_vect(1);
-#pragma omp parallel for schedule(static)
+			// brute-force search among the points of the tree that precede 'i'
+			std::vector<int> candidates(std::max(0, std::min(i, end_candidates) - first_candidate));
+			std::iota(candidates.begin(), candidates.end(), first_candidate);
+			vec_t dist_vect(candidates.size());
+			if (!candidates.empty()) {
+				distances_funct(i, candidates, coords, corr_diag, chol_ip_cross_cov,
+					re_comps_vecchia_cluster_i, dist_vect, dist_function, distances_saved);
+			}
 			for (int j = 0; j < k; ++j) {
 				nn_dist[j] = std::numeric_limits<double>::infinity();
 			}
-			for (int jj = 0; jj < i; ++jj) {
-				std::vector<int> indj{ jj };
-				distances_funct(i, indj, coords, corr_diag, chol_ip_cross_cov,
-					re_comps_vecchia_cluster_i, dist_vect, dist_function, distances_saved);
-				if (dist_vect[0] < nn_dist[k - 1]) {
-					nn_dist[k - 1] = dist_vect[0];
-					neighbors_i[k - 1] = jj;
+			for (int jj = 0; jj < (int)candidates.size(); ++jj) {
+				if (dist_vect[jj] < nn_dist[k - 1]) {
+					nn_dist[k - 1] = dist_vect[jj];
+					neighbors_i[k - 1] = candidates[jj];
 					SortVectorsIncreasing<double>(nn_dist.data(), neighbors_i.data(), k);
 				}
 			}
@@ -313,7 +318,7 @@ namespace GPBoost {
 	void find_nearest_neighbors_Vecchia_FSA_fast(const den_mat_t& coords,
 		int num_data,
 		int num_neighbors,
-		const den_mat_t& chol_ip_cross_cov,
+		const ColumnBlocksView& chol_ip_cross_cov,
 		const string_t& vecchia_neighbor_selection,
 		std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
 		std::vector<std::vector<int>>& neighbors,
@@ -489,8 +494,15 @@ namespace GPBoost {
 #ifdef USE_CUDA_GP
 					int cov_fct_shape_int = (int)(cov_fct_shape * 10);// faster to compare int than double on GPU
 					double range_param = (covfct == "matern_ard") ? 1. : pars[1];
+					// the GPU needs the columns in one matrix, they are only copied if the view consists of two matrices
+					den_mat_t chol_ip_cross_cov_copy;
+					const den_mat_t* chol_ip_cross_cov_mat = chol_ip_cross_cov.WholeMatrix();
+					if (chol_ip_cross_cov_mat == nullptr) {
+						chol_ip_cross_cov_copy = chol_ip_cross_cov.ToMatrix();
+						chol_ip_cross_cov_mat = &chol_ip_cross_cov_copy;
+					}
 					success = find_nearest_neighbors_bruteforce_GPU(coords_unique_scaled, num_data, num_neighbors, pars,
-						start_at, brute_force_threshold, end_search_at, (int)coords.cols(), corr_diag, chol_ip_cross_cov,
+						start_at, brute_force_threshold, end_search_at, (int)coords.cols(), corr_diag, *chol_ip_cross_cov_mat,
 						cov_fct_shape_int, range_param, EPSILON_NUMBERS, dist_funct, neighbors, start_dim);
 #endif 
 				}
@@ -504,72 +516,39 @@ namespace GPBoost {
 			}
 			else {
 				if (brute_force_threshold < num_data) {
-					int level = 0;
-					// Build CoverTree
-					std::map<int, std::vector<int>> cover_tree;
-					std::map<int, std::map<int, std::vector<int>>> cover_trees;
+					// Build cover trees: the candidate neighbors are split into segments of at least 'min_segment_size'
+					//	points with one tree per segment, which are built in parallel
 					std::vector<double> dist_dummy;
-					// Set number of threads to the maximum available
+					const int num_candidates = (prediction && !cond_on_all) ? num_data_obs : num_data;
+					const int min_segment_size = std::max(1000, num_neighbors);
 					int num_threads;
 #ifdef _OPENMP
 					num_threads = omp_get_max_threads();
 #else
 					num_threads = 1;
 #endif
-					std::vector<int> levels_threads(num_threads);
-					std::vector<int> segment_start(num_threads);
-					std::vector<int> segment_length(num_threads);
-					den_mat_t coords_ct;
-					if (prediction && !cond_on_all) {
-						coords_ct = coords.topRows(num_data_obs);
+					const int num_trees = std::max(1, std::min(num_threads, num_candidates / min_segment_size));
+					std::vector<std::map<int, std::vector<int>>> cover_trees(num_trees);
+					std::vector<int> levels_trees(num_trees);
+					std::vector<int> segment_start(num_trees + 1);
+					for (int t = 0; t <= num_trees; ++t) {
+						segment_start[t] = (int)(((int64_t)t * num_candidates) / num_trees);
 					}
-					else {
-						coords_ct = coords;
-					}
-					for (int i = 0; i < num_threads; ++i) {
-						cover_trees[i] = cover_tree;
-					}
-					if (num_threads != 1) {
-						int segment_size = (int)(std::ceil((double)coords_ct.rows() / (double)num_threads));
-						if (segment_size < std::max(1000, num_neighbors)) {
-							num_threads = (int)(std::floor((double)coords_ct.rows() / (double)std::max(1000, num_neighbors)));
-							segment_size = (int)(std::ceil((double)coords_ct.rows() / (double)num_threads));
-						}
-						int last_segment = (int)(coords_ct.rows()) - (num_threads - 1) * segment_size;
-						bool overhead = false;
-						if (last_segment != segment_size) {
-							num_threads -= 1;
-							levels_threads.resize(num_threads);
-							segment_start.resize(num_threads);
-							segment_length.resize(num_threads);
-							overhead = true;
-						}
-#pragma omp parallel for
-						for (int i = 0; i < num_threads; ++i) {
-							segment_start[i] = i * segment_size;
-							segment_length[i] = segment_size;
-							if (i == num_threads - 1 && overhead) {
-								segment_length[i] += last_segment;
-							}
-							den_mat_t chol_ip_cross_cov_sub;
-							if (dist_function == "residual_correlation_FSA") {
-								chol_ip_cross_cov_sub = chol_ip_cross_cov.middleCols(segment_start[i], segment_length[i]);
-							}
-							CoverTree_kNN(coords_ct.middleRows(segment_start[i], segment_length[i]), chol_ip_cross_cov_sub,
-								corr_diag.segment(segment_start[i], segment_length[i]), segment_start[i], re_comps_vecchia_cluster_i, cover_trees[i],
-								levels_threads[i], save_distances, dist_function);
-						}
-					}
-					else {
-						CoverTree_kNN(coords_ct, chol_ip_cross_cov, corr_diag, 0, re_comps_vecchia_cluster_i, cover_trees[0],
-							level, save_distances, dist_function);
+#pragma omp parallel for schedule(dynamic)
+					for (int t = 0; t < num_trees; ++t) {
+						const int segment_length = segment_start[t + 1] - segment_start[t];
+						const ColumnBlocksView chol_ip_cross_cov_sub = (dist_function == "residual_correlation_FSA") ?
+							chol_ip_cross_cov.MiddleCols(segment_start[t], segment_length) : chol_ip_cross_cov.MiddleCols(0, 0);
+						CoverTree_kNN(coords.middleRows(segment_start[t], segment_length), chol_ip_cross_cov_sub,
+							corr_diag.segment(segment_start[t], segment_length), segment_start[t], re_comps_vecchia_cluster_i, cover_trees[t],
+							levels_trees[t], save_distances, dist_function);
 					}
 #pragma omp parallel for schedule(dynamic)
 					for (int i = brute_force_threshold; i < num_data; ++i) {
-						if (num_threads != 1) {
+						if (num_trees > 1) {
 							std::map<int, std::vector<int>> neighbors_per_tree;
 							std::map<int, std::vector<double>> dist_of_neighbors_per_tree;
-							for (int ii = 0; ii < num_threads; ++ii) {
+							for (int ii = 0; ii < num_trees; ++ii) {
 								if (segment_start[ii] >= i) {
 									break;
 								}
@@ -578,8 +557,9 @@ namespace GPBoost {
 							}
 							for (int ii = 0; ii < (int)neighbors_per_tree.size(); ++ii) {
 								if ((segment_start[ii] + num_neighbors) < i) {
-									find_kNN_CoverTree(i, num_neighbors, levels_threads[ii], save_distances, coords, chol_ip_cross_cov,
-										corr_diag, re_comps_vecchia_cluster_i, neighbors_per_tree[ii], dist_of_neighbors_per_tree[ii], cover_trees[ii], dist_function);
+									find_kNN_CoverTree(i, num_neighbors, levels_trees[ii], save_distances, coords, chol_ip_cross_cov,
+										corr_diag, re_comps_vecchia_cluster_i, neighbors_per_tree[ii], dist_of_neighbors_per_tree[ii], cover_trees[ii], dist_function,
+										segment_start[ii], segment_start[ii + 1]);
 								}
 								else if (segment_start[ii] < i) {
 									vec_t dist_vect(1);
@@ -624,9 +604,11 @@ namespace GPBoost {
 							}
 						}
 						else {
-							find_kNN_CoverTree(i, num_neighbors, level, save_distances,
+							std::vector<double> dist_of_neighbors_i;
+							find_kNN_CoverTree(i, num_neighbors, levels_trees[0], save_distances,
 								coords, chol_ip_cross_cov, corr_diag, re_comps_vecchia_cluster_i,
-								neighbors[i - start_at], dist_dummy, cover_trees[0], dist_function);
+								neighbors[i - start_at], dist_of_neighbors_i, cover_trees[0], dist_function,
+								segment_start[0], segment_start[1]);
 						}
 						//Save distances between points and neighbors
 						if (save_distances) {
@@ -771,12 +753,9 @@ namespace GPBoost {
 		//atomic: written and read concurrently in the parallel loops below
 		std::atomic<bool> has_duplicates(false);
 		int dim_coords = (int)coords.cols();
-		//Sort along the sum of the coordinates
-		std::vector<double> coords_sum(num_data);
-#pragma omp parallel for schedule(static)
-		for (int i = 0; i < num_data; ++i) {
-			coords_sum[i] = coords(i, Eigen::all).sum();
-		}
+		//Sort along the sum of the coordinates or, if the sums hardly vary, along another direction (not for the GPU, which uses the sums)
+		std::vector<double> coords_sum;
+		const double bound_factor = ProjectCoordinatesNeighborSearch(coords, !GPU_use, coords_sum);
 		std::vector<int> sort_sum(num_data);
 		SortIndeces<double>(coords_sum, sort_sum);
 		std::vector<int> sort_inv_sum(num_data);
@@ -883,6 +862,12 @@ namespace GPBoost {
 			}
 			else {
 				int first_i = (start_at <= num_neighbors) ? (num_neighbors + 1) : start_at;//The first point (first_i) for which the search is done is the point with index (num_neighbors + 1) or start_at
+				// The random neighbors of every point are drawn with a random number generator of their own, which is seeded
+				//	from 'gen', such that they do not depend on the number of threads
+				uint32_t seed_random_neighbors = 0;
+				if (neighbor_selection == "half_random" || neighbor_selection == "half_random_close_neighbors") {
+					seed_random_neighbors = std::uniform_int_distribution<uint32_t>()(gen);
+				}
 #pragma omp parallel for schedule(static)
 				for (int i = first_i; i < num_data; ++i) {
 					int num_cand_neighbors = std::min<int>({ i, end_search_at + 1 });
@@ -891,12 +876,12 @@ namespace GPBoost {
 					if (neighbor_selection == "half_random_close_neighbors" && num_cand_neighbors > num_close_neighbors) {
 						neighbors_i.resize(num_close_neighbors);
 						find_nearest_neighbors_fast_internal(i, num_data, num_close_neighbors, end_search_at,
-							dim_coords, coords, sort_sum, sort_inv_sum, coords_sum, neighbors_i, nn_square_dist);
+							bound_factor, coords, sort_sum, sort_inv_sum, coords_sum, neighbors_i, nn_square_dist);
 						std::copy(neighbors_i.begin(), neighbors_i.begin() + num_nearest_neighbors, neighbors[i - start_at].begin());
 					}
 					else {
 						find_nearest_neighbors_fast_internal(i, num_data, num_nearest_neighbors, end_search_at,
-							dim_coords, coords, sort_sum, sort_inv_sum, coords_sum, neighbors[i - start_at], nn_square_dist);
+							bound_factor, coords, sort_sum, sort_inv_sum, coords_sum, neighbors[i - start_at], nn_square_dist);
 					}
 					//Save distances between points and neighbors
 					if (save_distances) {
@@ -915,16 +900,17 @@ namespace GPBoost {
 					}
 					//Find non-nearest neighbors
 					if (neighbor_selection == "half_random" || neighbor_selection == "half_random_close_neighbors") {
+						RNG_t gen_i(seed_random_neighbors + (uint32_t)i);
 						if (neighbor_selection == "half_random" ||
 							(neighbor_selection == "half_random_close_neighbors" && num_cand_neighbors <= num_close_neighbors)) {
 							std::vector<int> nearest_neighbors(neighbors[i - start_at].begin(), neighbors[i - start_at].begin() + num_nearest_neighbors);
 							std::vector<int> non_nearest_neighbors;
-							SampleIntNoReplaceExcludeSomeIndices(num_cand_neighbors, num_non_nearest_neighbors, gen, non_nearest_neighbors, nearest_neighbors);
+							SampleIntNoReplaceExcludeSomeIndices(num_cand_neighbors, num_non_nearest_neighbors, gen_i, non_nearest_neighbors, nearest_neighbors);
 							std::copy(non_nearest_neighbors.begin(), non_nearest_neighbors.end(), neighbors[i - start_at].begin() + num_nearest_neighbors);
 						}
 						else if (neighbor_selection == "half_random_close_neighbors" && num_cand_neighbors > num_close_neighbors){
 							std::vector<int> ind_non_nearest_neighbors;
-							SampleIntNoReplace(num_close_neighbors - num_nearest_neighbors, num_non_nearest_neighbors, gen, ind_non_nearest_neighbors);
+							SampleIntNoReplace(num_close_neighbors - num_nearest_neighbors, num_non_nearest_neighbors, gen_i, ind_non_nearest_neighbors);
 							for (int j = 0; j < num_non_nearest_neighbors; ++j) {
 								neighbors[i - start_at][num_nearest_neighbors + j] = neighbors_i[ind_non_nearest_neighbors[j] + num_nearest_neighbors];
 							}
@@ -1030,7 +1016,7 @@ namespace GPBoost {
 		const int num_data,
 		const int num_nearest_neighbors,
 		const int end_search_at,
-		const int dim_coords,
+		const double bound_factor,
 		const den_mat_t& coords,
 		const std::vector<int>& sort_sum,
 		const std::vector<int>& sort_inv_sum,
@@ -1058,7 +1044,7 @@ namespace GPBoost {
 				//counting is done on the sorted scale, but the index on the orignal scale needs to be (i) smaller than 'i' in order to be a neighbor (ii) and also below or equal the largest potential neighbor 'end_search_at'
 				if (sort_sum[down_i] < i && sort_sum[down_i] <= end_search_at) {
 					smd = std::pow(coords_sum[sort_sum[down_i]] - coords_sum[i], 2);
-					if (smd > dim_coords * nn_square_dist[num_nearest_neighbors - 1]) {
+					if (smd > bound_factor * nn_square_dist[num_nearest_neighbors - 1]) {
 						down = false;
 					}
 					else {
@@ -1076,7 +1062,7 @@ namespace GPBoost {
 				//counting is done on the sorted scale, but the index on the orignal scale needs to be (i) smaller than 'i' in order to be a neighbor (ii) and also below or equal the largest potential neighbor 'end_search_at'
 				if (sort_sum[up_i] < i && sort_sum[up_i] <= end_search_at) {
 					smd = std::pow(coords_sum[sort_sum[up_i]] - coords_sum[i], 2);
-					if (smd > dim_coords * nn_square_dist[num_nearest_neighbors - 1]) {
+					if (smd > bound_factor * nn_square_dist[num_nearest_neighbors - 1]) {
 						up = false;
 					}
 					else {
@@ -1091,6 +1077,29 @@ namespace GPBoost {
 			}//end up
 		}//end while (up || down)
 	}//end find_nearest_neighbors_fast_internal
+
+	void CalcZOuterZObsNeighbors(const std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
+		const std::vector<std::vector<int>>& nearest_neighbors_cluster_i,
+		std::vector<std::vector<den_mat_t>>& z_outer_z_obs_neighbors_cluster_i) {
+		const int num_gp_rand_coef = (int)re_comps_vecchia_cluster_i.size() - 1;
+		CHECK(num_gp_rand_coef > 0);
+		const int num_re = (int)nearest_neighbors_cluster_i.size();
+		z_outer_z_obs_neighbors_cluster_i = std::vector<std::vector<den_mat_t>>(num_re);
+#pragma omp parallel for schedule(static)
+		for (int i = 0; i < num_re; ++i) {
+			z_outer_z_obs_neighbors_cluster_i[i] = std::vector<den_mat_t>(num_gp_rand_coef);
+			const int dim_z = (int)nearest_neighbors_cluster_i[i].size() + 1;
+			for (int j = 0; j < num_gp_rand_coef; ++j) {
+				const std::vector<double>& rand_coef_data = re_comps_vecchia_cluster_i[j + 1]->RandCoefData();
+				vec_t coef_vec(dim_z);
+				coef_vec(0) = rand_coef_data[i];
+				for (int ii = 1; ii < dim_z; ++ii) {
+					coef_vec(ii) = rand_coef_data[nearest_neighbors_cluster_i[i][ii - 1]];
+				}
+				z_outer_z_obs_neighbors_cluster_i[i][j] = coef_vec * coef_vec.transpose();
+			}
+		}
+	}//end CalcZOuterZObsNeighbors
 
 	void CreateREComponentsVecchia(data_size_t num_data,
 		int dim_gp_coords,
@@ -1118,6 +1127,7 @@ namespace GPBoost {
 		bool gauss_likelihood,
 		string_t cov_fct,
 		double cov_fct_shape,
+		int cov_fct_order,
 		double cov_fct_taper_range,
 		double cov_fct_taper_shape,
 		bool apply_tapering,
@@ -1161,7 +1171,7 @@ namespace GPBoost {
 			save_random_effects_indices_of_data_and_no_Z = true;
 		}
 		re_comps_vecchia_cluster_i.push_back(std::shared_ptr<RECompGP<den_mat_t>>(new RECompGP<den_mat_t>(
-			gp_coords_mat, cov_fct, cov_fct_shape, cov_fct_taper_range, cov_fct_taper_shape, apply_tapering,
+			gp_coords_mat, cov_fct, cov_fct_shape, cov_fct_order, cov_fct_taper_range, cov_fct_taper_shape, apply_tapering,
 			false, false, use_Z_for_duplicates, save_random_effects_indices_of_data_and_no_Z, save_distances_isotropic_cov_fct)));
 		if (gauss_likelihood) {
 			std::vector<int> uniques, unique_idx_dummy;
@@ -1181,7 +1191,10 @@ namespace GPBoost {
 		nearest_neighbors_cluster_i = std::vector<std::vector<int>>(re_comp->GetNumUniqueREs());
 		dist_obs_neighbors_cluster_i = std::vector<den_mat_t>(re_comp->GetNumUniqueREs());
 		dist_between_neighbors_cluster_i = std::vector<den_mat_t>(re_comp->GetNumUniqueREs());
-		if (!(re_comp->RedetermineVecchiaNeighborsInTransformedSpace()) && vecchia_neighbor_selection != "residual_correlation" && vecchia_neighbor_selection != "correlation") {
+		// Correlation-based neighbors are determined later in 'UpdateNearestNeighbors'
+		const bool find_neighbors_here = !(re_comp->RedetermineVecchiaNeighborsInTransformedSpace()) &&
+			vecchia_neighbor_selection != "residual_correlation" && vecchia_neighbor_selection != "correlation";
+		if (find_neighbors_here) {
 			Log::REDebug("Starting nearest neighbor search for Vecchia approximation");
 			den_mat_t coords_neighbor_search;
 			re_comp->GetCoordsForEuclideanNeighborSearch(coords_neighbor_search);
@@ -1224,8 +1237,8 @@ namespace GPBoost {
 		if (vecchia_neighbor_selection == "residual_correlation" || vecchia_neighbor_selection == "correlation" || GPU_use) {
 			has_duplicates = false;
 			den_mat_t coords = re_comp->GetCoords();
-			//Intialize neighbor vectors
-			for (int i = 0; i < num_data; ++i) {
+			//Intialize neighbor vectors (for the unique locations of this cluster)
+			for (int i = 0; i < re_comp->GetNumUniqueREs(); ++i) {
 				if (i > 0 && i <= num_neighbors) {
 					nearest_neighbors_cluster_i[i].resize(i);
 					if (save_distances_isotropic_cov_fct) {
@@ -1259,31 +1272,18 @@ namespace GPBoost {
 				Log::REFatal("Random coefficient processes are not supported for covariance functions "
 					"for which the neighbors are dynamically determined based on correlations ");
 			}
-			z_outer_z_obs_neighbors_cluster_i = std::vector<std::vector<den_mat_t>>(re_comp->GetNumUniqueREs());
 			for (int j = 0; j < num_gp_rand_coef; ++j) {
 				std::vector<double> rand_coef_data;
 				for (const auto& id : data_indices_per_cluster[cluster_i]) {
 					rand_coef_data.push_back(gp_rand_coef_data[j * num_data + id]);
 				}
 				re_comps_vecchia_cluster_i.push_back(std::shared_ptr<RECompGP<den_mat_t>>(new RECompGP<den_mat_t>(
-					rand_coef_data, cov_fct, cov_fct_shape, cov_fct_taper_range, cov_fct_taper_shape, re_comp->GetTaperMu(),
+					rand_coef_data, cov_fct, cov_fct_shape, cov_fct_order, cov_fct_taper_range, cov_fct_taper_shape, re_comp->GetTaperMu(),
 					apply_tapering, false, dim_gp_coords, save_distances_isotropic_cov_fct)));
-				//save random coefficient data in the form ot outer product matrices
-#pragma omp parallel for schedule(static)
-				for (int i = 0; i < num_data_per_cluster[cluster_i]; ++i) {
-					if (j == 0) {
-						z_outer_z_obs_neighbors_cluster_i[i] = std::vector<den_mat_t>(num_gp_rand_coef);
-					}
-					int dim_z = (i == 0) ? 1 : ((int)nearest_neighbors_cluster_i[i].size() + 1);
-					vec_t coef_vec(dim_z);
-					coef_vec(0) = rand_coef_data[i];
-					if (i > 0) {
-						for (int ii = 1; ii < dim_z; ++ii) {
-							coef_vec(ii) = rand_coef_data[nearest_neighbors_cluster_i[i][ii - 1]];
-						}
-					}
-					z_outer_z_obs_neighbors_cluster_i[i][j] = coef_vec * coef_vec.transpose();
-				}
+			}
+			//save random coefficient data in the form ot outer product matrices (this depends on the neighbors)
+			if (find_neighbors_here) {
+				CalcZOuterZObsNeighbors(re_comps_vecchia_cluster_i, nearest_neighbors_cluster_i, z_outer_z_obs_neighbors_cluster_i);
 			}
 		}// end random coefficients
 	}//end CreateREComponentsVecchia
@@ -1301,6 +1301,7 @@ namespace GPBoost {
 		const den_mat_t& chol_ip_cross_cov,
 		std::vector<den_mat_t>& dist_obs_neighbors_cluster_i,
 		std::vector<den_mat_t>& dist_between_neighbors_cluster_i,
+		std::vector<std::vector<den_mat_t>>& z_outer_z_obs_neighbors_cluster_i,
 		bool save_distances_isotropic_cov_fct,
 		bool GPU_use) {
 		std::shared_ptr<RECompGP<den_mat_t>> re_comp = re_comps_vecchia_cluster_i[0];
@@ -1352,15 +1353,20 @@ namespace GPBoost {
 				ctr++;
 			}
 			if (num_neighbors < num_re) {
-#pragma omp parallel for schedule(static)
 				for (int i = num_neighbors; i < num_re; ++i) {
 					CHECK((int)nearest_neighbors_cluster_i[i].size() == num_neighbors);
+				}
+#pragma omp parallel for schedule(static)
+				for (int i = num_neighbors; i < num_re; ++i) {
 					for (int j = 0; j < num_neighbors; ++j) {
 						entries_init_B_cluster_i[ctr + (i - num_neighbors) * (num_neighbors + 1) + j] = Triplet_t(i, nearest_neighbors_cluster_i[i][j], 0.);
 					}
 					entries_init_B_cluster_i[ctr + (i - num_neighbors) * (num_neighbors + 1) + num_neighbors] = Triplet_t(i, i, 1.);//Put 1's on the diagonal since B = I - A
 				}
 			}
+		}
+		if (re_comps_vecchia_cluster_i.size() > 1) {//random coefficients
+			CalcZOuterZObsNeighbors(re_comps_vecchia_cluster_i, nearest_neighbors_cluster_i, z_outer_z_obs_neighbors_cluster_i);
 		}
 	}//end UpdateNearestNeighbors
 
@@ -1678,15 +1684,27 @@ namespace GPBoost {
 					}
 				}
 			}
-			if (calc_cov_factor) {
-				D_inv_cluster_i.coeffRef(i, i) = 1. / D_inv_cluster_i.coeffRef(i, i);
-			}
 		}//end loop over data i
 		if (calc_cov_factor) {
-			Eigen::Index minRow, minCol;
-			double min_D_inv = D_inv_cluster_i.diagonal().minCoeff(&minRow, &minCol);
-			if (min_D_inv <= 0.) {
-				const char* min_D_inv_below_zero_msg = "The matrix D in the Vecchia approximation contains negative or zero values. "
+			// 'D_inv_cluster_i' still contains D here, it is inverted below after checking it
+			const bool has_zero_D = (D_inv_cluster_i.diagonal().array() == 0.).any();
+			if (has_zero_D) {
+				const char* zero_D_msg = "The matrix D in the Vecchia approximation contains zero values, i.e., the Gaussian process has a "
+					"conditional variance of zero at some locations. This happens, e.g., for observations located exactly at the origin "
+					"for the 'hurst' and 'linear' covariance functions, whose Gaussian process is zero at the origin. Such observations "
+					"are currently not supported by a Vecchia approximation of a latent Gaussian process (non-Gaussian likelihoods or "
+					"gp_approx = 'vecchia_latent'). Use, e.g., gp_approx = 'none' ";
+				if (gauss_likelihood) {
+					Log::REWarning(zero_D_msg);
+				}
+				else {
+					Log::REFatal(zero_D_msg);
+				}
+			}
+			// Note: NaN and infinite values are not checked here. They can occur temporarily during the optimization, whose line
+			//	search recovers from a NaN or infinite negative log-likelihood
+			else if ((D_inv_cluster_i.diagonal().array() < 0.).any()) {
+				const char* min_D_inv_below_zero_msg = "The matrix D in the Vecchia approximation contains negative values. "
 					"This likely results from numerical instabilities ";
 				if (gauss_likelihood) {
 					Log::REWarning(min_D_inv_below_zero_msg);
@@ -1695,19 +1713,48 @@ namespace GPBoost {
 					Log::REFatal(min_D_inv_below_zero_msg);
 				}
 			}
+#pragma omp parallel for schedule(static)
+			for (data_size_t i = 0; i < num_re_cluster_i; ++i) {
+				D_inv_cluster_i.coeffRef(i, i) = 1. / D_inv_cluster_i.coeffRef(i, i);
+			}
 		}
 	}//end CalcCovFactorGradientVecchia
+
+	/*!
+	* \brief Check whether a matrix is L^-1 * Sigma_mn^T, where L is the Cholesky factor of the inducing point matrix
+	*		and Sigma_mn^T the transposed cross covariance matrix, by multiplying its first and last column by L
+	*/
+	static bool IsCholIpCrossCov(const chol_den_mat_t& chol_fact_sigma_ip,
+		const den_mat_t& sigma_cross_cov,
+		const den_mat_t& chol_ip_cross_cov) {
+		if (chol_ip_cross_cov.cols() == 0 || chol_ip_cross_cov.cols() != sigma_cross_cov.rows() ||
+			chol_ip_cross_cov.rows() != sigma_cross_cov.cols() || chol_ip_cross_cov.rows() != chol_fact_sigma_ip.rows()) {
+			return false;
+		}
+		const int last_col = (int)chol_ip_cross_cov.cols() - 1;
+		for (int i = 0; i <= last_col; i += std::max(last_col, 1)) {
+			const vec_t L_x = chol_fact_sigma_ip.matrixL() * chol_ip_cross_cov.col(i);
+			const vec_t c = sigma_cross_cov.row(i).transpose();
+			if ((L_x - c).norm() > 1e-6 * (L_x.norm() + c.norm())) {
+				return false;
+			}
+		}
+		return true;
+	}//end IsCholIpCrossCov
 
 	void CalcPredVecchiaObservedFirstOrder(bool CondObsOnly,
 		data_size_t cluster_i,
 		int num_data_pred,
 		const std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_cross_cov_cluster_i,
 		const chol_den_mat_t& chol_fact_sigma_ip_cluster_i,
+		const den_mat_t& chol_ip_cross_cov_obs_model,
 		const chol_den_mat_t& chol_fact_sigma_woodbury_cluster_i,
 		den_mat_t& cross_cov_pred_ip,
 		const sp_mat_rm_t& B_cluster_i,
 		const sp_mat_rm_t& D_inv_cluster_i,
 		const sp_mat_rm_t& Bt_D_inv_cluster_i,
+		const sp_mat_rm_t& B_prior_cluster_i,
+		const sp_mat_rm_t& D_inv_prior_cluster_i,
 		std::map<data_size_t, std::vector<int>>& data_indices_per_cluster_pred,
 		const den_mat_t& gp_coords_mat_obs,
 		const den_mat_t& gp_coords_mat_pred,
@@ -1759,7 +1806,9 @@ namespace GPBoost {
 			re_comp->ScaleCoordinates(pars, coords_all, coords_scaled);
 		}
 		// Components for full scale vecchia
-		den_mat_t chol_ip_cross_cov_pred, chol_ip_cross_cov_obs, chol_ip_cross_cov_obs_pred, sigma_ip_inv_sigma_cross_cov, sigma_ip_inv_sigma_cross_cov_pred;
+		den_mat_t chol_ip_cross_cov_pred, chol_ip_cross_cov_obs_own, sigma_ip_inv_sigma_cross_cov_pred;
+		// L^-1 * Sigma_mn^T for the observations: the one of the model is used if it matches, it is an m x n matrix
+		const den_mat_t* chol_ip_cross_cov_obs_ptr = &chol_ip_cross_cov_obs_own;
 		// Cross-covariance between predictions and inducing points C_pm
 		den_mat_t cov_mat_pred_id, cross_dist;
 		std::shared_ptr<RECompGP<den_mat_t>> re_comp_cross_cov_cluster_i_pred_ip;
@@ -1769,18 +1818,22 @@ namespace GPBoost {
 			re_comp_cross_cov_cluster_i_pred_ip = re_comps_cross_cov_cluster_i[0];
 			re_comp_cross_cov_cluster_i_pred_ip->AddPredCovMatrices(gp_coords_mat_ip, gp_coords_mat_pred, cross_cov_pred_ip,
 				cov_mat_pred_id, true, false, true, nullptr, false, cross_dist);
-			TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol_fact_sigma_ip_cluster_i,
-				(*sigma_cross_cov).transpose(), chol_ip_cross_cov_obs, false);
+			if (IsCholIpCrossCov(chol_fact_sigma_ip_cluster_i, *sigma_cross_cov, chol_ip_cross_cov_obs_model)) {
+				chol_ip_cross_cov_obs_ptr = &chol_ip_cross_cov_obs_model;
+			}
+			else {
+				TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol_fact_sigma_ip_cluster_i,
+					(*sigma_cross_cov).transpose(), chol_ip_cross_cov_obs_own, false);
+			}
 			TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol_fact_sigma_ip_cluster_i,
 				cross_cov_pred_ip.transpose(), chol_ip_cross_cov_pred, false);
-			sigma_ip_inv_sigma_cross_cov = chol_fact_sigma_ip_cluster_i.solve((*sigma_cross_cov).transpose());
 			sigma_ip_inv_sigma_cross_cov_pred = chol_fact_sigma_ip_cluster_i.solve(cross_cov_pred_ip.transpose());
-			if (vecchia_neighbor_selection == "residual_correlation") {
-				chol_ip_cross_cov_obs_pred.resize(chol_ip_cross_cov_obs.rows(), chol_ip_cross_cov_obs.cols() + chol_ip_cross_cov_pred.cols());
-				chol_ip_cross_cov_obs_pred.leftCols(chol_ip_cross_cov_obs.cols()) = chol_ip_cross_cov_obs;
-				chol_ip_cross_cov_obs_pred.rightCols(chol_ip_cross_cov_pred.cols()) = chol_ip_cross_cov_pred;
-			}
 		}
+		const den_mat_t& chol_ip_cross_cov_obs = *chol_ip_cross_cov_obs_ptr;
+		// L^-1 * Sigma_mn^T at the observed and the prediction locations for the neighbor search with residual correlations
+		const den_mat_t empty_mat;
+		const ColumnBlocksView chol_ip_cross_cov_obs_pred = (gp_approx == "full_scale_vecchia" && vecchia_neighbor_selection == "residual_correlation") ?
+			ColumnBlocksView(chol_ip_cross_cov_obs, chol_ip_cross_cov_pred) : ColumnBlocksView(empty_mat);
 		if (CondObsOnly) {
 			if ((gp_approx == "full_scale_vecchia" && vecchia_neighbor_selection == "residual_correlation") || vecchia_neighbor_selection == "correlation") {
 				find_nearest_neighbors_Vecchia_FSA_fast(coords_all, num_re_cli + num_re_pred_cli, num_neighbors_pred, chol_ip_cross_cov_obs_pred, vecchia_neighbor_selection,
@@ -2003,8 +2056,6 @@ namespace GPBoost {
 						B_po_cross_cov.col(i) = Bpo_rm * (*sigma_cross_cov).col(i);
 					}
 					den_mat_t cross_cov_PP_Vecchia_woodbury = chol_fact_sigma_woodbury_cluster_i.solve(cross_cov_PP_Vecchia.transpose());
-					sp_mat_t Bp_inv_Dp;
-					sp_mat_t Bp_inv(num_re_pred_cli, num_re_pred_cli);
 					if (CondObsOnly) {
 						if (calc_pred_cov) {
 							pred_cov = Dp.asDiagonal();
@@ -2016,18 +2067,11 @@ namespace GPBoost {
 					}
 					else {
 						TriangularSolve<sp_mat_t, den_mat_t, den_mat_t>(Bp, B_po_cross_cov, cross_cov_pred_obs_pred_inv, false);
-						Bp_inv.setIdentity();
-						TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(Bp, Bp_inv, Bp_inv, false);
-						Bp_inv_Dp = Bp_inv * Dp.asDiagonal();
 						if (calc_pred_cov) {
-							pred_cov = den_mat_t(Bp_inv_Dp * Bp_inv.transpose());
+							CalcLInvDLInvT(Bp, Dp, pred_cov);
 						}
 						if (calc_pred_var) {
-							pred_var.resize(num_re_pred_cli);
-#pragma omp parallel for schedule(static)
-							for (int i = 0; i < num_re_pred_cli; ++i) {
-								pred_var[i] = (Bp_inv_Dp.row(i)).dot(Bp_inv.row(i));
-							}
+							CalcDiagLInvDLInvT(Bp, Dp, pred_var);
 						}
 					}
 					den_mat_t cross_cov_pred_obs_pred_inv_woodbury = chol_fact_sigma_woodbury_cluster_i.solve(cross_cov_pred_obs_pred_inv.transpose());
@@ -2075,42 +2119,24 @@ namespace GPBoost {
 						}
 					}
 					else {
-						sp_mat_t Bp_inv(num_re_pred_cli, num_re_pred_cli);
-						Bp_inv.setIdentity();
-						TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(Bp, Bp_inv, Bp_inv, false);
-						sp_mat_t Bp_inv_Dp = Bp_inv * Dp.asDiagonal();
 						if (calc_pred_cov) {
-							pred_cov = den_mat_t(Bp_inv_Dp * Bp_inv.transpose());
+							CalcLInvDLInvT(Bp, Dp, pred_cov);
 						}
 						if (calc_pred_var) {
-#pragma omp parallel for schedule(static)
-							for (int i = 0; i < num_re_pred_cli; ++i) {
-								pred_var[i] = (Bp_inv_Dp.row(i)).dot(Bp_inv.row(i));
-							}
+							CalcDiagLInvDLInvT(Bp, Dp, pred_var);
 						}
 					}
 				}//end calc_pred_cov || calc_pred_var
 			}// end Vecchia
 		}//end if gauss_likelihood
-		den_mat_t samples_id_Vecchia, samples_id_IP, samples_id_obs;
+		den_mat_t samples_id_IP;
+		// Samples B^-1 D^(1/2) z are obtained by triangular solves with B, since B^-1 is not sparse
 		if (sample_posterior) {
-			post_samples_id = den_mat_t(num_re_pred_cli, num_post_samples);
-			samples_id_Vecchia.resize(num_re_pred_cli, num_post_samples);
-			GenRandVecNormalParallel(base_seed, run_id, samples_id_Vecchia);
-			sp_mat_t Bp_inv;
-			if (CondObsOnly) {
-				post_samples_id = Dp.cwiseSqrt().asDiagonal() * samples_id_Vecchia;
-			}
-			else {
-				Bp_inv.resize(num_re_pred_cli, num_re_pred_cli);
-				Bp_inv.setIdentity();
-				TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(Bp, Bp_inv, Bp_inv, false);
-				sp_mat_t Bp_inv_Dp_sqrt = Bp_inv * Dp.cwiseSqrt().asDiagonal();
-				sp_mat_rm_t Bp_inv_Dp_sqrt_rm = sp_mat_rm_t(Bp_inv_Dp_sqrt);
-#pragma omp parallel for schedule(static)
-				for (int i = 0; i < num_post_samples; ++i) {
-					post_samples_id.col(i) = Bp_inv_Dp_sqrt_rm * samples_id_Vecchia.col(i);
-				}
+			post_samples_id.resize(num_re_pred_cli, num_post_samples);
+			GenRandVecNormalParallel(base_seed, run_id, post_samples_id);
+			post_samples_id = Dp.cwiseSqrt().asDiagonal() * post_samples_id;
+			if (!CondObsOnly) {
+				TriangularSolve<sp_mat_t, den_mat_t, den_mat_t>(Bp, post_samples_id, post_samples_id, false);
 			}
 			if (gp_approx == "full_scale_vecchia") {
 				//// Matheron approach
@@ -2121,34 +2147,21 @@ namespace GPBoost {
 				den_mat_t joint_samples_id_IP_pred = chol_ip_cross_cov_pred.transpose() * samples_id_IP;
 				den_mat_t joint_samples_id_IP_obs = chol_ip_cross_cov_obs.transpose() * samples_id_IP;
 				// Vecchia-Part
-				samples_id_obs.resize((int)chol_ip_cross_cov_obs.cols(), num_post_samples);
-				GenRandVecNormalParallel(base_seed, run_id, samples_id_obs);
-				sp_mat_rm_t B_inv_D_sqrt_rm;
-				sp_mat_rm_t D_sqrt = D_inv_cluster_i;
-				D_sqrt.setIdentity();
-				D_sqrt.diagonal().array() = D_inv_cluster_i.diagonal().array().pow(-0.5);
-				TriangularSolve<sp_mat_rm_t, sp_mat_rm_t, sp_mat_rm_t>(B_cluster_i, D_sqrt, B_inv_D_sqrt_rm, false);
 				den_mat_t joint_samples_id_Vecchia_obs((int)chol_ip_cross_cov_obs.cols(), num_post_samples);
-#pragma omp parallel for schedule(static)
-				for (int i = 0; i < num_post_samples; ++i) {
-					joint_samples_id_Vecchia_obs.col(i) = B_inv_D_sqrt_rm * samples_id_obs.col(i);
-				}
+				GenRandVecNormalParallel(base_seed, run_id, joint_samples_id_Vecchia_obs);
+				const vec_t D_sqrt = D_inv_cluster_i.diagonal().cwiseInverse().cwiseSqrt();
+				joint_samples_id_Vecchia_obs = D_sqrt.asDiagonal() * joint_samples_id_Vecchia_obs;
+				TriangularSolve<sp_mat_rm_t, den_mat_t, den_mat_t>(B_cluster_i, joint_samples_id_Vecchia_obs, joint_samples_id_Vecchia_obs, false);
 				den_mat_t joint_samples_id_Vecchia_pred = post_samples_id;
 				den_mat_t B_po_joint_samples_id_Vecchia_obs(num_re_pred_cli, num_post_samples);
-#pragma omp parallel for schedule(static)   
+#pragma omp parallel for schedule(static)
 				for (int i = 0; i < num_post_samples; ++i) {
 					B_po_joint_samples_id_Vecchia_obs.col(i) = Bpo_rm * joint_samples_id_Vecchia_obs.col(i);
 				}
-				if (CondObsOnly) {
-					joint_samples_id_Vecchia_pred -= B_po_joint_samples_id_Vecchia_obs;
+				if (!CondObsOnly) {
+					TriangularSolve<sp_mat_t, den_mat_t, den_mat_t>(Bp, B_po_joint_samples_id_Vecchia_obs, B_po_joint_samples_id_Vecchia_obs, false);
 				}
-				else {
-					sp_mat_rm_t Bp_inv_rm = sp_mat_rm_t(Bp_inv);
-#pragma omp parallel for schedule(static)
-					for (int i = 0; i < num_post_samples; ++i) {
-						joint_samples_id_Vecchia_pred.col(i) -= Bp_inv_rm * B_po_joint_samples_id_Vecchia_obs.col(i);
-					}
-				}
+				joint_samples_id_Vecchia_pred -= B_po_joint_samples_id_Vecchia_obs;
 				// Combined
 				den_mat_t joint_samples_id_obs = joint_samples_id_IP_obs + joint_samples_id_Vecchia_obs;
 				den_mat_t joint_samples_id_pred = joint_samples_id_IP_pred + joint_samples_id_Vecchia_pred;
@@ -2172,31 +2185,25 @@ namespace GPBoost {
 			}
 		}//end sample_posterior
 		if (sample_prior) {
-			prior_samples_id = den_mat_t(num_re_cli, num_prior_samples);
-			prior_samples_id.setZero();
-			samples_id_obs.resize(num_re_cli, num_prior_samples);
-			GenRandVecNormalParallel(base_seed, run_id, samples_id_obs);
-			sp_mat_rm_t B_inv_D_sqrt_rm;
-			sp_mat_rm_t D_sqrt = D_inv_cluster_i;
-			D_sqrt.setIdentity();
-			D_sqrt.diagonal().array() = D_inv_cluster_i.diagonal().array().pow(-0.5);
-			TriangularSolve<sp_mat_rm_t, sp_mat_rm_t, sp_mat_rm_t>(B_cluster_i, D_sqrt, B_inv_D_sqrt_rm, false);
-#pragma omp parallel for schedule(static)
-			for (int i = 0; i < num_prior_samples; ++i) {
-				prior_samples_id.col(i) = B_inv_D_sqrt_rm * samples_id_obs.col(i);
-			}
+			prior_samples_id.resize(num_re_cli, num_prior_samples);
+			GenRandVecNormalParallel(base_seed, run_id, prior_samples_id);
+			const vec_t D_sqrt = D_inv_prior_cluster_i.diagonal().cwiseInverse().cwiseSqrt();
+			prior_samples_id = D_sqrt.asDiagonal() * prior_samples_id;
+			TriangularSolve<sp_mat_rm_t, den_mat_t, den_mat_t>(B_prior_cluster_i, prior_samples_id, prior_samples_id, false);
 			if (gp_approx == "full_scale_vecchia") {
 				// IP-Part
 				samples_id_IP.resize((int)chol_ip_cross_cov_obs.rows(), num_prior_samples);
 				GenRandVecNormalParallel(base_seed, run_id, samples_id_IP);
-				prior_samples_id += chol_ip_cross_cov_obs.transpose() * samples_id_IP;
+				prior_samples_id.noalias() += chol_ip_cross_cov_obs.transpose() * samples_id_IP;
 			}
 		}//end sample_prior
 		if (gauss_likelihood) {
 			//release matrices that are not needed anymore
 			Bpo.resize(0, 0);
 			Bp.resize(0, 0);
-			Dp.resize(0);
+			if (!sample_posterior) {
+				Dp.resize(0);//Dp is needed afterwards for removing the nugget effect from samples of the latent process
+			}
 		}
 	}//end CalcPredVecchiaObservedFirstOrder
 
@@ -2422,14 +2429,14 @@ namespace GPBoost {
 			}
 		}//end loop over data i
 		sp_mat_t cond_prec = Bp.transpose() * Dp_inv.asDiagonal() * Bp + Bop.transpose() * Do_inv.asDiagonal() * Bop;
-		chol_sp_mat_t CholFact;
+		chol_cholmod_sp_mat_t CholFact;
 		CholFact.compute(cond_prec);
 		vec_t y_aux = Bop.transpose() * (Do_inv.asDiagonal() * (Bo * y_cluster_i));
 		pred_mean = -CholFact.solve(y_aux);
 		if (calc_pred_cov || calc_pred_var) {
 			sp_mat_t cond_prec_chol_inv(num_data_pred_cli, num_data_pred_cli);
 			cond_prec_chol_inv.setIdentity();
-			TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(CholFact.CholFactMatrix(), cond_prec_chol_inv, cond_prec_chol_inv, false);
+			TriangularSolveGivenCholesky<chol_cholmod_sp_mat_t, sp_mat_t, sp_mat_t, sp_mat_t>(CholFact, cond_prec_chol_inv, cond_prec_chol_inv, false);
 			if (calc_pred_cov) {
 				pred_cov = den_mat_t(cond_prec_chol_inv.transpose() * cond_prec_chol_inv);
 			}
@@ -2612,19 +2619,19 @@ namespace GPBoost {
 				D[i] -= (A_i * cov_mat_obs_neighbors)(0, 0);
 			}
 		}//end loop over data i
-		//Calculate D_inv and B_inv in order to calcualte Sigma and Sigma^-1
 		vec_t D_inv = D.cwiseInverse();
-		sp_mat_t B_inv(num_coord_unique, num_coord_unique);
-		B_inv.setIdentity();
-		TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(B, B_inv, B_inv, false);
 		//Calculate inverse of covariance matrix for observed data using the Woodbury identity
 		sp_mat_t Z_o_T_R_inv = Z_o.transpose() * R_inv_obs;
 		sp_mat_t M_aux_Woodbury = B.transpose() * D_inv.asDiagonal() * B + Z_o_T_R_inv * Z_o;
-		chol_sp_mat_t CholFac_M_aux_Woodbury;
+		chol_cholmod_sp_mat_t CholFac_M_aux_Woodbury;
 		CholFac_M_aux_Woodbury.compute(M_aux_Woodbury);
 		if (calc_pred_cov || calc_pred_var) {
+			//B^-1 is not sparse, it is only formed for the predictive (co-)variances
+			sp_mat_t B_inv(num_coord_unique, num_coord_unique);
+			B_inv.setIdentity();
+			TriangularSolve<sp_mat_t, sp_mat_t, sp_mat_t>(B, B_inv, B_inv, false);
 			sp_mat_t MInvSqrtX_Z_o_T;
-			TriangularSolveGivenCholesky<chol_sp_mat_t, sp_mat_t, sp_mat_t, sp_mat_t>(CholFac_M_aux_Woodbury, Z_o_T_R_inv, MInvSqrtX_Z_o_T, false);
+			TriangularSolveGivenCholesky<chol_cholmod_sp_mat_t, sp_mat_t, sp_mat_t, sp_mat_t>(CholFac_M_aux_Woodbury, Z_o_T_R_inv, MInvSqrtX_Z_o_T, false);
 			sp_mat_t ZoSigmaZoT_plusR_Inv = -MInvSqrtX_Z_o_T.transpose() * MInvSqrtX_Z_o_T + R_inv_obs;
 			sp_mat_t Z_p_B_inv = Z_p * B_inv;
 			sp_mat_t Z_p_B_inv_D = Z_p_B_inv * D.asDiagonal();
@@ -2661,7 +2668,11 @@ namespace GPBoost {
 			vec_t resp_aux = Z_o_T_R_inv * y_cluster_i;
 			vec_t resp_aux2 = CholFac_M_aux_Woodbury.solve(resp_aux);
 			resp_aux = R_inv_obs * (y_cluster_i - Z_o * resp_aux2);
-			pred_mean = Z_p * (B_inv * (D.asDiagonal() * (B_inv.transpose() * (Z_o.transpose() * resp_aux))));
+			vec_t Sigma_resp_aux = Z_o.transpose() * resp_aux;
+			TriangularSolve<sp_mat_t, vec_t, vec_t>(B, Sigma_resp_aux, Sigma_resp_aux, true);
+			Sigma_resp_aux.array() *= D.array();
+			TriangularSolve<sp_mat_t, vec_t, vec_t>(B, Sigma_resp_aux, Sigma_resp_aux, false);
+			pred_mean = Z_p * Sigma_resp_aux;
 		}
 	}//end CalcPredVecchiaLatentObservedFirstOrder
 

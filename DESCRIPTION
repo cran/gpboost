@@ -2,8 +2,8 @@ Package: gpboost
 Type: Package
 Title: Combining Tree-Boosting with Gaussian Process and Mixed Effects
         Models
-Version: 1.7.4
-Date: 2026-08-20
+Version: 1.8.0
+Date: 2026-10-19
 Authors@R: c(
 	person("Fabio", "Sigrist", email = "fabiosigrist@gmail.com", role = c("aut", "cre")),
     person("Tim", "Gyger", role = c("aut")),
@@ -17,6 +17,8 @@ Authors@R: c(
 	person("Jitse", "Niesen", role = c("cph")),
 	person("Other authors of Eigen for the included version of Eigen", role = c("ctb","cph")),
 	person("Timothy A.", "Davis", role = c("cph")),
+    person("Patrick R.", "Amestoy", role = c("cph")),
+    person("Iain S.", "Duff", role = c("cph")),
     person("Guolin", "Ke", role = c("ctb")),
     person("Damien", "Soukhavong", role = c("ctb")),
     person("James", "Lamb", role = c("ctb")),
@@ -47,11 +49,11 @@ Biarch: true
 Suggests: testthat
 Depends: R (>= 3.5), R6 (>= 2.4.0)
 Imports: data.table (>= 1.9.6), graphics, RJSONIO, Matrix (>= 1.1-0),
-        methods, utils
+        methods, stats, utils
 SystemRequirements: C++17
 Config/roxygen2/version: 8.0.0
 RoxygenNote: 6.0.1
-Packaged: 2026-08-20 18:59:57 UTC; spadmin
+Packaged: 2026-10-19 14:48:22 UTC; spadmin
 Author: Fabio Sigrist [aut, cre],
   Tim Gyger [aut],
   Pascal Kuendig [aut],
@@ -64,6 +66,8 @@ Author: Fabio Sigrist [aut, cre],
   Jitse Niesen [cph],
   Other authors of Eigen for the included version of Eigen [ctb, cph],
   Timothy A. Davis [cph],
+  Patrick R. Amestoy [cph],
+  Iain S. Duff [cph],
   Guolin Ke [ctb],
   Damien Soukhavong [ctb],
   James Lamb [ctb],
@@ -85,4 +89,4 @@ Author: Fabio Sigrist [aut, cre],
   Dirk Toewe [cph]
 Maintainer: Fabio Sigrist <fabiosigrist@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-08-23 10:40:16 UTC
+Date/Publication: 2026-10-19 18:50:02 UTC

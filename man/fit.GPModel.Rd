@@ -39,7 +39,7 @@ fixed effects linear regression term (if there is one)}
     (e.g., shape parameter of a gamma or negative_binomial likelihood) }
     \item{init_coef_aux_pars_from_iid_model: \code{boolean} (default = TRUE).
     If TRUE, regression coefficients and auxiliary parameters are initialized from an iid model (only for models with a linear regression term).
-    This option is ignored if init_coef is provided. If init_aux_pars is provided but init_coef is not, only regression coefficients are initialized from an iid model. }
+    This option is ignored if init_coef is provided. If init_aux_pars is provided but init_coef is not, only regression coefficients are initialized from an iid model. For likelihood = "gaussian_heteroscedastic_fixed_and_random", if init_cov_pars is not provided, the initial covariance parameters are obtained from a homoscedastic Gaussian process model, and the regression coefficients are then initialized from this model instead: the coefficients of the mean from its coefficients and the intercept of the log-error variance from the logarithm of its error variance. }
     \item{estimate_cov_par_index: \code{vector} with \code{integer} (default = -1). 
     This allows for disabling the estimation of some (or all) covariance parameters. 
     If 'estimate_cov_par_index' = -1, all covariance parameters are estimated. 
@@ -47,7 +47,7 @@ fixed effects linear regression term (if there is one)}
     and estimate_cov_par_index[i] should be of bool type indicating whether parameter number i is estimated or not. 
     For instance, estimate_cov_par_index = c(1,1,0) means that the first two covariance parameters 
     are estimated and the last one not. 
-    Parameters that are not estimated are kept at their initial values (see 'init_cov_pars'). }  
+    Parameters that are not estimated are kept at their initial values (see 'init_cov_pars'). They are treated as known constants when calculating the standard errors of the estimated parameters, and their own standard errors are NaN. }  
     \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
     If TRUE, additional parameters for non-Gaussian likelihoods 
     are also estimated (e.g., shape parameter of a gamma or negative_binomial likelihood) }
@@ -81,7 +81,42 @@ fixed effects linear regression term (if there is one)}
     \item{cg_delta_conv: \code{numeric} (default = 1E-2).
     Tolerance level for L2 norm of residuals for checking convergence 
     in conjugate gradient algorithm when being used for parameter estimation.
+    This is the tolerance of the "absolute" criterion only, the "relative" criterion
+    is controlled by cg_rel_tol and cg_abs_tol.
     If cg_delta_conv = -999, internal default values are used }
+    \item{cg_convergence_criterion: \code{string} (default = "absolute").
+    Stopping rule of conjugate gradient algorithms.
+    \itemize{
+      \item{"absolute": stop when ||r||_2 < cg_delta_conv }
+      \item{"relative": stop when ||r||_2 <= max(cg_abs_tol, cg_rel_tol * ||b||_2),
+      where b is the right-hand side of the linear system. The cg_abs_tol floor makes
+      this robust for right-hand sides that are zero or very small }
+    } }
+    \item{cg_rel_tol: \code{numeric} (default = 1E-6).
+    Relative tolerance of the "relative" stopping rule.
+    If cg_rel_tol = -999, internal default values are used }
+    \item{cg_abs_tol: \code{numeric} (default = 1E-8).
+    Absolute tolerance floor of the "relative" stopping rule, which makes it robust
+    for right-hand sides that are zero or very small. This is independent of
+    cg_delta_conv, so that the two criteria can be varied separately.
+    If cg_abs_tol = -999, internal default values are used }
+    \item{cg_multi_rhs_convergence: \code{string} (default = "average").
+    How the stopping rule is aggregated over the columns of a linear system with
+    several right-hand sides, such as the stochastic Lanczos quadrature.
+    For cg_convergence_criterion = "relative", every right-hand side is normalized by
+    its own norm, i.e. q_j = ||r_j||_2 / max(cg_abs_tol, cg_rel_tol * ||b_j||_2):
+    \itemize{
+      \item{"average": stop when mean(q_j) <= 1 }
+      \item{"max": stop when max(q_j) <= 1 }
+      \item{"per_rhs": stop iterating on column j individually as soon as q_j <= 1 }
+    }
+    For cg_convergence_criterion = "absolute" there is no per-column normalization:
+    \itemize{
+      \item{"average": stop when mean(||r_j||_2) < cg_delta_conv. This is the
+      historic behavior and the default }
+      \item{"max": stop when ||r_j||_2 < cg_delta_conv for all j }
+      \item{"per_rhs": stop iterating on column j as soon as ||r_j||_2 < cg_delta_conv }
+    } }
     \item{num_rand_vec_trace: \code{integer} (default = 50). 
     Number of random vectors (e.g., Rademacher) for stochastic approximation of the trace of a matrix.
     If num_rand_vec_trace = -999, internal default values are used }
@@ -137,13 +172,20 @@ fixed effects linear regression term (if there is one)}
     The convergence criterion used for terminating the optimization algorithm.
     Options: "relative_change_in_log_likelihood" or "relative_change_in_parameters".
     If convergence_criterion = "default", internal default values are used }
-    \item{lr_cov: \code{numeric} (default = 0.1 for "gradient_descent" and 1. otherwise, only relevant for "gradient_descent", "fisher_scoring", and "newton"). 
+    \item{lr_cov: \code{numeric} (default = 0.1 for "gradient_descent" and 1. otherwise, relevant for "gradient_descent", "fisher_scoring", "newton", and "lbfgs"). 
     Initial learning rate for covariance parameters if a gradient-based optimization method is used 
     \itemize{
     \item{If lr_cov = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise) }
     \item{If there are additional auxiliary parameters for non-Gaussian likelihoods, 
     'lr_cov' is also used for those }
-    \item{For "lbfgs", this is divided by the norm of the gradient in the first iteration }}}
+    \item{For "gradient_descent", "fisher_scoring", and "newton", this is the learning rate by which the 
+    search direction is multiplied. It can be decreased, and increased again, during the optimization }
+    \item{For "lbfgs" and "lbfgs_linesearch_nocedal_wright", this is not a learning rate by which every 
+    update is multiplied. It only determines the first trial step, which is the negative gradient divided 
+    by its norm and multiplied by 'lr_cov', i.e., a step of length 'lr_cov'. The subsequent steps are 
+    determined by the approximate Hessian of the L-BFGS algorithm and the line search. 'lr_cov' has no 
+    effect when the approximate Hessian of a previous call is reused (see 'reuse_learning_rates_gp_model' 
+    of the GPBoost algorithm) }}}
     \item{lr_coef: \code{numeric} (default = 0.1, only relevant for "gradient_descent", "fisher_scoring", and "newton"). 
     Learning rate for fixed effect regression coefficients if gradient descent is used.
     If lr_coef = -999, internal default values are used }
@@ -160,7 +202,24 @@ fixed effects linear regression term (if there is one)}
     \item{momentum_offset: \code{integer} (Default = 2, only relevant for "gradient_descent")}. 
     Number of iterations for which no momentum is applied in the beginning. If momentum_offset = -999, internal default values are used.
     \item{m_lbfgs: \code{integer} (Default = 6)}. Number of corrections to approximate the inverse Hessian matrix for the "lbfgs" optimizer. If m_lbfgs = -999, internal default values are used
-    \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8)}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
+    \item{cold_restart_lbfgs: \code{boolean} (Default = TRUE)}. If TRUE, restarts of the "lbfgs" optimizers are
+    "cold" restarts: the regression coefficients, the auxiliary parameters, and the modes of the Laplace
+    approximations are reset to their initial values and only the covariance parameters are kept. Such restarts
+    can escape a local optimum in which the optimizer is stuck. If FALSE, "warm" restarts are done: the
+    optimization simply continues from the current parameters with a re-initialized approximate Hessian.
+    Only relevant if \code{max_num_restarts_lbfgs} > 0. Note that every cold restart is a full optimization
+    with up to \code{maxit} iterations, and the number of iterations reported is the sum over all restarts
+    \item{max_num_restarts_lbfgs: \code{integer} (Default = 0)}. Maximal number of restarts of the "lbfgs" optimizers
+    after they have terminated. A restart continues from the current parameters with a re-initialized approximate Hessian.
+    What else is reset depends on \code{cold_restart_lbfgs}.
+    Restarts are only done as long as the negative log-likelihood still decreases by more than \code{delta_rel_conv} and
+    as long as the total number of iterations is below \code{maxit}. This can help when the line search of "lbfgs" fails
+    and the optimizer thus terminates prematurely without having converged. This can happen, e.g., for the
+    \code{"asymmetric_laplace"} (= quantile regression) likelihood, whose approximate marginal likelihood is not smooth
+    \item{reset_modes_line_search_lbfgs: \code{boolean} (Default = FALSE)}. If TRUE, the mode finding of the Laplace approximation
+    starts at the modes of the current parameters for every trial point of the line search of the "lbfgs" optimizer, and not at the
+    modes of the previous trial point. Only relevant for non-Gaussian likelihoods and \code{optimizer_cov = "lbfgs"} or \code{"lbfgs_linesearch_nocedal_wright"}
+    \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8, and 1E-10 for the likelihood "gaussian_heteroscedastic_fixed_and_random")}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
 }}
 
 \item{offset}{A \code{numeric} \code{vector} with 

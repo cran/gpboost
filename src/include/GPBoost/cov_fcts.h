@@ -54,6 +54,7 @@ namespace GPBoost {
 		CovFunction(const CovFunction& other)
 			: cov_fct_type_(other.cov_fct_type_),
 			shape_(other.shape_),
+			order_(other.order_),
 			const_(other.const_),
 			taper_range_(other.taper_range_),
 			taper_shape_(other.taper_shape_),
@@ -66,6 +67,7 @@ namespace GPBoost {
 			cov_calculated_based_on_coords_(other.cov_calculated_based_on_coords_),
 			need_coordinates_for_calculating_covariance_(other.need_coordinates_for_calculating_covariance_),
 			variance_on_the_diagonal_(other.variance_on_the_diagonal_),
+			grad_is_multiple_of_cov_(other.grad_is_multiple_of_cov_),
 			use_precomputed_dist_for_calc_cov_(other.use_precomputed_dist_for_calc_cov_),
 			is_ar1_multifidelity_(other.is_ar1_multifidelity_),
 			base_cov_fct_type_(other.base_cov_fct_type_),
@@ -89,6 +91,7 @@ namespace GPBoost {
 		* \brief Constructor
 		* \param cov_fct_type Type of covariance function
 		* \param shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+		* \param order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 		* \param taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 		* \param taper_mu Parameter \mu of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -98,6 +101,7 @@ namespace GPBoost {
 		*/
 		CovFunction(string_t cov_fct_type,
 			double shape,
+			int order,
 			double taper_range,
 			double taper_shape,
 			double taper_mu,
@@ -107,7 +111,7 @@ namespace GPBoost {
 			const string_t ar1_mf_prefix = "ar1_mf_";
 			if (cov_fct_type.rfind(ar1_mf_prefix, 0) == 0) {
 				InitializeAR1Multifidelity(cov_fct_type.substr(ar1_mf_prefix.size()), cov_fct_type,
-					shape, taper_range, taper_shape, taper_mu, apply_tapering, dim_coordinates);
+					shape, order, taper_range, taper_shape, taper_mu, apply_tapering, dim_coordinates);
 				return;
 			}
 			if (cov_fct_type == "exponential_tapered") {
@@ -117,6 +121,17 @@ namespace GPBoost {
 			if (SUPPORTED_COV_TYPES_.find(cov_fct_type) == SUPPORTED_COV_TYPES_.end()) {
 				Log::REFatal("Covariance of type '%s' is not supported ", cov_fct_type.c_str());
 			}
+			if (cov_fct_type == "hurst" || cov_fct_type == "hurst_ard") {
+				if (order != 1 && order != 2) {
+					Log::REFatal("'cov_fct_order' = %d is not supported for the '%s' covariance function. Currently supported orders are 1 and 2 ",
+						order, cov_fct_type.c_str());
+				}
+			}
+			else if (order != 1) {
+				Log::REFatal("'cov_fct_order' = %d is not supported for the '%s' covariance function. "
+					"An order other than 1 is only supported for the 'hurst' and 'hurst_ard' covariance functions ", order, cov_fct_type.c_str());
+			}
+			order_ = order;
 			cov_fct_type_ = cov_fct_type;
 			dim_coordinates_ = dim_coordinates;
 			use_precomputed_dist_for_calc_cov_ = use_precomputed_dist_for_calc_cov;
@@ -240,6 +255,25 @@ namespace GPBoost {
 			return(shape_);
 		}
 
+		int CovFunctionOrder() const {
+			return(order_);
+		}
+
+		/*!
+		* \brief Returns true if the variance of the covariance function is zero at the origin of the coordinates (without the
+		*		fidelity indicator for 'ar1_mf_' covariance functions), whatever the covariance parameters are. The Gaussian process
+		*		of such a covariance function is zero at the origin, and so are its covariances with all other points
+		* \param cov_fct_type Type of covariance function
+		*/
+		static bool HasZeroVarianceAtOrigin(string_t cov_fct_type) {
+			const string_t ar1_mf_prefix = "ar1_mf_";
+			if (cov_fct_type.rfind(ar1_mf_prefix, 0) == 0) {
+				cov_fct_type = cov_fct_type.substr(ar1_mf_prefix.size());
+			}
+			return(cov_fct_type == "hurst" || cov_fct_type == "hurst_ard" || cov_fct_type == "Hurst" || cov_fct_type == "Hurst_ard" ||
+				cov_fct_type == "linear");
+		}
+
 		double CovFunctionTaperRange() const {
 			return(taper_range_);
 		}
@@ -250,6 +284,14 @@ namespace GPBoost {
 
 		bool IsIsotropic() const {
 			return(is_isotropic_);
+		}
+
+		/*!
+		* \brief True if the gradients with respect to the range parameters are multiples of the entries of the covariance
+		*		matrix that is passed to them, so that they contain a taper that has been applied to this matrix
+		*/
+		bool GradientIsMultipleOfCov() const {
+			return(grad_is_multiple_of_cov_);
 		}
 
 		bool UseScaledCoordinates() const {
@@ -544,10 +586,11 @@ namespace GPBoost {
 				}
 			}
 			else if (cov_fct_type_ == "hurst" || cov_fct_type_ == "hurst_ard") {
-				if (!(pars[1] > 0. && pars[1] < 1.)) {
-					Log::REFatal("The Hurst exponent H must be in (0,1), found %g ", pars[1]);
+				// p_H = -log(H - (m - 1)) > 0 for m - 1 < H < m
+				if (!(pars[1] > order_ - 1. && pars[1] < order_)) {
+					Log::REFatal("The Hurst exponent H must be in (%d,%d) for 'cov_fct_order' = %d, found %g ", order_ - 1, order_, order_, pars[1]);
 				}
-				pars_trans[1] = -std::log(pars[1]);
+				pars_trans[1] = -std::log(pars[1] - (order_ - 1.));
 			}
 		}//end TransformCovPars
 
@@ -618,7 +661,7 @@ namespace GPBoost {
 				}
 			}
 			else if (cov_fct_type_ == "hurst" || cov_fct_type_ == "hurst_ard") {
-				pars_orig[1] = std::exp(-pars[1]);
+				pars_orig[1] = HurstExponent(pars[1]);
 			}
 		}//end TransformBackCovPars
 
@@ -953,6 +996,7 @@ namespace GPBoost {
 			T_mat& sigma,
 			bool is_symmmetric) const {
 			CHECK(apply_tapering_);
+			CheckWendlandTaperShape();
 			if (is_symmmetric) {
 #pragma omp parallel for schedule(static)
 				for (int i = 0; i < (int)dist.rows(); ++i) {
@@ -965,9 +1009,6 @@ namespace GPBoost {
 						}
 						else if (TwoNumbersAreEqual<double>(taper_shape_, 2.)) {
 							sigma(i, j) *= WendlandCorrelationShape2(dist(i, j));
-						}
-						else {
-							Log::REFatal("MultiplyWendlandCorrelationTaper: 'taper_shape' of %g is not supported for the 'wendland' covariance function ", taper_shape_);
 						}
 						sigma(j, i) = sigma(i, j);
 					}
@@ -986,9 +1027,6 @@ namespace GPBoost {
 						else if (TwoNumbersAreEqual<double>(taper_shape_, 2.)) {
 							sigma(i, j) *= WendlandCorrelationShape2(dist(i, j));
 						}
-						else {
-							Log::REFatal("MultiplyWendlandCorrelationTaper: 'taper_shape' of %g is not supported for the 'wendland' covariance function ", taper_shape_);
-						}
 					}
 				}
 			}
@@ -998,6 +1036,7 @@ namespace GPBoost {
 			T_mat& sigma,
 			bool is_symmmetric) const {
 			CHECK(apply_tapering_);
+			CheckWendlandTaperShape();
 			if (is_symmmetric) {
 #pragma omp parallel for schedule(static)
 				for (int k = 0; k < sigma.outerSize(); ++k) {
@@ -1013,9 +1052,6 @@ namespace GPBoost {
 							}
 							else if (TwoNumbersAreEqual<double>(taper_shape_, 2.)) {
 								it.valueRef() *= WendlandCorrelationShape2(dist.coeff(i, j));
-							}
-							else {
-								Log::REFatal("MultiplyWendlandCorrelationTaper: 'taper_shape' of %g is not supported for the 'wendland' covariance function ", taper_shape_);
 							}
 							sigma.coeffRef(j, i) = it.value();
 						}
@@ -1037,13 +1073,18 @@ namespace GPBoost {
 						else if (TwoNumbersAreEqual<double>(taper_shape_, 2.)) {
 							it.valueRef() *= WendlandCorrelationShape2(dist.coeff(i, j));
 						}
-						else {
-							Log::REFatal("MultiplyWendlandCorrelationTaper: 'taper_shape' of %g is not supported for the 'wendland' covariance function ", taper_shape_);
-						}
 					}
 				}
 			}
 		}//end MultiplyWendlandCorrelationTaper (sparse)
+
+		/*! \brief Raise an error if 'taper_shape_' is not supported by 'MultiplyWendlandCorrelationTaper' (0, 1, or 2) */
+		void CheckWendlandTaperShape() const {
+			if (!TwoNumbersAreEqual<double>(taper_shape_, 0.) && !TwoNumbersAreEqual<double>(taper_shape_, 1.) &&
+				!TwoNumbersAreEqual<double>(taper_shape_, 2.)) {
+				Log::REFatal("MultiplyWendlandCorrelationTaper: 'taper_shape' of %g is not supported for the 'wendland' covariance function ", taper_shape_);
+			}
+		}//end CheckWendlandTaperShape
 
 		/*!
 		* \brief Multiply covariance with Wendland correlation tapering function for one distance value
@@ -1563,7 +1604,10 @@ namespace GPBoost {
 							feature_is_constant = true;
 						}
 						else if (num_unique_values <= 10) {
-							med_dist_per_coord[ic] = (num_unique_values * num_unique_values - 1) / 3. / num_unique_values; // use average distance among two random points on {1,...,num_unique_values}
+							// average distance among two random points on {1,...,num_unique_values} times the average spacing of the values,
+							//	so that the scale does not depend on how the feature is coded
+							med_dist_per_coord[ic] = (num_unique_values * num_unique_values - 1) / 3. / num_unique_values *
+								(col_i.maxCoeff() - col_i.minCoeff()) / (num_unique_values - 1);
 						}
 						else {// num_unique_values > 10
 							double med_dist_coord_i = 0.;
@@ -1595,6 +1639,33 @@ namespace GPBoost {
 								" (counting starts at 1) since this feature is constant " + add_error_str).c_str());
 						}
 					}// end loop over features
+					// The median distances per coordinate are multiplied by the median distance in the coordinates scaled by them.
+					//	Otherwise, the distances in the scaled coordinates grow with the number of coordinates, and the initial
+					//	correlations are almost zero in higher dimensions. For coordinates with equal median distances, this gives
+					//	the initial range of the isotropic covariance function
+					const int dim_coords = (int)coords.cols();
+					vec_t med_dist_per_coord_inv(dim_coords);
+					for (int ic = 0; ic < dim_coords; ++ic) {
+						med_dist_per_coord_inv[ic] = 1. / med_dist_per_coord[ic];
+					}
+#pragma omp parallel for schedule(static)
+					for (int i = 0; i < (num_data_find_init - 1); ++i) {
+						const int ii = use_subsamples ? sample_ind[i] : i;
+						for (int j = i + 1; j < num_data_find_init; ++j) {
+							const int jj = use_subsamples ? sample_ind[j] : j;
+							distances[i * (2 * num_data_find_init - i - 1) / 2 + j - (i + 1)] =
+								(coords.row(ii) - coords.row(jj)).cwiseProduct(med_dist_per_coord_inv.transpose()).norm();
+						}
+					}
+					double med_dist_scaled = GPBoost::CalculateMedianPartiallySortInput<std::vector<double>>(distances);
+					if (med_dist_scaled < EPSILON_NUMBERS) {
+						med_dist_scaled = GPBoost::CalculateMean<std::vector<double>>(distances);
+					}
+					if (med_dist_scaled >= EPSILON_NUMBERS) {
+						for (int ic = 0; ic < dim_coords; ++ic) {
+							med_dist_per_coord[ic] *= med_dist_scaled;
+						}
+					}
 				}//end cov_fct_type_ == "matern_ard" && cov_fct_type_ == "gaussian_ard" || cov_fct_type_ == "matern_ard_estimate_shape"
 				if (cov_fct_type_ == "matern") {
 					if (shape_ <= 1.) {
@@ -1669,7 +1740,7 @@ namespace GPBoost {
 					}
 				}
 				else if (cov_fct_type_ == "hurst" || cov_fct_type_ == "hurst_ard") {
-					pars[1] = -std::log(0.5);// Brownian motion
+					pars[1] = -std::log(0.5);// H = m - 1/2: Brownian motion for m = 1 and an integrated Wiener process for m = 2
 					if (cov_fct_type_ == "hurst_ard") {
 						for (int ic = 1; ic < (int)coords.cols(); ++ic) {
 							pars[1 + ic] = 1.;
@@ -1687,6 +1758,7 @@ namespace GPBoost {
 		void InitializeAR1Multifidelity(const string_t& base_cov_fct_type,
 			const string_t& cov_fct_type,
 			double shape,
+			int order,
 			double taper_range,
 			double taper_shape,
 			double taper_mu,
@@ -1710,6 +1782,7 @@ namespace GPBoost {
 			base_cov_fct_type_ = base_cov_fct_type;
 			dim_coordinates_ = dim_coordinates;
 			shape_ = shape;
+			order_ = order;
 			use_precomputed_dist_for_calc_cov_ = false;
 			is_isotropic_ = false;
 			use_scaled_coordinates_ = false;
@@ -1718,9 +1791,9 @@ namespace GPBoost {
 			need_coordinates_for_calculating_covariance_ = true;
 			variance_on_the_diagonal_ = false;
 			const int spatial_dim = dim_coordinates - 1;
-			base_cov_function_low_ = std::make_shared<CovFunction<T_mat>>(base_cov_fct_type, shape,
+			base_cov_function_low_ = std::make_shared<CovFunction<T_mat>>(base_cov_fct_type, shape, order,
 				taper_range, taper_shape, taper_mu, false, spatial_dim, false);
-			base_cov_function_discrepancy_ = std::make_shared<CovFunction<T_mat>>(base_cov_fct_type, shape,
+			base_cov_function_discrepancy_ = std::make_shared<CovFunction<T_mat>>(base_cov_fct_type, shape, order,
 				taper_range, taper_shape, taper_mu, false, spatial_dim, false);
 			base_cov_fct_type_ = base_cov_function_low_->cov_fct_type_;//store the canonicalized alias
 			num_cov_par_base_ = base_cov_function_low_->num_cov_par_;
@@ -2368,6 +2441,7 @@ namespace GPBoost {
 						const double dist_ij, const T_mat& sigma, const den_mat_t* /* coords_ptr */, const den_mat_t* /* coords_pred_ptr */) -> double {
 							return GradientRangeMaternShape0_5(cm, dist_ij, sigma, i, j);
 						};
+					grad_is_multiple_of_cov_ = true;
 				}
 				else if (TwoNumbersAreEqual<double>(shape_, 1.5)) {
 					GradientCovFct_ = [this](double cm, double /* cm_num_deriv */, double par_aux, double /* shape */,
@@ -2401,6 +2475,7 @@ namespace GPBoost {
 					const double dist_ij, const T_mat& sigma, const den_mat_t* /* coords_ptr */, const den_mat_t* /* coords_pred_ptr */) -> double {
 						return GradientRangeGaussian(cm, dist_ij, sigma, i, j);
 					};
+				grad_is_multiple_of_cov_ = true;
 			}
 			else if (cov_fct_type_ == "powered_exponential") {
 				GradientCovFct_ = [this](double cm, double /* cm_num_deriv */, double /* par_aux */, double /* shape */,
@@ -2409,6 +2484,7 @@ namespace GPBoost {
 					const double dist_ij, const T_mat& sigma, const den_mat_t* /* coords_ptr */, const den_mat_t* /* coords_pred_ptr */) -> double {
 						return GradientRangePoweredExponential(cm, dist_ij, sigma, i, j);
 					};
+				grad_is_multiple_of_cov_ = true;
 			}
 			else if (cov_fct_type_ == "matern_space_time") {
 				if (TwoNumbersAreEqual<double>(shape_, 0.5)) {
@@ -2418,6 +2494,7 @@ namespace GPBoost {
 						const double dist_ij, const T_mat& sigma, const den_mat_t* coords_ptr, const den_mat_t* coords_pred_ptr) -> double {
 							return GradientRangeMaternSpaceTimeShape0_5(cm, dist_ij, sigma, ind_par, i, j, coords_ptr, coords_pred_ptr);
 						};
+					grad_is_multiple_of_cov_ = true;
 				}
 				else if (TwoNumbersAreEqual<double>(shape_, 1.5)) {
 					GradientCovFct_ = [this](double cm, double /* cm_num_deriv */, double /* par_aux */, double /* shape */,
@@ -2452,6 +2529,7 @@ namespace GPBoost {
 						const double dist_ij, const T_mat& sigma, const den_mat_t* coords_ptr, const den_mat_t* coords_pred_ptr) -> double {
 							return GradientRangeMaternARDShape0_5(cm, dist_ij, sigma, ind_par, i, j, coords_ptr, coords_pred_ptr);
 						};
+					grad_is_multiple_of_cov_ = true;
 				}
 				else if (TwoNumbersAreEqual<double>(shape_, 1.5)) {
 					GradientCovFct_ = [this](double cm, double /* cm_num_deriv */, double /* par_aux */, double /* shape */,
@@ -2501,6 +2579,7 @@ namespace GPBoost {
 					const double /* dist_ij */, const T_mat& sigma, const den_mat_t* coords_ptr, const den_mat_t* coords_pred_ptr) -> double {
 						return GradientRangeGaussianARD(cm, sigma, ind_par, i, j, coords_ptr, coords_pred_ptr);
 					};
+				grad_is_multiple_of_cov_ = true;
 			}
 			else if (cov_fct_type_ == "space_time_gneiting") {
 				GradientCovFct_coords_ = [this](const int i, const int j, const den_mat_t* coords, const den_mat_t* coords_pred,
@@ -3040,19 +3119,136 @@ namespace GPBoost {
 			const den_mat_t* coords,
 			const den_mat_t* coords_pred,
 			const vec_t& pars) const {
-			vec_t coords_vec = (*coords).row(j);
-			vec_t coords_pred_vec = (*coords_pred).row(i);
-			return HurstCovariance_vec(coords_vec, coords_pred_vec, pars);
+			return HurstCovariance_vec((*coords).row(j), (*coords_pred).row(i), pars);
 		}// end SpaceTimeGneitingCovariance
-		inline double HurstCovariance_vec(const vec_t& coords_vec,
-			const vec_t& coords_pred_vec,
+		template <typename T_x, typename T_y>//T_x and T_y can be vec_t or rows of a den_mat_t (which avoids copying them)
+		inline double HurstCovariance_vec(const Eigen::MatrixBase<T_x>& coords_vec,
+			const Eigen::MatrixBase<T_y>& coords_pred_vec,
 			const vec_t& pars) const {
 			const double sqrd_norm_x = coords_vec.squaredNorm();
 			const double sqrd_norm_y = coords_pred_vec.squaredNorm();
 			const double sqrd_norm_x_min_y = (coords_vec - coords_pred_vec).squaredNorm();
+			if (order_ == 2) {
+				return HurstCovarianceOrder2(sqrd_norm_x, sqrd_norm_y, sqrd_norm_x_min_y, coords_vec.dot(coords_pred_vec), pars[0], HurstExponent(pars[1]));
+			}
 			const double H = std::exp(-pars[1]);
 			return (pars[0] / 2.) * (std::pow(sqrd_norm_x, H) + std::pow(sqrd_norm_y, H) - std::pow(sqrd_norm_x_min_y, H));
 		}// end HurstCovariance_vec
+
+		/*!
+		* \brief Hurst exponent H = m - 1 + exp(-p_H) of the order m from the transformed parameter p_H = -log(H - (m - 1)) > 0
+		*/
+		inline double HurstExponent(double p_H) const {
+			return (order_ - 1.) + std::exp(-p_H);
+		}
+
+		/*!
+		* \brief Second-order (m = 2, 1 < H < 2) Hurst covariance anchored at the origin (X(0) = 0 and grad X(0) = 0):
+		*		K(x,y) = sigma2 / (2 (2H - 1)) * B(H), B(H) = u_xy^H - u_x^H - u_y^H + 2 H c (u_x^(H-1) + u_y^(H-1)),
+		*		where u_x = ||x||^2, u_y = ||y||^2, u_xy = ||x - y||^2, and c = x^T y. This implies K(x,x) = sigma2 ||x||^(2H)
+		*/
+		inline double HurstCovarianceOrder2(double u_x,
+			double u_y,
+			double u_xy,
+			double c,
+			double sigma2,
+			double H) const {
+			if (u_x == 0. || u_y == 0.) {
+				return 0.;// the process is zero at the anchor, for all parameters
+			}
+			const double u_x_Hm1 = std::pow(u_x, H - 1.);
+			const double u_y_Hm1 = std::pow(u_y, H - 1.);
+			const double B = std::pow(u_xy, H) - u_x * u_x_Hm1 - u_y * u_y_Hm1 + 2. * H * c * (u_x_Hm1 + u_y_Hm1);
+			return sigma2 * B / (2. * (2. * H - 1.));
+		}
+
+		/*!
+		* \brief Derivative of the second-order Hurst covariance (see 'HurstCovarianceOrder2') with respect to H,
+		*		dK/dH = sigma2 * (B'(H) / (2 (2H - 1)) - B(H) / (2H - 1)^2),
+		*		B'(H) = u_xy^H log(u_xy) - u_x^H log(u_x) - u_y^H log(u_y) + 2 c (u_x^(H-1) + u_y^(H-1)) + 2 H c (u_x^(H-1) log(u_x) + u_y^(H-1) log(u_y))
+		* \param pars Parameters in the following order: sigma2, p_H (, ranges)
+		* \param transf_scale If true, the derivative is taken with respect to log(p_H), where p_H = -log(H - 1), otherwise with respect to H (and multiplied with nugget_var)
+		* \param nugget_var Nugget variance
+		*/
+		inline double GradientHurstCovarianceOrder2WrtH(double u_x,
+			double u_y,
+			double u_xy,
+			double c,
+			const vec_t& pars,
+			bool transf_scale,
+			double nugget_var) const {
+			if (u_x == 0. || u_y == 0.) {
+				return 0.;// the process is zero at the anchor, for all parameters
+			}
+			// log(u) is only multiplied with u^a for a > 0 here, and u^a * log(u) tends to 0 for u -> 0
+			auto log_or_zero = [](double u) {
+				return (u > 0.) ? std::log(u) : 0.;
+			};
+			const double H_min_m_plus_1 = std::exp(-pars[1]);// H - (m - 1)
+			const double H = HurstExponent(pars[1]);
+			const double u_x_Hm1 = std::pow(u_x, H - 1.);
+			const double u_y_Hm1 = std::pow(u_y, H - 1.);
+			const double u_x_H = u_x * u_x_Hm1;
+			const double u_y_H = u_y * u_y_Hm1;
+			const double u_xy_H = std::pow(u_xy, H);
+			const double log_u_x = log_or_zero(u_x);
+			const double log_u_y = log_or_zero(u_y);
+			const double B = u_xy_H - u_x_H - u_y_H + 2. * H * c * (u_x_Hm1 + u_y_Hm1);
+			const double dB_dH = u_xy_H * log_or_zero(u_xy) - u_x_H * log_u_x - u_y_H * log_u_y +
+				2. * c * (u_x_Hm1 + u_y_Hm1) + 2. * H * c * (u_x_Hm1 * log_u_x + u_y_Hm1 * log_u_y);
+			const double two_H_m1 = 2. * H - 1.;
+			const double cm = transf_scale ? -pars[1] * H_min_m_plus_1 : nugget_var;// dH / dlog(p_H) = -p_H * (H - (m - 1))
+			return cm * pars[0] * (dB_dH / (2. * two_H_m1) - B / (two_H_m1 * two_H_m1));
+		}
+
+		/*!
+		* \brief Derivative of the second-order ARD Hurst covariance (see 'HurstCovarianceOrder2') with respect to the range l_k of coordinate k.
+		*		All four quantities u_x, u_y, u_xy, and c depend on l_k through the scaled coordinates x_k / l_k and y_k / l_k:
+		*		dK/dl_k = -sigma2 H / (l_k (2H - 1)) * [u_xy^(H-1) a_xy - u_x^(H-1) a_x - u_y^(H-1) a_y
+		*			+ 2 a_c (u_x^(H-1) + u_y^(H-1)) + 2 (H - 1) c (u_x^(H-2) a_x + u_y^(H-2) a_y)],
+		*		where a_x = x_k^2, a_y = y_k^2, a_xy = (x_k - y_k)^2, and a_c = x_k y_k (scaled coordinates)
+		* \param coords_vec Scaled coordinates x
+		* \param coords_pred_vec Scaled coordinates y
+		* \param pars Parameters in the following order: sigma2, p_H, l_2, ..., l_d
+		* \param k Coordinate number (k >= 1)
+		* \param transf_scale If true, the derivative is taken with respect to log(l_k), otherwise with respect to l_k (and multiplied with nugget_var)
+		* \param nugget_var Nugget variance
+		*/
+		template <typename T_x, typename T_y>//T_x and T_y can be vec_t or rows of a den_mat_t
+		inline double GradientHurstCovarianceOrder2WrtRange(const Eigen::MatrixBase<T_x>& coords_vec,
+			const Eigen::MatrixBase<T_y>& coords_pred_vec,
+			double u_x,
+			double u_y,
+			double u_xy,
+			double c,
+			const vec_t& pars,
+			int k,
+			bool transf_scale,
+			double nugget_var) const {
+			if (u_x == 0. || u_y == 0.) {
+				return 0.;// the process is zero at the anchor, for all parameters
+			}
+			// u^(H-2) * a for 0 <= a <= u, which tends to 0 for u -> 0 when multiplied with c since |c| <= sqrt(u * u_other) and H > 1.
+			//	It is calculated as (a / u) * u^(H-1) to avoid an overflow of u^(H-2) for tiny u
+			auto ratio_or_zero = [](double a, double u) {
+				return (u > 0.) ? (a / u) : 0.;
+			};
+			const double H = HurstExponent(pars[1]);
+			const double l_k = pars[k + 1];
+			const double x_k = coords_vec[k];
+			const double y_k = coords_pred_vec[k];
+			const double a_x = x_k * x_k;
+			const double a_y = y_k * y_k;
+			const double a_xy = (x_k - y_k) * (x_k - y_k);
+			const double a_c = x_k * y_k;
+			const double u_x_Hm1 = std::pow(u_x, H - 1.);
+			const double u_y_Hm1 = std::pow(u_y, H - 1.);
+			const double bracket = std::pow(u_xy, H - 1.) * a_xy - u_x_Hm1 * a_x - u_y_Hm1 * a_y + 2. * a_c * (u_x_Hm1 + u_y_Hm1) +
+				2. * (H - 1.) * c * (ratio_or_zero(a_x, u_x) * u_x_Hm1 + ratio_or_zero(a_y, u_y) * u_y_Hm1);
+			const double dK_dl_k = -pars[0] * H / (l_k * (2. * H - 1.)) * bracket;
+			const double cm = transf_scale ? l_k : nugget_var;// multiplicative constant to get gradient on log-scale or backtransform with nugget variance
+			return cm * dK_dl_k;
+		}
 
 		/*!
 		* \brief Calculate gradient of Hurst covariance
@@ -3075,18 +3271,20 @@ namespace GPBoost {
 			const vec_t& pars,
 			bool transf_scale,
 			double nugget_var) const {
-			vec_t coords_vec = (*coords).row(j);
-			vec_t coords_pred_vec = (*coords_pred).row(i);
-			return GradientHurstCovariance_vec(coords_vec, coords_pred_vec, pars, transf_scale, nugget_var);
+			return GradientHurstCovariance_vec((*coords).row(j), (*coords_pred).row(i), pars, transf_scale, nugget_var);
 		}
-		inline double GradientHurstCovariance_vec(const vec_t& coords_vec,
-			const vec_t& coords_pred_vec,
+		template <typename T_x, typename T_y>//T_x and T_y can be vec_t or rows of a den_mat_t (which avoids copying them)
+		inline double GradientHurstCovariance_vec(const Eigen::MatrixBase<T_x>& coords_vec,
+			const Eigen::MatrixBase<T_y>& coords_pred_vec,
 			const vec_t& pars,
 			bool transf_scale,
 			double nugget_var) const {
 			const double sqrd_norm_x = coords_vec.squaredNorm();
 			const double sqrd_norm_y = coords_pred_vec.squaredNorm();
 			const double sqrd_norm_x_min_y = (coords_vec - coords_pred_vec).squaredNorm();
+			if (order_ == 2) {
+				return GradientHurstCovarianceOrder2WrtH(sqrd_norm_x, sqrd_norm_y, sqrd_norm_x_min_y, coords_vec.dot(coords_pred_vec), pars, transf_scale, nugget_var);
+			}
 			const double H = std::exp(-pars[1]);
 			const double cm = transf_scale ? -H * pars[1] : nugget_var;// multiplicative constant to get gradient on log-scale or backtransform with nugget variance
 			const double rx_H = std::pow(sqrd_norm_x, H);
@@ -3121,12 +3319,11 @@ namespace GPBoost {
 			const int ind_par,
 			bool transf_scale,
 			double nugget_var) const {
-			vec_t coords_vec = (*coords).row(j);
-			vec_t coords_pred_vec = (*coords_pred).row(i);
-			return GradientHurstCovarianceARD_vec(coords_vec, coords_pred_vec, pars, ind_par, transf_scale, nugget_var);
+			return GradientHurstCovarianceARD_vec((*coords).row(j), (*coords_pred).row(i), pars, ind_par, transf_scale, nugget_var);
 		}
-		inline double GradientHurstCovarianceARD_vec(const vec_t& coords_vec,
-			const vec_t& coords_pred_vec,
+		template <typename T_x, typename T_y>//T_x and T_y can be vec_t or rows of a den_mat_t (which avoids copying them)
+		inline double GradientHurstCovarianceARD_vec(const Eigen::MatrixBase<T_x>& coords_vec,
+			const Eigen::MatrixBase<T_y>& coords_pred_vec,
 			const vec_t& pars,
 			const int ind_par,
 			bool transf_scale,
@@ -3135,6 +3332,13 @@ namespace GPBoost {
 			const double sqrd_norm_x = coords_vec.squaredNorm();
 			const double sqrd_norm_y = coords_pred_vec.squaredNorm();
 			const double sqrd_norm_x_min_y = (coords_vec - coords_pred_vec).squaredNorm();
+			if (order_ == 2) {
+				const double c = coords_vec.dot(coords_pred_vec);
+				if (ind_par == 0) {
+					return GradientHurstCovarianceOrder2WrtH(sqrd_norm_x, sqrd_norm_y, sqrd_norm_x_min_y, c, pars, transf_scale, nugget_var);
+				}
+				return GradientHurstCovarianceOrder2WrtRange(coords_vec, coords_pred_vec, sqrd_norm_x, sqrd_norm_y, sqrd_norm_x_min_y, c, pars, ind_par, transf_scale, nugget_var);
+			}
 			double grad;
 			const double H = std::exp(-pars[1]);
 			if (ind_par == 0) {				
@@ -3149,17 +3353,17 @@ namespace GPBoost {
 			}
 			else {// ----- gradient w.r.t. ARD range parameter l_k -----				
 				const int k = ind_par;   // coordinate index (1 ... num_range)
-				const double l_k = std::max(pars[ind_par + 1], 1e-12);// The range l_k is stored in pars[ind_par + 1]
-				auto safe_pow_Hm1 = [&](double x) {// avoids pow(0, negative) and inf*0 -> NaN					
-					return (x > EPSILON_NUMBERS) ? std::pow(x, H - 1.0) : 0.0;
+				const double l_k = pars[ind_par + 1];// The range l_k is stored in pars[ind_par + 1]
+				// u^(H-1) * a for 0 <= a <= u, which tends to 0 for u -> 0 although u^(H-1) diverges for H < 1.
+				//	It is calculated as (a / u) * u^H to avoid the product of a diverging and a vanishing factor
+				auto pow_Hm1_times = [H](double u, double a) {
+					return (u > 0.) ? ((a / u) * std::pow(u, H)) : 0.;
 				};
-				const double r_x_Hm1 = safe_pow_Hm1(sqrd_norm_x);
-				const double r_y_Hm1 = safe_pow_Hm1(sqrd_norm_y);
-				const double r_xy_Hm1 = safe_pow_Hm1(sqrd_norm_x_min_y);
 				const double x_k = coords_vec[k];
 				const double y_k = coords_pred_vec[k];
 				const double diff_k = x_k - y_k;
-				const double dC_dl_k = -pars[0] * H / l_k * (r_x_Hm1 * x_k * x_k + r_y_Hm1 * y_k * y_k - r_xy_Hm1 * diff_k * diff_k);
+				const double dC_dl_k = -pars[0] * H / l_k * (pow_Hm1_times(sqrd_norm_x, x_k * x_k) + pow_Hm1_times(sqrd_norm_y, y_k * y_k) -
+					pow_Hm1_times(sqrd_norm_x_min_y, diff_k * diff_k));
 				const double cm = transf_scale ? l_k : nugget_var;// multiplicative constant to get gradient on log-scale or backtransform with nugget variance
 				grad = cm * dC_dl_k;
 			}
@@ -3195,6 +3399,8 @@ namespace GPBoost {
 		string_t cov_fct_type_;
 		/*! \brief Shape parameter of covariance function (=smoothness parameter for Matern covariance) */
 		double shape_;
+		/*! \brief Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m), 1 for all other covariance functions */
+		int order_ = 1;
 		/*! \brief Constant in covariance function (used only for Matern with general shape) */
 		double const_;
 		/*! \brief Range parameter of the Wendland covariance functionand Wendland correlation taper function.We follow the notation of Bevilacqua et al. (2019, AOS) */
@@ -3219,6 +3425,8 @@ namespace GPBoost {
 		bool need_coordinates_for_calculating_covariance_ = false;
 		/*! \brief If true, the diagonal of the covariance is constant and equal to the marginal variance */
 		bool variance_on_the_diagonal_ = true;
+		/*! \brief If true, the gradients with respect to the range parameters are multiples of the entries of the covariance matrix passed to them, see 'GradientIsMultipleOfCov' */
+		bool grad_is_multiple_of_cov_ = false;
 		/*! \brief If true, precomputed distances('dist') are used for calculating covariances, otherwise the coordinates are used('coords' and 'coords_pred') */
 		bool use_precomputed_dist_for_calc_cov_;
 		/*! \brief If true, this is a two-level autoregressive multifidelity covariance */

@@ -24,6 +24,12 @@ class LineSearchNocedalWright
 private:
     using Vector = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
 
+public:
+    // ChangedForGPBoost: the gradient at the returned point is calculated by the line search
+    static constexpr bool calculates_gradient = true;
+
+private:
+
     // Use {fx_lo, fx_hi, dg_lo} to make a quadratic interpolation of
     // the function, and the fitted quadratic function is used to
     // estimate the minimum
@@ -124,6 +130,8 @@ public:
         // We also need to save x and grad for step=step_lo, since we want to return the best
         // step size along the path when strong Wolfe condition is not met
         Vector x_lo = xp, grad_lo = grad;
+        f.SaveModesLo(); // ChangedForGPBoost: the modes of the Laplace approximations currently correspond to 'xp' = 'x_lo'
+        f.SaveProfiledOutVariablesLo(); // ChangedForGPBoost: the profiled-out variables correspond to 'xp' = 'x_lo' as well
 
         // STEP 1: Bracketing Phase
         //   Find a range guaranteed to contain a step satisfying strong Wolfe.
@@ -138,20 +146,45 @@ public:
         //   See also:
         //     "Numerical Optimization", "Algorithm 3.5 (Line Search Algorithm)".
         int iter = 0;
+        // ChangedForGPBoost: with 'reset_modes_line_search_lbfgs', the mode finding of every trial point starts at the modes of
+        //  'xp'. Otherwise, it starts at the modes of the previous trial point, and the objective function along the search direction
+        //  then depends on the trial points evaluated before
+        int num_trial_points = 0;
         for (;;)
         {
+            if (num_trial_points > 0 && f.ResetModesEveryTrialPoint())
+            {
+                f.ResetModesToLag1();
+            }
+            num_trial_points++;
             // Evaluate the current step size
             x.noalias() = xp + step * drt;
+            // ChangedForGPBoost: the curvature condition requires the gradient at the new point. It is only calculated if the
+            //  objective is finite since it requires a valid mode (the candidate is rejected otherwise, see below)
             fx = f(x, grad, true, false);
+            if (std::isfinite(fx))
+            {
+                f(x, grad, false, true);
+            }
             dg = grad.dot(drt);
+            // ChangedForGPBoost: NA / Inf in the objective or in the gradient
+            const bool has_NA_or_Inf = !std::isfinite(fx) || !grad.allFinite() || !std::isfinite(dg);
 
             // Test the sufficient decrease condition
-            if (fx - fx_init > step * test_decr || (Scalar(0) < step_lo && fx >= fx_lo))
+            // ChangedForGPBoost: NA / Inf are rejected as well (all comparisons with NaN are false)
+            if (fx - fx_init > step * test_decr || (Scalar(0) < step_lo && fx >= fx_lo) || has_NA_or_Inf)
             {
                 // Case (1) and (2)
                 step_hi = step;
                 fx_hi = fx;
                 // dg_hi = dg;
+                // ChangedForGPBoost: the mode finding of a candidate starts at the modes of the previous candidate. After NA / Inf,
+                //  these modes are often the cause, and the mode finding can then fail at every further candidate -> start it at
+                //  the modes of 'x_lo'
+                if (has_NA_or_Inf)
+                {
+                    f.RestoreModesLo();
+                }
                 break;
             }
             // If reaching here, then the sufficient decrease condition is satisfied
@@ -172,6 +205,8 @@ public:
             // Move x and grad to x_lo and grad_lo, respectively
             x_lo.swap(x);
             grad_lo.swap(grad);
+            f.SaveModesLo(); // ChangedForGPBoost: the modes correspond to the point that has just been evaluated, which is now 'x_lo'
+            f.SaveProfiledOutVariablesLo(); // ChangedForGPBoost: the profiled-out variables correspond to it as well
 
             if (dg >= Scalar(0))
                 break;  // Case (3)
@@ -216,13 +251,27 @@ public:
             // estimate the minimum
             step = quad_interp(step_lo, step_hi, fx_lo, fx_hi, dg_lo);
 
+            if (num_trial_points > 0 && f.ResetModesEveryTrialPoint())
+            {
+                f.ResetModesToLag1();
+            }
+            num_trial_points++;
             // Evaluate the current step size
             x.noalias() = xp + step * drt;
+            // ChangedForGPBoost: the curvature condition requires the gradient at the new point. It is only calculated if the
+            //  objective is finite since it requires a valid mode (the candidate is rejected otherwise, see below)
             fx = f(x, grad, true, false);
+            if (std::isfinite(fx))
+            {
+                f(x, grad, false, true);
+            }
             dg = grad.dot(drt);
+            // ChangedForGPBoost: NA / Inf in the objective or in the gradient
+            const bool has_NA_or_Inf = !std::isfinite(fx) || !grad.allFinite() || !std::isfinite(dg);
 
             // Test the sufficient decrease condition
-            if (fx - fx_init > step * test_decr || fx >= fx_lo)
+            // ChangedForGPBoost: NA / Inf are rejected as well (all comparisons with NaN are false)
+            if (fx - fx_init > step * test_decr || fx >= fx_lo || has_NA_or_Inf)
             {
                 if (step == step_hi)
                     Log::Debug("GPModel lbfgs: the line search routine failed, possibly due to insufficient numeric precision");
@@ -230,15 +279,17 @@ public:
                 step_hi = step;
                 fx_hi = fx;
                 // dg_hi = dg;
+                // ChangedForGPBoost: start the mode finding of the next candidate at the modes of 'x_lo', see the bracketing phase
+                if (has_NA_or_Inf)
+                {
+                    f.RestoreModesLo();
+                }
             }
             else
             {
                 // Test the curvature condition
                 if (std::abs(dg) <= test_curv)
-                {
-                    f(x, grad, false, true);  // calculate gradient
                     return;
-                }
 
                 if (dg * (step_hi - step_lo) >= Scalar(0))
                 {
@@ -257,6 +308,8 @@ public:
                 // Move x and grad to x_lo and grad_lo, respectively
                 x_lo.swap(x);
                 grad_lo.swap(grad);
+                f.SaveModesLo(); // ChangedForGPBoost: the modes correspond to the point that has just been evaluated, which is now 'x_lo'
+                f.SaveProfiledOutVariablesLo(); // ChangedForGPBoost: the profiled-out variables correspond to it as well
             }
 
             iter++;
@@ -270,7 +323,11 @@ public:
                 if (step_lo <= Scalar(0))
                 {
                     x.noalias() = xp;
+                    f.SetLineSearchHasNotBeenSuccessful(); // ChangedForGPBoost
                     f.ResetProfiledOutVariablesToLag1();
+                    f.ResetModesToLag1(); // ChangedForGPBoost: the modes need to be reset as well, otherwise they correspond to the last candidate point of the line search and not to 'xp'
+                    f(x, grad, true, true); // ChangedForGPBoost: the model is evaluated at 'xp' such that its state and 'grad' correspond to 'xp' and not to the last candidate point
+                    dg = dg_init;
                     fx = fx_init;
                     step = 0.;
                     Log::REDebug("GPModel lbfgs: the line search routine reached the maximum number of iterations");
@@ -284,6 +341,16 @@ public:
                     // Move {x, grad}_lo back
                     x.swap(x_lo);
                     grad.swap(grad_lo);
+                    // ChangedForGPBoost: the modes need to be moved back as well, otherwise they correspond to the
+                    //  last candidate point of the zoom phase, which has been rejected, and not to 'x_lo'
+                    f.RestoreModesLo();
+                    // ChangedForGPBoost: the profiled-out variables (error variance, regression coefficients) need to be
+                    //  moved back as well, otherwise they correspond to the rejected last candidate point and not to 'x_lo'
+                    f.RestoreProfiledOutVariablesLo();
+                    // ChangedForGPBoost: the model is evaluated at 'x_lo' such that its state (e.g., the factorization of
+                    //  the covariance matrix) corresponds to it and not to the rejected last candidate point
+                    fx = f(x, grad, true, true);
+                    dg = grad.dot(drt);
                 }
                 return;
             }

@@ -11,6 +11,7 @@
 
 #include <iterator>
 #include <memory>
+#include <functional>
 #include <GPBoost/type_defs.h>
 #include <LightGBM/utils/log.h>
 #include <GPBoost/utils.h>
@@ -59,6 +60,208 @@ namespace GPBoost {
 	void sp_L_t_solve(const double* val, const int* row_idx, const int* col_ptr, const int ncol, double* x);
 
 	/*!
+	* \brief Calculate the diagonal of L^(-1) diag(d) L^(-T) for a sparse lower triangular matrix L without storing L^(-1),
+	*		which is usually not sparse. The columns of L^(-1) are calculated one after another along their non-zero pattern,
+	*		so the cost is proportional to the number of non-zeros of L^(-1)
+	* \param L Sparse lower triangular matrix (compressed, column-major format, with the diagonal as first entry of every column)
+	* \param d Vector d
+	* \param[out] diag Diagonal of L^(-1) diag(d) L^(-T)
+	*/
+	void CalcDiagLInvDLInvT(const sp_mat_t& L, const vec_t& d, vec_t& diag);
+
+	/*!
+	* \brief Calculate L^(-1) diag(d) L^(-T) for a sparse lower triangular matrix L as a dense matrix without storing L^(-1),
+	*		which is usually not sparse, with two triangular solves in place of the dense result
+	* \param L Sparse lower triangular matrix (compressed, column-major format, with the diagonal as first entry of every column)
+	* \param d Vector d
+	* \param[out] M L^(-1) diag(d) L^(-T)
+	*/
+	void CalcLInvDLInvT(const sp_mat_t& L, const vec_t& d, den_mat_t& M);
+
+	/*!
+	* \brief Calculate R^T * L^(-T) * e_i, i.e. column i of R^T * L^(-T), for a sparse lower triangular matrix L (or the identity)
+	*		and a sparse row-major matrix R with as many rows as L. L^(-T) * e_i is zero below row i, so only the columns of L
+	*		and the rows of R up to i are used
+	* \param L Sparse lower triangular matrix (compressed, column-major format, with the diagonal as first entry of every column),
+	*		nullptr for the identity matrix
+	* \param R Sparse row-major matrix (compressed)
+	* \param i Column index
+	* \param[out] column R^T * L^(-T) * e_i
+	* Note: the arguments are not checked since this function is usually called from several threads at the same time, where an
+	*	error cannot be raised. They have to be checked before with 'CheckArgumentsCalcColumnRtLInvT'
+	*/
+	void CalcColumnRtLInvT(const sp_mat_t* L, const sp_mat_rm_t& R, int i, vec_t& column);
+
+	/*!
+	* \brief Check the arguments of 'CalcColumnRtLInvT' for the columns 0, ..., num_columns - 1
+	* \param L Sparse lower triangular matrix, nullptr for the identity matrix
+	* \param R Sparse row-major matrix
+	* \param num_columns Number of columns that are calculated
+	*/
+	void CheckArgumentsCalcColumnRtLInvT(const sp_mat_t* L, const sp_mat_rm_t& R, int num_columns);
+
+	/*!
+	* \brief Calculate the squared norms of the columns of L^(-1) R for a sparse lower triangular matrix L and a sparse matrix R
+	*		without storing L^(-1) R. The columns are calculated one after another along their non-zero pattern
+	* \param L Sparse lower triangular matrix (compressed, column-major format, with the diagonal as first entry of every column)
+	* \param R Sparse right-hand side
+	* \param[out] norms Squared norms of the columns of L^(-1) R
+	*/
+	void CalcColSquaredNormsLInvR(const sp_mat_t& L, const sp_mat_t& R, vec_t& norms);
+
+	/*!
+	* \brief Calculate the squared norms of the columns of L^(-1) R for a sparse lower triangular matrix L and a sparse matrix R
+	*		row by row instead of column by column: row k of L^(-1) is L^(-T) e_k, and the squares of the entries of row k of
+	*		L^(-1) R = (L^(-T) e_k)^T R are added to the norms. This needs one triangular solve per row of R instead of one per
+	*		column, which is faster than 'CalcColSquaredNormsLInvR' if R has more columns than rows. Only one row of L^(-1) R
+	*		is stored at a time (per thread), and L^(-1) is not formed
+	* \param L Sparse lower triangular matrix (compressed, row-major format, with sorted column indices and the diagonal as last
+	*		entry of every row)
+	* \param R Sparse right-hand side (compressed, row-major format)
+	* \param[out] norms Squared norms of the columns of L^(-1) R
+	*/
+	void CalcColSquaredNormsLInvRByRows(const sp_mat_rm_t& L, const sp_mat_rm_t& R, vec_t& norms);
+
+	/*!
+	* \brief Calculate the squared norms of the columns of L^(-1) R for a sparse Cholesky factor L and a sparse matrix R without
+	*		storing L^(-1) R. The non-zeros of L^(-1) r are on the paths from the non-zeros of r to the root of the elimination
+	*		tree of L, and only these entries are calculated. This requires that the sparsity pattern of L contains the fill-in,
+	*		as it is the case for a Cholesky factor (but not, e.g., for an incomplete Cholesky factor)
+	* \param L Sparse Cholesky factor (compressed, column-major format, with the diagonal as first entry of every column)
+	* \param R Sparse right-hand side
+	* \param[out] norms Squared norms of the columns of L^(-1) R
+	*/
+	void CalcColSquaredNormsCholFactorInvR(const sp_mat_t& L, const sp_mat_t& R, vec_t& norms);
+
+	/*!
+	* \brief Calculate the squared norms of the columns of L^(-1) P R for a sparse lower triangular matrix L and a permutation P,
+	*		where the columns of R are calculated one after another by a function and are not stored, e.g., since R is not sparse
+	* \param L Sparse lower triangular matrix (compressed, column-major format, with the diagonal as first entry of every column)
+	* \param perm_indices Indices of the permutation P, i.e., (P x)[perm_indices[i]] = x[i] (see 'SparseInverseEntries'). No
+	*		permutation if it is empty
+	* \param num_cols Number of columns of R
+	* \param calc_column Function that writes column i of R into a vector of length L.cols(), whose content on entry is
+	*		undefined. It is called from several threads at the same time
+	* \param[out] norms Squared norms of the columns of L^(-1) P R
+	*/
+	void CalcColSquaredNormsLInvPRColumnwise(const sp_mat_t& L, const Eigen::VectorXi& perm_indices, int num_cols,
+		const std::function<void(int, vec_t&)>& calc_column, vec_t& norms);
+
+	/*!
+	* \brief Selected inversion with the Takahashi equations: calculate the entries of (L L^T)^(-1) on the sparsity pattern of a
+	*		lower triangular Cholesky factor L. The pattern of a Cholesky factor contains the fill-in of the factorization,
+	*		and the recursion therefore only needs entries on this pattern. The cost is of the order of a numeric factorization
+	* \param L Lower triangular Cholesky factor (compressed, column-major format, with sorted row indices and the diagonal as
+	*		first entry of every column)
+	* \param[out] Z_lower Lower triangle of (L L^T)^(-1) on the sparsity pattern of L
+	* \param max_num_rows_dense The entries of the inverse that a supernode needs are gathered into dense matrices in panels of
+	*		rows with at most max_num_rows_dense^2 entries per panel
+	*/
+	void SelectedInversionCholesky(const sp_mat_t& L, sp_mat_t& Z_lower, int max_num_rows_dense = 4096);
+
+	/*!
+	* \brief Approximate run times of two ways of calculating the diagonal of (L L^T)^(-1) for a Cholesky factor L with the
+	*		current number of threads, in units of the time of one operation of a sparse triangular solve with one thread
+	* \param L Cholesky factor (compressed, column-major format, with sorted row indices and the diagonal as first entry of every column)
+	* \param[out] cost_solves Run time of one sparse triangular solve per column, see 'CalcColSquaredNormsCholFactorInvR'
+	* \param[out] cost_selected_inversion Run time of 'SelectedInversionCholesky'
+	*/
+	void CostsDiagonalCholFactorInverse(const sp_mat_t& L, double& cost_solves, double& cost_selected_inversion);
+
+	/*!
+	* \brief Entries of the inverse of a symmetric positive definite matrix A given a sparse Cholesky factorization
+	*		P A P^T = L L^T. The entries on the sparsity pattern of L + L^T, which include the diagonal and all entries
+	*		on the sparsity pattern of A, are calculated with 'SelectedInversionCholesky' when they are first needed.
+	*		Other entries are calculated with triangular solves, except for entries whose row and column are in
+	*		different connected components of the graph of A, which are zero
+	*/
+	class SparseInverseEntries {
+	public:
+		/*!
+		* \param L Lower triangular Cholesky factor of P A P^T (compressed, column-major format, with the diagonal as
+		*		first entry of every column). It has to exist as long as this object is used
+		* \param perm_indices Indices of the permutation P, i.e., row i of A is row perm_indices[i] of P A P^T. If it is
+		*		empty, there is no permutation
+		*/
+		SparseInverseEntries(const sp_mat_t& L, const Eigen::VectorXi& perm_indices);
+		/*! \brief A temporary factor, e.g. a converted row-major factor, would not exist as long as this object */
+		SparseInverseEntries(sp_mat_t&& L, const Eigen::VectorXi& perm_indices) = delete;
+
+		/*!
+		* \brief Diagonal of A^(-1). If the selected inverse has not been calculated yet, the diagonal is calculated with one
+		*		sparse triangular solve per column if this is cheaper, see 'CostsDiagonalCholFactorInverse', which is the case, e.g.,
+		*		for block-diagonal factors with small blocks
+		*/
+		vec_t Diagonal() const;
+		/*! \brief Diagonal of A^(-1) calculated with one sparse triangular solve per column */
+		vec_t DiagonalBySolves() const;
+		/*! \brief Diagonal of A^(-1) calculated with selected inversion */
+		vec_t DiagonalBySelectedInversion() const;
+
+		/*!
+		* \brief Write the entries of A^(-1) on the non-zeros of a sparse matrix M
+		* \param[out] M Matrix whose non-zero entries are overwritten
+		*/
+		void OnSparsityPattern(sp_mat_t& M) const;
+
+		/*!
+		* \brief Calculate the diagonal of Z A^(-1) Z^T for a sparse matrix Z
+		* \param Zt Transpose of Z
+		* \return Diagonal of Z A^(-1) Z^T
+		*/
+		vec_t DiagZAinvZt(const sp_mat_t& Zt) const;
+
+	private:
+		/*! \brief Calculate the selected inverse 'Z_lower_' if this has not been done yet */
+		void CalcSelectedInverse() const;
+		/*! \brief Position of the entry (i,j) of A^(-1) in 'Z_lower_' for indices of A, -1 if it is not on the sparsity pattern of L */
+		int Position(int i, int j) const;
+		/*!
+		* \brief Calculate entries of A^(-1) with triangular solves. Entries whose row and column are in different connected
+		*		components of the graph of A are zero and are not calculated, see 'CalcComponents'. The other entries are
+		*		grouped by their column, where the column of an entry (i,j) is the index of i and j that is needed for more
+		*		entries (A^(-1) is symmetric). For every column, either the column of A^(-1) is calculated with two triangular
+		*		solves over all of L, or every entry (i,j) of the column is calculated as the inner product of the columns i and
+		*		j of L^(-1) P^T, which are non-zero only on the paths from P i and P j to the root of the elimination tree of L.
+		*		The cheaper of the two is chosen, see 'CalcPathCosts'
+		* \param rows Row indices of the entries (indices of A)
+		* \param cols Column indices of the entries (indices of A)
+		* \param[out] values Entries of A^(-1)
+		*/
+		void EntriesBySolves(const std::vector<int>& rows, const std::vector<int>& cols, std::vector<double>& values) const;
+		/*!
+		* \brief Label the connected components of the graph of A in 'component_' if this has not been done yet. The trees
+		*		of the elimination forest of L are these components, since the fill-in of a Cholesky factorization stays
+		*		within a component
+		*/
+		void CalcComponents() const;
+		/*!
+		* \brief Calculate 'path_cost_' if this has not been done yet: path_cost_[k] is the number of non-zeros of the columns
+		*		of L on the path from k to the root of the elimination tree of L, which is the cost of calculating L^(-1) e_k
+		*/
+		void CalcPathCosts() const;
+
+		/*! \brief Cholesky factor L with sorted row indices */
+		const sp_mat_t* L_;
+		/*! \brief Copy of L with sorted row indices, used only if the row indices of the given factor are not sorted */
+		sp_mat_t L_sorted_;
+		/*! \brief Lower triangle of (L L^T)^(-1) on the sparsity pattern of L (calculated when it is first needed) */
+		mutable sp_mat_t Z_lower_;
+		/*! \brief True if 'Z_lower_' has been calculated */
+		mutable bool selected_inverse_calculated_ = false;
+		/*! \brief component_[k] is the connected component of row k of P A P^T (calculated when it is first needed) */
+		mutable std::vector<int> component_;
+		/*! \brief True if 'component_' has been calculated */
+		mutable bool components_calculated_ = false;
+		/*! \brief See 'CalcPathCosts' (calculated when it is first needed) */
+		mutable std::vector<double> path_cost_;
+		/*! \brief True if 'path_cost_' has been calculated */
+		mutable bool path_costs_calculated_ = false;
+		/*! \brief perm_[i] is the row of P A P^T that corresponds to row i of A */
+		std::vector<int> perm_;
+	};
+
+	/*!
 	* \brief Solve equation system with a sparse triangular left-hand side and a sparse right-hand side (Ax=B) using CSparse function cs_spsolve
 	* \param A left-hand side
 	* \param B right-hand side
@@ -86,6 +289,17 @@ namespace GPBoost {
 	void eigen_sp_Lower_sp_RHS_cs_solve(const sp_mat_rm_t& A, const sp_mat_rm_t& B, sp_mat_rm_t& A_inv_B, bool lower);
 
 	/*!
+	* \brief Whether a Cholesky factorization is one of a sparse matrix, i.e. one that reorders
+	*		its rows and columns and therefore carries a permutation matrix
+	*/
+	template <class T_chol>
+	struct is_sparse_chol : public std::integral_constant<bool,
+		std::is_same<chol_sp_mat_t, T_chol>::value ||
+		std::is_same<chol_sp_mat_rm_t, T_chol>::value ||
+		std::is_same<chol_cholmod_sp_mat_t, T_chol>::value ||
+		std::is_same<chol_cholmod_sp_mat_rm_t, T_chol>::value> {};
+
+	/*!
 	* \brief Check whether Cholesky factor has a permutation matrix
 	* \param chol Cholesky factor
 	* \return true if chol has a permutation matrix, false otherwise
@@ -94,7 +308,7 @@ namespace GPBoost {
 	bool CholeskyHasPermutation(const T_chol&) {
 		return false;
 	}
-	template <class T_chol, typename std::enable_if <std::is_same<chol_sp_mat_t, T_chol>::value || std::is_same<chol_sp_mat_rm_t, T_chol>::value>::type* = nullptr >
+	template <class T_chol, typename std::enable_if <is_sparse_chol<T_chol>::value>::type* = nullptr >
 	bool CholeskyHasPermutation(const T_chol& chol) {
 		if (chol.permutationP().size() > 0) {
 			return true;
@@ -113,7 +327,7 @@ namespace GPBoost {
 	void ApplyPermutationCholeskyFactor(const chol_den_mat_t&, const T_mat& M, T_mat& P_M, bool) {
 		P_M = M;
 	}
-	template <class T_mat, class T_chol, typename std::enable_if <std::is_same<chol_sp_mat_t, T_chol>::value || std::is_same<chol_sp_mat_rm_t, T_chol>::value>::type* = nullptr >
+	template <class T_mat, class T_chol, typename std::enable_if <is_sparse_chol<T_chol>::value>::type* = nullptr >
 	void ApplyPermutationCholeskyFactor(const T_chol& chol, const T_mat& M, T_mat& P_M, bool transpose) {
 		if (chol.permutationP().size() > 0) {
 			if (transpose) {
@@ -384,6 +598,116 @@ namespace GPBoost {
 		den_mat_t R_den = (den_mat_t)(R);
 		TriangularSolveGivenCholesky<chol_den_mat_t, T_chol_mat, den_mat_t, den_mat_t>(chol, R_den, X, transpose);
 	}//end TriangularSolveGivenCholesky (chol = chol_den_mat_t && R = sp_mat_t)
+
+	/*!
+	* \brief Calculate P^T * L * R for a Cholesky factorization P * A * P^T = L * L^T. If R has independent standard normal
+	*		entries, the columns of the result have covariance matrix A
+	* \param chol Cholesky factorization
+	* \param R Right-hand side
+	* \param[out] X P^T * L * R
+	*/
+	template <class T_chol, typename std::enable_if <std::is_same<chol_den_mat_t, T_chol>::value>::type* = nullptr >
+	void MultiplyCholeskyFactor(const T_chol& chol, const den_mat_t& R, den_mat_t& X) {
+		X = chol.matrixL() * R;
+	}
+	template <class T_chol, typename std::enable_if <is_sparse_chol<T_chol>::value>::type* = nullptr >
+	void MultiplyCholeskyFactor(const T_chol& chol, const den_mat_t& R, den_mat_t& X) {
+		const den_mat_t L_R = chol.CholFactMatrix() * R;
+		ApplyPermutationCholeskyFactor<den_mat_t, T_chol>(chol, L_R, X, true);
+	}//end MultiplyCholeskyFactor
+
+	/*!
+	* \brief Column-major sparse Cholesky factor: the factor itself if it is column-major, otherwise a converted copy
+	* \param L Cholesky factor
+	* \param storage Storage of the converted copy
+	* \return Column-major Cholesky factor
+	*/
+	inline const sp_mat_t& ColMajorCholFactor(const sp_mat_t& L, sp_mat_t& /* storage */) {
+		return L;
+	}
+	inline const sp_mat_t& ColMajorCholFactor(const sp_mat_rm_t& L, sp_mat_t& storage) {
+		storage = L;
+		return storage;
+	}
+
+	/*!
+	* \brief Calculate the squared norms of the columns of L^(-1) * P * R for a Cholesky factorization P * A * P^T = L * L^T
+	*		without storing L^(-1) * P * R for a sparse Cholesky factorization, see 'CalcColSquaredNormsCholFactorInvR'
+	* \param chol Cholesky factorization
+	* \param R Right-hand side
+	* \param[out] norms Squared norms of the columns of L^(-1) * P * R
+	*/
+	template <class T_chol, class T_mat_R, typename std::enable_if <std::is_same<chol_den_mat_t, T_chol>::value>::type* = nullptr >
+	void CalcColSquaredNormsCholFactorInvPR(const T_chol& chol, const T_mat_R& R, vec_t& norms) {
+		// A dense L^-1 has no fill-in, and a matrix product is faster than triangular solves for many dense right-hand sides
+		den_mat_t L_inv;
+		TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol, den_mat_t::Identity(chol.rows(), chol.cols()), L_inv, false);
+		den_mat_t L_inv_R;
+		L_inv_R.noalias() = L_inv * R;
+		norms = L_inv_R.colwise().squaredNorm().transpose();
+	}
+	template <class T_chol, class T_mat_R, typename std::enable_if <is_sparse_chol<T_chol>::value>::type* = nullptr >
+	void CalcColSquaredNormsCholFactorInvPR(const T_chol& chol, const T_mat_R& R, vec_t& norms) {
+		sp_mat_t L_storage;
+		const sp_mat_t& L = ColMajorCholFactor(chol.CholFactMatrix(), L_storage);
+		sp_mat_t P_R = R;
+		if (CholeskyHasPermutation<T_chol>(chol)) {
+			const sp_mat_t R_cm = P_R;
+			P_R = chol.permutationP() * R_cm;
+		}
+		CalcColSquaredNormsCholFactorInvR(L, P_R, norms);
+	}//end CalcColSquaredNormsCholFactorInvPR
+
+	/*!
+	* \brief Calculate the squared norms of the columns of L^(-1) * P * R for a Cholesky factorization P * A * P^T = L * L^T
+	*		with a memory requirement that does not grow with the number of columns of R: for a dense factorization, the
+	*		columns of R are solved in blocks, and for a sparse one, see 'CalcColSquaredNormsCholFactorInvPR'
+	* \param chol Cholesky factorization
+	* \param R Right-hand side
+	* \param[out] norms Squared norms of the columns of L^(-1) * P * R
+	*/
+	template <class T_chol, class T_mat_R, typename std::enable_if <std::is_same<chol_den_mat_t, T_chol>::value>::type* = nullptr >
+	void CalcColSquaredNormsCholFactorInvPRLowMemory(const T_chol& chol, const T_mat_R& R, vec_t& norms) {
+		const int num_cols = (int)R.cols();
+		const int block_size = 128;
+		const int num_blocks = (num_cols + block_size - 1) / block_size;
+		norms.resize(num_cols);
+#pragma omp parallel for schedule(dynamic)
+		for (int b = 0; b < num_blocks; ++b) {
+			const int first_col = b * block_size;
+			const int num_cols_block = std::min(block_size, num_cols - first_col);
+			const den_mat_t R_block = R.middleCols(first_col, num_cols_block);
+			den_mat_t L_inv_R_block;
+			TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol, R_block, L_inv_R_block, false);
+			norms.segment(first_col, num_cols_block) = L_inv_R_block.colwise().squaredNorm().transpose();
+		}
+	}
+	template <class T_chol, class T_mat_R, typename std::enable_if <is_sparse_chol<T_chol>::value>::type* = nullptr >
+	void CalcColSquaredNormsCholFactorInvPRLowMemory(const T_chol& chol, const T_mat_R& R, vec_t& norms) {
+		CalcColSquaredNormsCholFactorInvPR<T_chol, T_mat_R>(chol, R, norms);
+	}//end CalcColSquaredNormsCholFactorInvPRLowMemory
+
+	/*!
+	* \brief Calculate the entries of A^(-1) on the non-zeros of a matrix M given a Cholesky factorization of A, see
+	*		'SparseInverseEntries'. For a dense matrix, all entries are calculated
+	* \param chol Cholesky factorization of A
+	* \param[out] M Matrix whose non-zero entries are overwritten
+	*/
+	template <class T_chol, class T_mat, typename std::enable_if <std::is_same<chol_den_mat_t, T_chol>::value>::type* = nullptr >
+	void CalcInverseOnSparsityPattern(const T_chol& chol, T_mat& M) {
+		// the triangular solves are parallelized over the columns and the product is a parallel matrix multiplication
+		den_mat_t L_inv;
+		TriangularSolveGivenCholesky<chol_den_mat_t, den_mat_t, den_mat_t, den_mat_t>(chol, den_mat_t::Identity(chol.rows(), chol.cols()), L_inv, false);
+		M.noalias() = L_inv.transpose() * L_inv;
+	}
+	template <class T_chol, class T_mat, typename std::enable_if <is_sparse_chol<T_chol>::value>::type* = nullptr >
+	void CalcInverseOnSparsityPattern(const T_chol& chol, T_mat& M) {
+		sp_mat_t L_storage;
+		const sp_mat_t& L = ColMajorCholFactor(chol.CholFactMatrix(), L_storage);
+		sp_mat_t M_cm = M;
+		SparseInverseEntries(L, chol.permutationP().indices()).OnSparsityPattern(M_cm);
+		M = M_cm;
+	}//end CalcInverseOnSparsityPattern
 
 	/*!
 	* \brief Solve a linear system L*L^T * X = R given a lower Cholesky factor

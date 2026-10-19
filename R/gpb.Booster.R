@@ -63,7 +63,7 @@ Booster <- R6::R6Class(
           
           private$has_gp_model <- TRUE
           private$gp_model <- gp_model
-          private$gp_model$.__enclos_env__$private$used_in_gpboost_algorithm <- TRUE
+          private$gp_model$set_used_in_gpboost_algorithm()
           # Store booster handle
           handle <- .Call(
             LGBM_GPBoosterCreate_R
@@ -123,11 +123,16 @@ Booster <- R6::R6Class(
           )
           if (!is.null(save_data[["raw_data"]])) {
             
+            init_score_loaded <- save_data[["raw_data"]]$init_score
+            if (!is.null(init_score_loaded)) {
+              init_score_loaded <- as.vector(unlist(init_score_loaded))
+            }
             private$train_set <- gpb.Dataset(
               data = matrix(unlist(save_data[["raw_data"]]$data),
                             nrow = length(save_data[["raw_data"]]$data),
                             byrow = TRUE),
-              label = save_data[["raw_data"]]$label)
+              label = save_data[["raw_data"]]$label,
+              init_score = init_score_loaded)
             save_data[["gp_model_str"]][["y"]] <- save_data[["raw_data"]]$label
             
           } else {
@@ -144,7 +149,9 @@ Booster <- R6::R6Class(
             }
             private$gp_model_prediction_data_loaded_from_file <- TRUE
           }
+          private$num_features_train_loaded_from_file <- save_data[["num_features_train"]]
           private$gp_model <- gpb.GPModel$new(model_list = save_data[["gp_model_str"]])
+          private$gp_model$set_used_in_gpboost_algorithm()
           private$gp_model$.__enclos_env__$private$model_fitted <- FALSE
           
         } else { # has no gp_model
@@ -177,11 +184,16 @@ Booster <- R6::R6Class(
           )
           if (!is.null(save_data[["raw_data"]])) {
             
+            init_score_loaded <- save_data[["raw_data"]]$init_score
+            if (!is.null(init_score_loaded)) {
+              init_score_loaded <- as.vector(unlist(init_score_loaded))
+            }
             private$train_set <- gpb.Dataset(
               data = matrix(unlist(save_data[["raw_data"]]$data),
                             nrow = length(save_data[["raw_data"]]$data),
                             byrow = TRUE),
-              label = save_data[["raw_data"]]$label)
+              label = save_data[["raw_data"]]$label,
+              init_score = init_score_loaded)
             save_data[["gp_model_str"]][["y"]] <- save_data[["raw_data"]]$label
             
           } else {
@@ -198,7 +210,9 @@ Booster <- R6::R6Class(
             }
             private$gp_model_prediction_data_loaded_from_file <- TRUE
           }
+          private$num_features_train_loaded_from_file <- save_data[["num_features_train"]]
           private$gp_model <- gpb.GPModel$new(model_list = save_data[["gp_model_str"]])
+          private$gp_model$set_used_in_gpboost_algorithm()
           private$gp_model$.__enclos_env__$private$model_fitted <- FALSE
           
         } else { # has no gp_model
@@ -632,11 +646,16 @@ Booster <- R6::R6Class(
         save_data[["has_gp_model"]] <- 1L
         save_data[["booster_str"]] <- bst_model_str
         save_data[["gp_model_str"]] <- private$gp_model$model_to_list(include_response_data = FALSE)
-        
+        # The number of training features is needed for fidelity-specific means, also when the raw data is not saved
+        save_data[["num_features_train"]] <- as.integer(private$train_set$dim()[2])
+
         if (save_raw_data) {
           
           save_data[["raw_data"]] <- list()
           save_data[["raw_data"]][["label"]] <- as.vector(private$train_set$.__enclos_env__$private$info$label)
+          # The offset supplied as 'init_score' to gpb.Dataset() for the training data is not part of the
+          #   tree ensemble and thus has to be saved separately
+          save_data[["raw_data"]][["init_score"]] <- private$train_set$.__enclos_env__$private$info$init_score
           save_data[["raw_data"]][["data"]] <- private$train_set$.__enclos_env__$private$raw_data
           if (is.matrix(save_data[["raw_data"]][["data"]])) {
             if (dim(save_data[["raw_data"]][["data"]])[2] == 1) {
@@ -658,9 +677,10 @@ Booster <- R6::R6Class(
           # Note: 'predictor$predict()' only returns the sum of the trees. The offset supplied as
           #   'init_score' to gpb.Dataset() for the training data is not part of the tree ensemble and needs to be added back here
           init_score_train <- private$train_set$.__enclos_env__$private$info$init_score
-          if (private$gp_model$.__enclos_env__$private$num_sets_fe == 2) {
-            nt <- length(fixed_effect_train) / 2
-            fixed_effect_train <- fixed_effect_train[c((1:nt)*2 - 1, (1:nt)*2)]
+          nsf <- private$gp_model$.__enclos_env__$private$num_sets_fe
+          if (nsf > 1) {
+            nt <- length(fixed_effect_train) / nsf
+            fixed_effect_train <- fixed_effect_train[as.vector(sapply(1:nsf, function(k) (1:nt) * nsf - nsf + k))]
           }
           if (!is.null(init_score_train)) {
             fixed_effect_train <- fixed_effect_train + init_score_train
@@ -738,9 +758,10 @@ Booster <- R6::R6Class(
                                                , predcontrib = FALSE
                                                , header = header
                                                , reshape = FALSE )
-      if (private$gp_model$.__enclos_env__$private$num_sets_fe == 2) {
-        nt <- length(fixed_effect_train) / 2
-        fixed_effect_train <- fixed_effect_train[c((1:nt)*2 - 1, (1:nt)*2)]
+      nsf <- private$gp_model$.__enclos_env__$private$num_sets_fe
+      if (nsf > 1) {
+        nt <- length(fixed_effect_train) / nsf
+        fixed_effect_train <- fixed_effect_train[as.vector(sapply(1:nsf, function(k) (1:nt) * nsf - nsf + k))]
       }
       init_score_train <- private$train_set$.__enclos_env__$private$info$init_score
       if (!is.null(init_score_train)) {
@@ -810,7 +831,16 @@ Booster <- R6::R6Class(
         if (!(is.matrix(data) || methods::is(data, "dgCMatrix"))) {
           stop("Independent fidelity-specific GPBoost means require prediction data to be a numeric matrix")
         }
-        num_features_train <- private$train_set$dim()[2]
+        if (!is.null(private$train_set)) {
+          num_features_train <- private$train_set$dim()[2]
+        } else {
+          num_features_train <- private$num_features_train_loaded_from_file
+        }
+        if (is.null(num_features_train)) {
+          stop("predict: the number of training features of the fidelity-specific GPBoost mean is not available. ",
+               "Set ", sQuote("save_raw_data = TRUE"), " when you save the model")
+        }
+        num_features_train <- as.integer(num_features_train)
         if (ncol(data) == num_features_train - 1L) {
           fidelity_pred <- if (!is.null(gp_coords_pred)) {
             as.matrix(gp_coords_pred)[, ncol(as.matrix(gp_coords_pred))]
@@ -962,9 +992,10 @@ Booster <- R6::R6Class(
             # Note: 'predictor$predict()' only returns the sum of the trees. The offset supplied as
             #   'init_score' to gpb.Dataset() for the training data is not part of the tree ensemble and needs to be added back here
             init_score_train <- private$train_set$.__enclos_env__$private$info$init_score
-            if (private$gp_model$.__enclos_env__$private$num_sets_fe == 2) {
-              nt <- length(fixed_effect_train) / 2
-              fixed_effect_train <- fixed_effect_train[c((1:nt)*2 - 1, (1:nt)*2)]
+            nsf <- private$gp_model$.__enclos_env__$private$num_sets_fe
+            if (nsf > 1) {
+              nt <- length(fixed_effect_train) / nsf
+              fixed_effect_train <- fixed_effect_train[as.vector(sapply(1:nsf, function(k) (1:nt) * nsf - nsf + k))]
             }
             if (!is.null(init_score_train)) {
               fixed_effect_train <- fixed_effect_train + init_score_train
@@ -986,14 +1017,15 @@ Booster <- R6::R6Class(
           
           if (pred_latent) {
             
-            if (private$gp_model$.__enclos_env__$private$num_sets_fe == 2) {
-              np <- length(fixed_effect) / 2
+            nsf <- private$gp_model$.__enclos_env__$private$num_sets_fe
+            if (nsf > 1) {
+              np <- length(fixed_effect) / nsf
               if (!is.null(offset_pred)) {
                 if (length(fixed_effect) != length(offset_pred)){
                   stop("Number of data points in fixed effect (tree ensemble) and 'offset_pred' are not equal")
                 }
               }
-              fixed_effect <- fixed_effect[(1:np)*2 - 1] # take only predictions for mean
+              fixed_effect <- fixed_effect[(1:np)*nsf - nsf + 1] # take only predictions for the first block (the mean)
               if (!is.null(offset_pred)) {
                 fixed_effect <- fixed_effect + offset_pred[1:np]
               }
@@ -1038,9 +1070,10 @@ Booster <- R6::R6Class(
             
           }# end pred_latent
           else {# predict response variable for non-Gaussian data
-            if (private$gp_model$.__enclos_env__$private$num_sets_fe == 2) {
-              np <- length(fixed_effect) / 2
-              fixed_effect <- fixed_effect[c((1:np)*2 - 1, (1:np)*2)] # fixed effects predictions for mean and variance
+            nsf <- private$gp_model$.__enclos_env__$private$num_sets_fe
+            if (nsf > 1) {
+              np <- length(fixed_effect) / nsf
+              fixed_effect <- fixed_effect[as.vector(sapply(1:nsf, function(k) (1:np) * nsf - nsf + k))] # one block of predictions per location parameter
             }
             if (!is.null(offset_pred)) {
               if (length(fixed_effect) != length(offset_pred)){
@@ -1130,6 +1163,7 @@ Booster <- R6::R6Class(
   private = list(
     handle = NULL,
     train_set = NULL,
+    num_features_train_loaded_from_file = NULL,
     name_train_set = "training",
     gp_model = NULL,
     has_gp_model = FALSE,

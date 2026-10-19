@@ -20,6 +20,12 @@ private:
     using Vector = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
 
 public:
+    // ChangedForGPBoost: the gradient at the returned point is not calculated by the line search
+    static constexpr bool calculates_gradient = false;
+
+private:
+
+public:
     ///
     /// Line search by backtracking.
     ///
@@ -68,6 +74,14 @@ public:
         int iter;
         for (iter = 0; iter < param.max_linesearch; iter++)
         {
+            // ChangedForGPBoost: with 'reset_modes_line_search_lbfgs', the mode finding of every candidate starts at the modes of 'xp'.
+            //  Otherwise, it starts at the modes of the previous candidate, and the objective function along the search direction then
+            //  depends on the candidates evaluated before. It does not approach its value at 'xp' for small steps if a previous candidate
+            //  has moved the modes to another local mode (e.g., for likelihoods that are not log-concave)
+            if (iter > 0 && f.ResetModesEveryTrialPoint())
+            {
+                f.ResetModesToLag1();
+            }
             // x_{k+1} = x_k + step * d_k
             x.noalias() = xp + step * drt;
             // Evaluate this candidate
@@ -85,6 +99,12 @@ public:
                 else
                 {
                     width = dec;
+                }
+                // ChangedForGPBoost: the mode finding of a candidate starts at the modes of the previous candidate. After NA / Inf, these
+                //  modes are often the cause, and the mode finding can then fail at every further candidate -> start it at the modes of 'xp'
+                if (!std::isfinite(fx))
+                {
+                    f.ResetModesToLag1();
                 }
             }
             else
@@ -130,7 +150,9 @@ public:
         if (iter >= param.max_linesearch)
         {
             x.noalias() = xp;
+            f.SetLineSearchHasNotBeenSuccessful(); // ChangedForGPBoost
             f.ResetProfiledOutVariablesToLag1();
+            f.ResetModesToLag1(); // ChangedForGPBoost: the modes need to be reset as well, otherwise they correspond to the last candidate point of the line search and not to 'xp'
             fx = fx_init;
             step = 0.;
             Log::REDebug("GPModel lbfgs: the line search routine reached the maximum number of iterations");

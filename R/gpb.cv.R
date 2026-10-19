@@ -189,7 +189,15 @@ gpb.cv <- function(params = list()
     begin_iteration <- predictor$current_iter() + 1L
   }
   end_iteration <- begin_iteration + params[["num_iterations"]] - 1L
-  
+
+  use_ar1_mf_fidelity_mean <- !is.null(gp_model) && gp_model$has_fidelity_specific_mean()
+  if (use_ar1_mf_fidelity_mean) {
+    data$add_ar1_mf_fidelity_feature(gp_model$get_fidelity_indicator())
+    if (!is.null(colnames) && !"AR1_MF_fidelity" %in% colnames) {
+      colnames <- c(colnames, "AR1_MF_fidelity")
+    }
+  }
+
   # Construct datasets, if needed
   data$update_params(params = params)
   if (data$.__enclos_env__$private$free_raw_data) {
@@ -476,6 +484,11 @@ gpb.cv <- function(params = list()
         if (!is.null(weights)) {
           weights <- weights[train_indexDT$indices]
         }
+
+        additional_likelihood_data <- gp_model$get_additional_likelihood_data()
+        if (!is.null(additional_likelihood_data)) {
+          additional_likelihood_data <- additional_likelihood_data[train_indexDT$indices, , drop = FALSE]
+        }
         
         gp_model_train <- gpb.GPModel$new(likelihood = gp_model$get_likelihood_name()
                                           , group_data = group_data
@@ -485,12 +498,15 @@ gpb.cv <- function(params = list()
                                           , gp_coords = gp_coords
                                           , gp_rand_coef_data = gp_rand_coef_data
                                           , cov_function = gp_model$.__enclos_env__$private$cov_function
+                                          , fidelity_specific_mean = gp_model$has_fidelity_specific_mean()
                                           , cov_fct_shape = gp_model$.__enclos_env__$private$cov_fct_shape
+                                          , cov_fct_order = gp_model$.__enclos_env__$private$cov_fct_order
                                           , gp_approx = gp_model$.__enclos_env__$private$gp_approx
                                           , num_parallel_threads = gp_model$.__enclos_env__$private$num_parallel_threads
                                           , GPU_use = gp_model$.__enclos_env__$private$GPU_use
                                           , matrix_inversion_method = gp_model$.__enclos_env__$private$matrix_inversion_method
                                           , weights = weights
+                                          , additional_likelihood_data = additional_likelihood_data
                                           , likelihood_learning_rate = gp_model$.__enclos_env__$private$likelihood_learning_rate
                                           , cov_fct_taper_range = gp_model$.__enclos_env__$private$cov_fct_taper_range
                                           , cov_fct_taper_shape = gp_model$.__enclos_env__$private$cov_fct_taper_shape

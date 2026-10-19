@@ -274,3 +274,187 @@ has_std_cyl_bessel_k <- function() {
   )
   return(has_bessel[1L] == 1L)
 }
+
+#' @title Check a number of threads that has been passed to one of the functions below
+#' @description A number of threads is an integer. Rounding a number silently or letting it become
+#'              \code{NA_integer_} because it does not fit into an \code{integer} would change which
+#'              number of threads is used, and a non-positive number has a meaning of its own
+#' @param num_threads The number of threads to check
+#' @param name Name of the calling function, for the error message
+#' @return The number of threads as an \code{integer} of length one
+#' @keywords internal
+#' @noRd
+gpb.check.num.threads <- function(num_threads, name) {
+  if (!is.numeric(num_threads) || length(num_threads) != 1L || !is.finite(num_threads) ||
+      num_threads != floor(num_threads) || abs(num_threads) > .Machine$integer.max) {
+    stop(name, ": num_threads needs to be an integer of length one")
+  }
+  return(as.integer(num_threads))
+}
+
+#' @title Get the number of threads used for parallelization
+#' @description Returns the number of threads that OMP currently uses for parallelization, i.e.
+#'              \code{omp_get_max_threads()}. Note that a team of threads can be smaller than this if
+#'              the OpenMP runtime limits it, in particular through the limit of the contention group
+#'              (\code{OMP_THREAD_LIMIT}).
+#'              Note that models for which the number of threads has been specified via the
+#'              \code{num_parallel_threads} argument of \code{\link{GPModel}} are not affected by
+#'              this number: such models set (and reset) the number of threads themselves whenever
+#'              they do calculations.
+#' @return An \code{integer} of length one: the current maximum number of threads of OpenMP, as
+#'         returned by \code{omp_get_max_threads()}
+#' @author Fabio Sigrist
+#' @examples
+#' num_threads <- gpb.get.num.threads()
+#' @rdname gpb.get.num.threads
+#' @export
+gpb.get.num.threads <- function() {
+  num_threads <- integer(1L)
+  .Call(
+    GPB_GetNumParallelThreads_R
+    , num_threads
+  )
+  return(num_threads[1L])
+}
+
+#' @title Set the number of threads used for parallelization
+#' @description Sets the number of threads used by OMP and Eigen in the entire R process.
+#'              Note that models for which the number of threads has been specified via the
+#'              \code{num_parallel_threads} argument of \code{\link{GPModel}} are not affected by
+#'              this: such models set (and reset) the number of threads themselves whenever they do
+#'              calculations.
+#' @param num_threads An \code{integer} specifying the number of threads. If \code{num_threads} is
+#'                    not positive, the default number of threads of the session is used, see
+#'                    \code{\link{gpb.get.default.num.threads}}. Initially, this is the automatically
+#'                    selected number of threads (normally based on the number of physical performance
+#'                    cores, subject to the settings of OpenMP and of the system, see the
+#'                    \code{num_parallel_threads} argument of \code{\link{GPModel}}), and it is the
+#'                    number of threads set by \code{\link{gpb.tune.num.threads}} or
+#'                    \code{\link{gpb.set.default.num.threads}} once one of them has been called
+#' @return This function does not return anything
+#' @author Fabio Sigrist
+#' @examples
+#' num_threads_old <- gpb.get.num.threads()
+#' gpb.set.num.threads(2L)
+#' gpb.set.num.threads(num_threads_old)
+#' @rdname gpb.set.num.threads
+#' @export
+gpb.set.num.threads <- function(num_threads) {
+  num_threads <- gpb.check.num.threads(num_threads, "gpb.set.num.threads")
+  .Call(
+    GPB_SetNumParallelThreads_R
+    , num_threads
+  )
+  return(invisible(NULL))
+}
+
+#' @title Get the number of threads used by models for which no number of threads is specified
+#' @description Returns the number of threads that a \code{\link{GPModel}} uses when no number of
+#'              threads has been specified for it via the \code{num_parallel_threads} argument. This
+#'              is the number of threads that has been set for the session, either by
+#'              \code{\link{gpb.tune.num.threads}} or by \code{\link{gpb.set.default.num.threads}},
+#'              and the automatically selected number of threads (normally based on the number of
+#'              physical performance cores, subject to the settings of OpenMP and of the system) if no
+#'              such number has been set.
+#'
+#'              This is not the number of threads that OMP currently uses, see
+#'              \code{\link{gpb.get.num.threads}}: a model for which no number of threads has been
+#'              specified sets the number of threads returned here (and resets it again) whenever it
+#'              does calculations, irrespective of the number of threads of the process.
+#' @return An \code{integer} of length one: the number of threads used by models for which no number
+#'         of threads is specified
+#' @author Fabio Sigrist
+#' @examples
+#' num_threads <- gpb.get.default.num.threads()
+#' @rdname gpb.get.default.num.threads
+#' @export
+gpb.get.default.num.threads <- function() {
+  num_threads <- integer(1L)
+  .Call(
+    GPB_GetDefaultNumParallelThreads_R
+    , num_threads
+  )
+  return(num_threads[1L])
+}
+
+#' @title Set the number of threads used by models for which no number of threads is specified
+#' @description Sets the number of threads that a \code{\link{GPModel}} uses when no number of
+#'              threads has been specified for it via the \code{num_parallel_threads} argument. Use
+#'              this to apply a number of threads that has been determined by
+#'              \code{\link{gpb.tune.num.threads}} in an earlier session, without running the
+#'              benchmark again.
+#'
+#'              In contrast to \code{\link{gpb.set.num.threads}}, this does not change the number of
+#'              threads that OMP currently uses: it only changes the number of threads that models use
+#'              when nothing else is requested. The number of threads specified for an individual model
+#'              always takes precedence.
+#' @param num_threads An \code{integer} specifying the number of threads. It is limited by the largest
+#'                    number of threads that GPBoost uses on its own: the number of threads that OMP
+#'                    uses when GPBoost determines its default (usually the number of logical
+#'                    processors, or the value of the environment variable \code{OMP_NUM_THREADS} if it
+#'                    is set), the limit of the contention group of OpenMP (\code{OMP_THREAD_LIMIT}),
+#'                    and, unless \code{OMP_NUM_THREADS} is set, a CPU bandwidth limit of a control
+#'                    group on Linux. A number of threads that is specified for an individual model via
+#'                    \code{num_parallel_threads} is not limited by this. If \code{num_threads} is not
+#'                    positive, the automatically selected number of threads is used again
+#' @return This function does not return anything
+#' @author Fabio Sigrist
+#' @examples
+#' num_threads_old <- gpb.get.default.num.threads()
+#' gpb.set.default.num.threads(2L)
+#' gpb.set.default.num.threads(num_threads_old)
+#' @rdname gpb.set.default.num.threads
+#' @export
+gpb.set.default.num.threads <- function(num_threads) {
+  num_threads <- gpb.check.num.threads(num_threads, "gpb.set.default.num.threads")
+  .Call(
+    GPB_SetDefaultNumParallelThreads_R
+    , num_threads
+  )
+  return(invisible(NULL))
+}
+
+#' @title Get the automatically selected number of threads
+#' @description Returns the number of threads that GPBoost selects on its own, normally based on the
+#'              number of physical performance cores and subject to the settings of OpenMP and of the
+#'              system, irrespective of a number of threads that has been set for the session
+#' @return An \code{integer} of length one
+#' @keywords internal
+#' @noRd
+gpb.get.auto.num.threads <- function() {
+  num_threads <- integer(1L)
+  .Call(
+    GPB_GetAutoNumParallelThreads_R
+    , num_threads
+  )
+  return(num_threads[1L])
+}
+
+#' @title Get the largest number of threads that GPBoost uses on its own
+#' @description Returns the number of threads that OMP uses when GPBoost determines its default, which
+#'              is the upper limit for the number of threads that can be set for the session
+#' @return An \code{integer} of length one
+#' @keywords internal
+#' @noRd
+gpb.get.max.num.threads <- function() {
+  num_threads <- integer(1L)
+  .Call(
+    GPB_GetMaxNumParallelThreads_R
+    , num_threads
+  )
+  return(num_threads[1L])
+}
+
+#' @title Do not write the message about the automatically selected number of threads
+#' @description The message is written once per process when a model uses the automatically selected
+#'              number of threads for the first time. Tests call this function so that the message does
+#'              not appear in the output of whichever test happens to run first
+#' @return This function does not return anything
+#' @keywords internal
+#' @noRd
+gpb.suppress.num.threads.message <- function() {
+  .Call(
+    GPB_SuppressAutoNumParallelThreadsMessage_R
+  )
+  return(invisible(NULL))
+}

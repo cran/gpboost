@@ -35,6 +35,16 @@ private:
     Scalar m_gnorm;                     // Norm of the gradient
     Vector m_gradp;                     // Old gradient
     Vector m_drt;                       // Moving direction
+    // ChangedForGPBoost: true if the last run of 'minimize()' has terminated since the convergence criterion
+    //	(norm of the gradient or change in the objective function) was satisfied, false if it has terminated
+    //	since the maximal number of iterations was reached. The two cannot be distinguished from the returned
+    //	number of iterations, which is the same in both cases when convergence occurs in the last iteration
+    bool m_criterion_satisfied = false;
+    // ChangedForGPBoost: true if the last run of 'minimize()' has satisfied its convergence criterion in the first
+    //	iteration with a step that the line search has shortened. The length of the first step is not based on
+    //	curvature information, and a strongly shortened first step can then satisfy the relative-change criterion
+    //	far away from the optimum
+    bool m_converged_first_iteration_after_backtracking = false;
 
     // Reset internal variables
     // n: dimension of the vector to be optimized
@@ -93,13 +103,20 @@ public:
 
         // Dimension of the vector
         const int n = (int)x.size();
-        reset(n, reuse_m_bfgs_from_previous_call);
+        // ChangedForGPBoost: the approximate Hessian of a previous call can only be reused if that call has
+        //	stored corrections and if it had the same number of parameters. The decision is made here, before
+        //	'reset()', which initializes the matrix of this solver whenever it is not reused
+        const bool really_reuse_m_bfgs_from_previous_call = reuse_m_bfgs_from_previous_call &&
+            (m_bfgs_given.get_m_ncorr() > 0) && (n == m_bfgs_given.get_dim_param());
+        reset(n, really_reuse_m_bfgs_from_previous_call);
+        m_converged_first_iteration_after_backtracking = false; // ChangedForGPBoost
 
         // The length of lag for objective function value to test convergence
         const int fpast = m_param.past;
 
         // Evaluate function and compute gradient
         fx = f(x, m_grad, true, true);
+        f.SetLag1Modes(); // ChangedForGPBoost: save the modes of the initial point, they are reset to these values if the first line search is not successful
 
         std::string init_coef_str = "";
         if (f.HasCovariates())
@@ -152,16 +169,12 @@ public:
         // Early exit if the initial x is already a minimizer
         if (m_gnorm <= m_param.epsilon || m_gnorm <= m_param.epsilon_rel * x.norm())
         {
+            m_criterion_satisfied = true; // ChangedForGPBoost
             return 1;
         }
 
         // Initial step size
         Scalar step;
-        bool really_reuse_m_bfgs_from_previous_call = reuse_m_bfgs_from_previous_call;
-        if (reuse_m_bfgs_from_previous_call)
-        {
-            really_reuse_m_bfgs_from_previous_call = reuse_m_bfgs_from_previous_call && (m_bfgs_given.get_m_ncorr() > 0) && ((int) x.size() == m_bfgs_given.get_dim_param());
-        }
         if (really_reuse_m_bfgs_from_previous_call)
         {
             CHECK(m_bfgs_given.get_m_ncorr() > 0);
@@ -198,9 +211,11 @@ public:
             {
                 step = max_lr;
             }
+            const Scalar step_before_line_search = step; // ChangedForGPBoost
             // Line search to update x, fx and gradient
             LineSearch<Scalar>::LineSearch(f, m_param, m_xp, m_drt, step_max, step, fx, m_grad, dg, x);
-            f(x, m_grad, false, true); // calculate new gradient
+            if (!LineSearch<Scalar>::calculates_gradient) // ChangedForGPBoost
+                f(x, m_grad, false, true); // calculate new gradient
             m_gnorm = m_grad.norm(); // new gradient norm for convergence tests
 
             // convergence tests
@@ -219,6 +234,10 @@ public:
                     has_converged = true;
                 }
             }
+            // ChangedForGPBoost: the convergence criterion is recorded before the test on the number of
+            //	iterations, so that a run which satisfies the criterion in its last allowed iteration is
+            //	not mistaken for one that has exhausted its iteration budget
+            bool criterion_satisfied = has_converged;
             // Maximum number of iterations
             if (m_param.max_iterations != 0 && k >= m_param.max_iterations)
             {
@@ -230,19 +249,23 @@ public:
             // Potentially redetermine nearest neighbors for Vecchia approximation
             f.SetNumIter(k - 1);
             f.SetLag1ProfiledOutVariables();
+            f.SetLag1Modes(); // ChangedForGPBoost: the modes of an accepted iterate, they are reset to these values if the next line search is not successful
             if (f.LearnCovarianceParameters() && f.ShouldRedetermineNearestNeighborsVecchiaInducingPointsFITC(has_converged))
             {
                 f.RedetermineNearestNeighborsVecchiaInducingPointsFITC(has_converged); // called only in certain iterations if gp_approx == "vecchia" and neighbors are selected based on correlations and not distances
                 m_fx[k % fpast] = f(m_xp, m_gradp, true, true);       // recalculate lag-1 objective and gradient
                 fx = f(x, m_grad, true, true); // recalculate new objective and gradient
                 // check convergence again
-                if (has_converged && !has_converged_maxit)
+                // ChangedForGPBoost: the criterion is also re-evaluated when the maximal number of iterations has
+                //	been reached. The optimizer stops in that case either way, but whether it has converged is decided
+                //	by the state after the redetermination, which is the state that is returned
+                if (has_converged)
                 {
-                    has_converged = false;
+                    criterion_satisfied = false;
                     m_gnorm = m_grad.norm();  // new gradient norm
                     if (m_gnorm <= m_param.epsilon || m_gnorm <= m_param.epsilon_rel * x.norm())
                     {
-                        has_converged = true;
+                        criterion_satisfied = true;
                     }
                     if (fpast > 0)
                     {
@@ -253,14 +276,22 @@ public:
                         const Scalar fxd = m_fx[k % fpast];
                         if (k >= fpast && (fxd - fx) <= m_param.delta * std::max(abs(fxd), Scalar(1)))
                         {
-                            has_converged = true;
+                            criterion_satisfied = true;
                         }
+                    }
+                    if (!has_converged_maxit)
+                    {
+                        has_converged = criterion_satisfied; // the stopping rule is unchanged: with 'has_converged_maxit' the optimizer stops regardless
                     }
                 }//end check convergence again
             }//end potentially redetermine nearest neighbors for Vecchia approximation or/and inducing points
 
             if (has_converged)
             {
+                m_criterion_satisfied = criterion_satisfied; // ChangedForGPBoost
+                // ChangedForGPBoost: a step of zero means that the line search has not been successful, this is reported separately
+                m_converged_first_iteration_after_backtracking = criterion_satisfied && k == 1 &&
+                    step > Scalar(0) && step < step_before_line_search;
                 m_bfgs_given = m_bfgs;
                 return k;
             }
@@ -313,6 +344,18 @@ public:
     /// Returning the Euclidean norm of the final gradient.
     ///
     Scalar final_grad_norm() const { return m_gnorm; }
+
+    ///
+    /// ChangedForGPBoost: Returning whether the last run of `minimize()` has terminated since the
+    /// convergence criterion was satisfied and not since the maximal number of iterations was reached.
+    ///
+    bool CriterionSatisfied() const { return m_criterion_satisfied; }
+
+    ///
+    /// ChangedForGPBoost: Returning whether the last run of `minimize()` has satisfied its convergence criterion
+    /// in the first iteration with a step that the line search has shortened.
+    ///
+    bool ConvergedFirstIterationAfterBacktracking() const { return m_converged_first_iteration_after_backtracking; }
 };
 
 }  // namespace LBFGSpp

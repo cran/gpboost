@@ -1,17 +1,6 @@
 if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
   
   context("GPModel_grouped_random_effects")
-
-# Non-convex / stochastic optimization: a different compiler or standard library (e.g. clang + libc++ or
-# gcc + libstdc++ on Linux, used by the sanitizer containers of R-hub and CRAN) can converge to a different
-# stationary point with practically the same likelihood. Only require the tight tolerances on the reference
-# platform on which the expected values were calculated. Set GPBOOST_STRICT_TOLERANCES=true to always use them
-USE_STRICT_TOLERANCES <- .Platform$OS.type == "windows" ||
-  Sys.getenv("GPBOOST_STRICT_TOLERANCES") == "true"
-relax_tolerance <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(2 * tol, 0.5)
-# Separate helper for ABSOLUTE differences of negative log-likelihoods: these are on the scale of the
-# log-likelihood itself (typically 100-1000 here), so a larger absolute tolerance is still a small relative one
-relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 * tol, 3)
   
   TOLERANCE_STRICT <- 1E-6
   TOLERANCE_MEDIUM <- 1E-3
@@ -75,7 +64,7 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     weights <- rep(1.000000001, length(y))
     gp_model_w <- GPModel(group_data = group, weights=weights)
     fit(gp_model_w, y = y, params = list(optimizer_cov = "fisher_scoring",
-                                       convergence_criterion = "relative_change_in_parameters", init_coef_aux_pars_from_iid_model = FALSE))
+                                         convergence_criterion = "relative_change_in_parameters", init_coef_aux_pars_from_iid_model = FALSE))
     expect_lt(sum(abs(as.vector(gp_model_w$get_cov_pars(std_err = TRUE))-cov_pars)),TOLERANCE_STRICT)
     expect_equal(gp_model_w$get_num_optim_iter(), 5)
     # Can switch between likelihoods
@@ -83,7 +72,7 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     gp_model$set_likelihood("gamma")
     gp_model$set_likelihood("gaussian")
     fit(gp_model, y = y, params = list( optimizer_cov = "fisher_scoring",
-                                       convergence_criterion = "relative_change_in_parameters", init_coef_aux_pars_from_iid_model = FALSE))
+                                        convergence_criterion = "relative_change_in_parameters", init_coef_aux_pars_from_iid_model = FALSE))
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars(std_err = TRUE))-cov_pars)),TOLERANCE_STRICT)
     # Using gradient descent instead of Fisher scoring
     gp_model <- fitGPModel(group_data = group, y = y,
@@ -126,9 +115,12 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     params_loc <- list(optimizer_cov = "lbfgs", 
                        estimate_cov_par_index = c(1,0), init_cov_pars=c(0.23, 0.45), init_coef_aux_pars_from_iid_model = FALSE)
     gp_model_fix <- fitGPModel(group_data = group, y = y, params = params_loc)
-    nll_opt_fix <- 1229.514733
-    cov_pars_fix <- c(0.50600551128, 0.02385332856, 0.45000000000, 0.07083578226)
-    expect_lt(sum(abs(as.vector(gp_model_fix$get_cov_pars(std_err = TRUE))-cov_pars_fix)),TOLERANCE_STRICT)
+    nll_opt_fix <- 1258.861408
+    # Parameters that are not estimated have no standard errors (NaN)
+    cov_pars_fix <- c(0.50213129528, 0.023657455944, 0.45000000000, NaN)
+    cov_pars_est <- as.vector(gp_model_fix$get_cov_pars(std_err = TRUE))
+    expect_equal(is.nan(cov_pars_est), is.nan(cov_pars_fix))
+    expect_lt(sum(abs(cov_pars_est-cov_pars_fix), na.rm = TRUE),TOLERANCE_STRICT)
     expect_lt(sum(abs(gp_model_fix$get_cov_pars(std_err = TRUE)[1,2]-params_loc$init_cov_pars[2])),TOLERANCE_STRICT)
     expect_lt(abs(gp_model_fix$get_current_neg_log_likelihood()-nll_opt_fix), TOLERANCE_STRICT)
     
@@ -253,24 +245,67 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     expect_lt(sum(abs(pred$mu-pred_no_offset$mu)),TOLERANCE_STRICT)
     expect_lt(sum(abs(as.vector(pred$cov)-as.vector(pred_no_offset$cov))),TOLERANCE_STRICT)
   })
+  
+  test_that("Predictive covariance matrices of a single grouped random effect with repeated groups and weights ", {
+
+    # Prediction points in the same group share the random effect but not the error term, and the weights enter the
+    #   posterior variances of the random effects. Latent and response covariance matrices for groups of the training
+    #   data, repeated groups and a new group are compared with the exact values
+    group_sg <- c(1, 1, 1, 2, 2, 2, 3, 3)
+    weights_sg <- c(0.5, 0.5, 0.5, 1.5, 1.5, 1.5, 1, 1)
+    y_sg <- qnorm(sim_rand_unif(n = length(group_sg), init_c = 0.83))
+    cov_pars_sg <- c(0.7, 1.3)
+    group_pred_sg <- c(1, 1, 2, 4, 4, 3)
+    Z_sg <- model.matrix(~ factor(group_sg, levels = 1:4) - 1)
+    Z_pred_sg <- model.matrix(~ factor(group_pred_sg, levels = 1:4) - 1)
+    for (weighted in c(FALSE, TRUE)) {
+      w_sg <- if (weighted) weights_sg else rep(1, length(group_sg))
+      Psi_sg <- cov_pars_sg[2] * tcrossprod(Z_sg) + cov_pars_sg[1] * diag(1 / w_sg)
+      cross_cov_sg <- cov_pars_sg[2] * Z_pred_sg %*% t(Z_sg)
+      mu_exact_sg <- as.vector(cross_cov_sg %*% solve(Psi_sg, y_sg))
+      cov_exact_sg <- cov_pars_sg[2] * tcrossprod(Z_pred_sg) - cross_cov_sg %*% solve(Psi_sg, t(cross_cov_sg))
+      if (weighted) {
+        gp_model_sg <- GPModel(group_data = group_sg, weights = weights_sg)
+      } else {
+        gp_model_sg <- GPModel(group_data = group_sg)
+      }
+      for (predict_response in c(FALSE, TRUE)) {
+        label_sg <- paste0("(weighted = ", weighted, ", predict_response = ", predict_response, ")")
+        cov_exact_response_sg <- cov_exact_sg
+        if (predict_response) {
+          cov_exact_response_sg <- cov_exact_sg + cov_pars_sg[1] * diag(length(group_pred_sg))
+        }
+        pred_sg <- predict(gp_model_sg, y = y_sg, group_data_pred = group_pred_sg, cov_pars = cov_pars_sg,
+                           predict_cov_mat = TRUE, predict_response = predict_response)
+        expect_lt(max(abs(pred_sg$mu - mu_exact_sg)), TOLERANCE_STRICT, label = paste("predictive mean", label_sg))
+        expect_lt(max(abs(as.vector(pred_sg$cov) - as.vector(cov_exact_response_sg))), TOLERANCE_STRICT,
+                  label = paste("predictive covariance matrix", label_sg))
+        pred_var_sg <- predict(gp_model_sg, y = y_sg, group_data_pred = group_pred_sg, cov_pars = cov_pars_sg,
+                               predict_var = TRUE, predict_response = predict_response)
+        expect_lt(max(abs(pred_var_sg$var - diag(cov_exact_response_sg))), TOLERANCE_STRICT,
+                  label = paste("predictive variances", label_sg))
+      }
+    }
+
+  })
 
   test_that("Gaussian sample weights work for a single grouped random effect ", {
-
+    
     group_w <- c(1, 1, 1, 2, 2, 3, 3, 3)
     y_w <- c(0.25, -0.40, 1.20, 0.75, -0.15, 1.45, 0.05, -0.70)
     weights_w <- c(1.0, 2.0, 3.0, 1.5, 0.7, 2.2, 1.3, 0.8)
     cov_pars_w <- c(0.6, 1.4)
-
+    
     capture.output( gp_model_w <- GPModel(group_data = group_w, weights = weights_w) , file='NUL')
     nll_w <- gp_model_w$neg_log_likelihood(cov_pars = cov_pars_w, y = y_w)
-
+    
     Z_w <- model.matrix(rep(1, length(group_w)) ~ factor(group_w) - 1)
     Sigma_w <- cov_pars_w[2] * tcrossprod(Z_w) + cov_pars_w[1] * diag(1 / weights_w)
     chol_Sigma_w <- chol(Sigma_w)
     nll_w_manual <- 0.5 * drop(crossprod(y_w, solve(Sigma_w, y_w))) +
       sum(log(diag(chol_Sigma_w))) + length(y_w) / 2 * log(2 * pi)
     expect_lt(abs(nll_w - nll_w_manual), TOLERANCE_STRICT)
-
+    
     fixed_effects_w <- c(0.10, -0.20, 0.35, 0.50, -0.15, 0.25, 0.05, -0.30)
     nll_w_offset <- gp_model_w$neg_log_likelihood(cov_pars = cov_pars_w, y = y_w,
                                                   fixed_effects = fixed_effects_w)
@@ -278,9 +313,9 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     nll_w_offset_manual <- 0.5 * drop(crossprod(resid_w, solve(Sigma_w, resid_w))) +
       sum(log(diag(chol_Sigma_w))) + length(y_w) / 2 * log(2 * pi)
     expect_lt(abs(nll_w_offset - nll_w_offset_manual), TOLERANCE_STRICT)
-
+    
     capture.output( gp_model_w_fit <- fitGPModel(group_data = group_w, y = y_w, weights = weights_w,
-                                 params = list(optimizer_cov = "lbfgs", init_coef_aux_pars_from_iid_model = FALSE)) , file='NUL')
+                                                 params = list(optimizer_cov = "lbfgs", init_coef_aux_pars_from_iid_model = FALSE)) , file='NUL')
     cov_pars_fit <- as.vector(gp_model_w_fit$get_cov_pars())
     cov_pars <- c(1.28736320, 0.02259642)
     expect_lt(sum(abs(cov_pars_fit-cov_pars)),TOLERANCE_STRICT)
@@ -289,7 +324,7 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     nll_fit_manual <- 0.5 * drop(crossprod(y_w, solve(Sigma_fit, y_w))) +
       sum(log(diag(chol_Sigma_fit))) + length(y_w) / 2 * log(2 * pi)
     expect_lt(abs(gp_model_w_fit$get_current_neg_log_likelihood() - nll_fit_manual), TOLERANCE_STRICT)
-
+    
     X_w <- cbind(1, c(-1.0, -0.5, 0.2, 0.7, 1.1, -0.2, 0.4, 1.3))
     capture.output( gp_model_w_fit_X <- fitGPModel(group_data = group_w, y = y_w, X = X_w,
                                                    weights = weights_w,
@@ -312,7 +347,7 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     nll_fit_X_manual <- 0.5 * drop(crossprod(resid_fit_X, solve(Sigma_fit_X, resid_fit_X))) +
       sum(log(diag(chol_Sigma_fit_X))) + length(y_w) / 2 * log(2 * pi)
     expect_lt(abs(gp_model_w_fit_X$get_current_neg_log_likelihood() - nll_fit_X_manual), TOLERANCE_STRICT)
-
+    
     group_pred_w <- c(1, 2, 4)
     X_pred_w <- cbind(1, c(-0.25, 0.4, 0.9))
     pred_w <- predict(gp_model_w_fit_X, group_data_pred = group_pred_w, X_pred = X_pred_w,
@@ -329,30 +364,30 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
       cross_cov_w %*% solve(Sigma_fit_X, t(cross_cov_w))
     expect_lt(sum(abs(pred_w$mu - pred_mean_manual_w)), TOLERANCE_STRICT)
     expect_lt(sum(abs(as.vector(pred_w$cov) - as.vector(pred_cov_manual_w))), TOLERANCE_STRICT)
-
+    
     pred_var_w <- predict(gp_model_w_fit_X, group_data_pred = group_pred_w, X_pred = X_pred_w,
                           predict_var = TRUE)
     expect_lt(sum(abs(pred_var_w$mu - pred_mean_manual_w)), TOLERANCE_STRICT)
     expect_lt(sum(abs(as.vector(pred_var_w$var) - diag(pred_cov_manual_w))), TOLERANCE_STRICT)
     expect_error(predict(gp_model_w_fit_X, group_data_pred = group_pred_w))
-
+    
     expect_error(GPModel(group_data = group_w, weights = c(weights_w[-1], 0)),
                  "strictly positive")
   })
-
+  
   test_that("Gaussian sample weights work for multilevel grouped random effects ", {
-
+    
     group1_w <- c(1, 1, 1, 2, 2, 3, 3, 3)
     group2_w <- c(1, 2, 1, 2, 3, 1, 3, 2)
     group_data_w <- cbind(group1_w, group2_w)
     y_w <- c(0.25, -0.40, 1.20, 0.75, -0.15, 1.45, 0.05, -0.70)
     weights_w <- c(1.0, 2.0, 3.0, 1.5, 0.7, 2.2, 1.3, 0.8)
-    weights_w <- rep(1, length(y_w))
     cov_pars_w <- c(0.6, 1.4, 0.35)
-
-    capture.output( gp_model_w <- GPModel(group_data = group_data_w, matrix_inversion_method = "cholesky") , file='NUL')
+    
+    capture.output( gp_model_w <- GPModel(group_data = group_data_w, weights = weights_w,
+                                          matrix_inversion_method = "cholesky") , file='NUL')
     nll_w <- gp_model_w$neg_log_likelihood(cov_pars = cov_pars_w, y = y_w)
-
+    
     Z1_w <- model.matrix(rep(1, length(group1_w)) ~ factor(group1_w) - 1)
     Z2_w <- model.matrix(rep(1, length(group2_w)) ~ factor(group2_w) - 1)
     Sigma_w <- cov_pars_w[2] * tcrossprod(Z1_w) +
@@ -360,7 +395,8 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     chol_Sigma_w <- chol(Sigma_w)
     nll_w_manual <- 0.5 * drop(crossprod(y_w, solve(Sigma_w, y_w))) +
       sum(log(diag(chol_Sigma_w))) + length(y_w) / 2 * log(2 * pi)
-
+    expect_lt(abs(nll_w - nll_w_manual), TOLERANCE_STRICT)
+    
     group_pred_w <- cbind(c(1, 2, 4), c(1, 3, 2))
     pred_w <- predict(gp_model_w, y = y_w, group_data_pred = group_pred_w,
                       cov_pars = cov_pars_w, predict_cov_mat = TRUE)
@@ -380,6 +416,15 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
       cross_cov_w %*% solve(Sigma_w, t(cross_cov_w))
     expect_lt(sum(abs(pred_w$mu - pred_mean_manual_w)), TOLERANCE_STRICT)
     expect_lt(sum(abs(as.vector(pred_w$cov) - as.vector(pred_cov_manual_w))), TOLERANCE_STRICT)
+    # The iterative methods simulate the predictive covariance matrix with random vectors whose covariance matrix
+    #   is Sigma^-1 + Z^T W Z. The simulation error of the entries is about 0.006 here
+    capture.output( gp_model_w_it_pred <- GPModel(group_data = group_data_w, weights = weights_w,
+                                                  matrix_inversion_method = "iterative") , file='NUL')
+    gp_model_w_it_pred$set_prediction_data(nsim_var_pred = 20000)
+    pred_w_it <- predict(gp_model_w_it_pred, y = y_w, group_data_pred = group_pred_w,
+                         cov_pars = cov_pars_w, predict_cov_mat = TRUE)
+    expect_lt(max(abs(pred_w_it$mu - pred_mean_manual_w)), TOLERANCE_LOOSE)
+    expect_lt(max(abs(as.vector(pred_w_it$cov) - as.vector(pred_cov_manual_w))), 0.02)
 
     capture.output( gp_model_w_it <- GPModel(group_data = group_data_w, weights = weights_w,
                                              matrix_inversion_method = "iterative") , file='NUL')
@@ -388,8 +433,11 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
                                                  cg_max_num_it = 1000,
                                                  cg_max_num_it_tridiag = 1000, init_coef_aux_pars_from_iid_model = FALSE))
     nll_w_it <- gp_model_w_it$neg_log_likelihood(cov_pars = cov_pars_w, y = y_w)
-    expect_lt(abs(nll_w_it - nll_w_manual), 0.005)
-
+    # The iterative method estimates the log-determinant stochastically. The tolerances below are
+    #   deliberately not relaxed on other platforms: they have to stay well below the term that this
+    #   checks for, the log-determinant of the weights, which is -0.5 * sum(log(weights_w)) = -1.33 here
+    expect_lt(abs(nll_w_it - nll_w_manual), 0.05)
+    
     capture.output( gp_model_w_fit_it <- fitGPModel(group_data = group_data_w, y = y_w,
                                                     weights = weights_w,
                                                     matrix_inversion_method = "iterative",
@@ -399,7 +447,26 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
                                                                   cg_delta_conv = 1E-8,
                                                                   cg_max_num_it = 1000,
                                                                   cg_max_num_it_tridiag = 1000, init_coef_aux_pars_from_iid_model = FALSE)) , file='NUL')
-    expect_lt(abs(gp_model_w_fit_it$get_current_neg_log_likelihood() - 9.409914), relax_tolerance_nll(0.001))
+    # The parameters after one iteration differ between the two solvers, since the Fisher information of
+    #   the iterative method is stochastic, so the fit is compared with the dense calculation at its own
+    #   parameters instead of with the fit of the Cholesky solver
+    cov_pars_fit_w_it <- as.vector(gp_model_w_fit_it$get_cov_pars())
+    Sigma_fit_w_it <- cov_pars_fit_w_it[2] * tcrossprod(Z1_w) +
+      cov_pars_fit_w_it[3] * tcrossprod(Z2_w) + cov_pars_fit_w_it[1] * diag(1 / weights_w)
+    nll_fit_w_it_manual <- 0.5 * drop(crossprod(y_w, solve(Sigma_fit_w_it, y_w))) +
+      sum(log(diag(chol(Sigma_fit_w_it)))) + length(y_w) / 2 * log(2 * pi)
+    expect_lt(abs(gp_model_w_fit_it$get_current_neg_log_likelihood() - nll_fit_w_it_manual), 0.05)
+    capture.output( gp_model_w_fit_chol <- fitGPModel(group_data = group_data_w, y = y_w,
+                                                      weights = weights_w,
+                                                      matrix_inversion_method = "cholesky",
+                                                      params = list(optimizer_cov = "fisher_scoring",
+                                                                    maxit = 1, init_coef_aux_pars_from_iid_model = FALSE)) , file='NUL')
+    cov_pars_fit_w <- as.vector(gp_model_w_fit_chol$get_cov_pars())
+    Sigma_fit_w <- cov_pars_fit_w[2] * tcrossprod(Z1_w) +
+      cov_pars_fit_w[3] * tcrossprod(Z2_w) + cov_pars_fit_w[1] * diag(1 / weights_w)
+    nll_fit_w_manual <- 0.5 * drop(crossprod(y_w, solve(Sigma_fit_w, y_w))) +
+      sum(log(diag(chol(Sigma_fit_w)))) + length(y_w) / 2 * log(2 * pi)
+    expect_lt(abs(gp_model_w_fit_chol$get_current_neg_log_likelihood() - nll_fit_w_manual), TOLERANCE_STRICT)
   })
   
   test_that("linear mixed effects model with grouped random effects ", {
@@ -490,7 +557,7 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars(std_err = TRUE))-cov_pars)),TOLERANCE_LOOSE)
     expect_lt(sum(abs(as.vector(gp_model$get_coef(std_err = TRUE))-coef)),TOLERANCE_LOOSE)
     expect_lt(abs(gp_model$get_current_neg_log_likelihood() - nll), TOLERANCE_LOOSE)
-
+    
     # Initializing coefs from iid model
     gp_model <- fitGPModel(group_data = group, y = y, X = X,
                            params = list(optimizer_cov = "lbfgs", optimizer_coef = "lbfgs",
@@ -585,6 +652,95 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     
   })
   
+  test_that("Repeated predictions with the same model give the same result ", {
+
+    # The predictive covariance matrix of several grouped random effects is estimated stochastically when
+    # the iterative methods are used. The random number generator has to be seeded at every prediction:
+    # otherwise a prediction that is repeated with unchanged arguments returns a different covariance matrix
+    y_rp <- Z1 %*% b1 + Z2 %*% b2 + xi
+    cov_pars_rp <- c(0.5, 1.2, 1.1)
+    group_test_rp <- cbind(c(1, 2, 9999), c(1, 3, 9999))
+    for (inv_method_rp in c("cholesky", "iterative")) {
+      capture.output( gp_model_rp <- GPModel(group_data = cbind(group, group2),
+                                             matrix_inversion_method = inv_method_rp), file = 'NUL')
+      gp_model_rp$set_optim_params(params = list(num_rand_vec_trace = 100, seed_rand_vec_trace = 1))
+      capture.output( pred_rp_1 <- predict(gp_model_rp, y = y_rp, group_data_pred = group_test_rp,
+                                           cov_pars = cov_pars_rp, predict_cov_mat = TRUE,
+                                           predict_response = FALSE), file = 'NUL')
+      capture.output( pred_rp_2 <- predict(gp_model_rp, y = y_rp, group_data_pred = group_test_rp,
+                                           cov_pars = cov_pars_rp, predict_cov_mat = TRUE,
+                                           predict_response = FALSE), file = 'NUL')
+      expect_lt(sum(abs(pred_rp_1$mu - pred_rp_2$mu)), TOLERANCE_STRICT, label = paste0("predictive mean (", inv_method_rp, ")"))
+      expect_lt(sum(abs(as.vector(pred_rp_1$cov) - as.vector(pred_rp_2$cov))), TOLERANCE_STRICT,
+                label = paste0("predictive covariance (", inv_method_rp, ")"))
+    }
+
+  })
+
+  test_that("Predictive variances of crossed random effects with iterative methods ", {
+
+    # The variance reduction of the simulated predictive variances uses the diagonal of Z_p P^(-1) Z_p^T for the
+    #   preconditioner P, which is calculated differently for fewer and for more prediction points than random effects
+    #   (here 150). The differences to the Cholesky calculation are simulation errors, their measured maximum over
+    #   1 to 16 threads is 1.0e-2 (mean 2.6e-3) for 20 and 5.2e-2 (mean 9.3e-3) for 300 prediction points
+    y_pv <- Z1 %*% b1 + Z2 %*% b2 + xi
+    cov_pars_pv <- c(0.5, 1.2, 1.1)
+    group_data_pred_pv <- cbind(floor(sim_rand_unif(n = 300, init_c = 0.31) * (m + 5)) + 1,
+                                floor(sim_rand_unif(n = 300, init_c = 0.62) * (n_gr + 5)) + 1)
+    capture.output( gp_model_pv <- GPModel(group_data = cbind(group, group2), matrix_inversion_method = "cholesky"), file = 'NUL')
+    capture.output( pred_pv <- predict(gp_model_pv, y = y_pv, group_data_pred = group_data_pred_pv, cov_pars = cov_pars_pv,
+                                       predict_var = TRUE, predict_response = FALSE), file = 'NUL')
+    for (cg_preconditioner_type in c("ssor", "zic")) {
+      capture.output( gp_model_pv_it <- GPModel(group_data = cbind(group, group2), matrix_inversion_method = "iterative"), file = 'NUL')
+      gp_model_pv_it$set_optim_params(params = list(cg_preconditioner_type = cg_preconditioner_type))
+      for (n_p in c(20, 300)) {
+        capture.output( pred_pv_it <- predict(gp_model_pv_it, y = y_pv, group_data_pred = group_data_pred_pv[1:n_p, ],
+                                              cov_pars = cov_pars_pv, predict_var = TRUE, predict_response = FALSE), file = 'NUL')
+        label_pv <- paste0("(", cg_preconditioner_type, ", ", n_p, " prediction points)")
+        expect_lt(max(abs(pred_pv_it$mu - pred_pv$mu[1:n_p])), TOLERANCE_MEDIUM, label = paste("predictive mean", label_pv))
+        expect_lt(max(abs(pred_pv_it$var - pred_pv$var[1:n_p])), 0.15, label = paste("max. error predictive variance", label_pv))
+        expect_lt(mean(abs(pred_pv_it$var - pred_pv$var[1:n_p])), 0.03, label = paste("mean error predictive variance", label_pv))
+      }
+    }
+
+  })
+
+  test_that("Predictive variances of crossed random effects whose levels form disconnected blocks ", {
+
+    # Every observation combines two levels of the same block of three levels per random effect, so the posterior precision
+    #   matrix is block-diagonal up to a permutation. Prediction points that combine levels of two different blocks need
+    #   entries of its inverse that are zero and are not on the sparsity pattern of the Cholesky factor, and the levels 1
+    #   and 3 of a block are never observed together (non-zero entries that are not on the sparsity pattern either)
+    n_blocks_db <- 40
+    block_db <- rep(1:n_blocks_db, each = 5)
+    group_db <- cbind(3 * (block_db - 1) + rep(c(1, 1, 2, 2, 3), n_blocks_db),
+                      3 * (block_db - 1) + rep(c(1, 2, 2, 3, 3), n_blocks_db))
+    n_db <- nrow(group_db)
+    cov_pars_db <- c(0.4, 1.3, 0.8)
+    y_db <- qnorm(sim_rand_unif(n = n_db, init_c = 0.27))
+    first_level_db <- 3 * (1:n_blocks_db - 1) + 1
+    group_pred_db <- cbind(c(first_level_db, first_level_db, first_level_db[-n_blocks_db]),
+                           c(first_level_db, first_level_db + 2, first_level_db[-1]))
+    # Exact values
+    design_matrix_db <- function(group_data) {
+      cbind(model.matrix(~ factor(group_data[, 1], levels = 1:(3 * n_blocks_db)) - 1),
+            model.matrix(~ factor(group_data[, 2], levels = 1:(3 * n_blocks_db)) - 1))
+    }
+    Z_db <- design_matrix_db(group_db)
+    Ztilde_db <- design_matrix_db(group_pred_db)
+    Sigma_db <- diag(rep(cov_pars_db[2:3], each = 3 * n_blocks_db))
+    cross_cov_db <- Ztilde_db %*% Sigma_db %*% t(Z_db)
+    Psi_inv_db <- solve(Z_db %*% Sigma_db %*% t(Z_db) + cov_pars_db[1] * diag(n_db))
+    mu_exact_db <- as.vector(cross_cov_db %*% Psi_inv_db %*% y_db)
+    var_exact_db <- diag(Ztilde_db %*% Sigma_db %*% t(Ztilde_db)) - rowSums((cross_cov_db %*% Psi_inv_db) * cross_cov_db)
+    gp_model_db <- GPModel(group_data = group_db, matrix_inversion_method = "cholesky")
+    pred_db <- predict(gp_model_db, y = y_db, group_data_pred = group_pred_db, cov_pars = cov_pars_db,
+                       predict_var = TRUE, predict_response = FALSE)
+    expect_lt(max(abs(pred_db$mu - mu_exact_db)), TOLERANCE_STRICT)
+    expect_lt(max(abs(pred_db$var - var_exact_db)), TOLERANCE_STRICT)
+
+  })
+
   test_that("Multiple grouped random effects ", {
     
     vec_chol_or_iterative <- c("cholesky","iterative")
@@ -618,26 +774,34 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
         # with weights
         weights <- rep(1.000000001, length(y))
         gp_model_w <- fitGPModel(group_data = cbind(group,group2), y = y, matrix_inversion_method = inv_method,
-                               weights = weights,
-                               params = list(optimizer_cov = "fisher_scoring",  
-                                             cg_preconditioner_type=cg_preconditioner_type, num_rand_vec_trace=100, init_coef_aux_pars_from_iid_model = FALSE))
+                                 weights = weights,
+                                 params = list(optimizer_cov = "fisher_scoring",  
+                                               cg_preconditioner_type=cg_preconditioner_type, num_rand_vec_trace=100, init_coef_aux_pars_from_iid_model = FALSE))
         expect_lt(sum(abs(as.vector(gp_model_w$get_cov_pars(std_err = TRUE))-expected_values)),tolerance_loc_1)
         
         # fix some covariance parameters
         params_loc <- list(optimizer_cov = "lbfgs",  
                            cg_preconditioner_type=cg_preconditioner_type, num_rand_vec_trace=100, 
                            init_cov_pars=c(0.23, 0.1, 0.5), estimate_cov_par_index = c(1,1,0), init_coef_aux_pars_from_iid_model = FALSE)
-        gp_model_fix <- fitGPModel(group_data = cbind(group,group2), y = y, matrix_inversion_method = inv_method,
-                                   params = params_loc)
-        nll_opt_fix <- 1328.897384
-        cov_pars_fix <- c(0.52972794645, 0.02562029714, 1.21929637610, 0.18314784671, 0.50000000000, 0.10972005168)
-        expect_lt(sum(abs(as.vector(gp_model_fix$get_cov_pars(std_err = TRUE))-cov_pars_fix)),tolerance_loc_1)
+        invisible(capture.output( gp_model_fix <- fitGPModel(group_data = cbind(group,group2), y = y, matrix_inversion_method = inv_method,
+                                                             params = params_loc) ))
+        nll_opt_fix <- 1328.170316
+        # Parameters that are not estimated have no standard errors (NaN)
+        cov_pars_fix <- c(0.49934832472, 0.024149585881, 1.22232898360, 0.18311101005, 0.50000000000, NaN)
+        # 'cov_pars_fix' are the values of the Cholesky calculation. The stochastic trace estimates of the
+        # iterative methods move the optimum of this constrained fit by slightly more than 'tolerance_loc_1'
+        tolerance_loc_fix <- if (inv_method == "iterative") 2.5E-2 else tolerance_loc_1
+        cov_pars_est <- as.vector(gp_model_fix$get_cov_pars(std_err = TRUE))
+        expect_equal(is.nan(cov_pars_est), is.nan(cov_pars_fix))
+        expect_lt(sum(abs(cov_pars_est-cov_pars_fix), na.rm = TRUE),tolerance_loc_fix)
         expect_lt(sum(abs(gp_model_fix$get_cov_pars(std_err = TRUE)[1,3]-params_loc$init_cov_pars[3])),TOLERANCE_STRICT)
         expect_lt(abs(gp_model_fix$get_current_neg_log_likelihood()-nll_opt_fix), tolerance_loc_4)
         # with weights
-        gp_model_fix_w <- fitGPModel(group_data = cbind(group,group2), y = y, matrix_inversion_method = inv_method,
-                                   weights = weights, params = params_loc)
-        expect_lt(sum(abs(as.vector(gp_model_fix_w$get_cov_pars(std_err = TRUE))-cov_pars_fix)),tolerance_loc_1)
+        invisible(capture.output( gp_model_fix_w <- fitGPModel(group_data = cbind(group,group2), y = y, matrix_inversion_method = inv_method,
+                                                               weights = weights, params = params_loc) ))
+        cov_pars_est <- as.vector(gp_model_fix_w$get_cov_pars(std_err = TRUE))
+        expect_equal(is.nan(cov_pars_est), is.nan(cov_pars_fix))
+        expect_lt(sum(abs(cov_pars_est-cov_pars_fix), na.rm = TRUE),tolerance_loc_fix)
         expect_lt(sum(abs(gp_model_fix_w$get_cov_pars(std_err = TRUE)[1,3]-params_loc$init_cov_pars[3])),TOLERANCE_STRICT)
         expect_lt(abs(gp_model_fix_w$get_current_neg_log_likelihood()-nll_opt_fix), tolerance_loc_4)
         
@@ -705,11 +869,11 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     
     ## Two crossed random effects and a random slope
     y <- Z1%*%b1 + Z2%*%b2 + Z3%*%b3 + xi
-    gp_model <- fitGPModel(group_data = cbind(group,group2),
-                           group_rand_coef_data = x,
-                           ind_effect_group_rand_coef = 1,
-                           y = y, matrix_inversion_method = "cholesky",
-                           params = list(optimizer_cov = "fisher_scoring", maxit=5, init_coef_aux_pars_from_iid_model = FALSE))
+    invisible(capture.output( gp_model <- fitGPModel(group_data = cbind(group,group2),
+                                                     group_rand_coef_data = x,
+                                                     ind_effect_group_rand_coef = 1,
+                                                     y = y, matrix_inversion_method = "cholesky",
+                                                     params = list(optimizer_cov = "fisher_scoring", maxit=5, init_coef_aux_pars_from_iid_model = FALSE)) ))
     expected_values <- c(0.49554952, 0.02546769, 1.24880860, 0.18983953, 1.05505134, 0.22337199, 1.13840014, 0.17950490)
     expect_lt(sum(abs(as.vector(gp_model$get_cov_pars(std_err = TRUE))-expected_values)),TOLERANCE_MEDIUM)
     expect_equal(gp_model$get_num_optim_iter(), 5)
@@ -799,6 +963,77 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     # Evaluate negative log-likelihood
     nll <- gp_model$neg_log_likelihood(cov_pars=c(0.1,1,2,1.5),y=y)
     expect_lt(abs(nll-2335.803),1E-2)
+  })
+  
+  test_that("Names of covariance parameters for random coefficients ", {
+    
+    group3 <- rep(1:5, each = n/5)
+    group_data_named <- cbind(group_A = group, group_B = group2, group_C = group3)
+    group_data_unnamed <- matrix(c(group, group2, group3), ncol = 3)
+    group_rand_coef_data <- matrix(c(x, x^2), ncol = 2)
+    y <- as.vector(Z1 %*% b1 + Z3 %*% b3 + xi)
+    y_binary <- as.numeric(y > 0)
+    # The names of the covariance parameters are only available after the parameters have been
+    #   set / estimated. One optimizer iteration is enough for this ('maxit = 1')
+    cov_par_names <- function(..., y_train = y) {
+      invisible(capture.output( gp_model <- fitGPModel(..., y = y_train, matrix_inversion_method = "cholesky",
+                                                       params = list(maxit = 1, init_coef_aux_pars_from_iid_model = FALSE)) ))
+      names(gp_model$get_cov_pars())
+    }
+    
+    # Random slopes for the first and the second grouped random effect
+    expect_equal(cov_par_names(group_data = group_data_named,
+                               group_rand_coef_data = group_rand_coef_data,
+                               ind_effect_group_rand_coef = c(1,2)),
+                 c("Error_var", "group_A", "group_B", "group_C",
+                   "group_A_rand_coef_nb_1", "group_B_rand_coef_nb_1"))
+    # Random slopes for the second and the third grouped random effect
+    expect_equal(cov_par_names(group_data = group_data_named,
+                               group_rand_coef_data = group_rand_coef_data,
+                               ind_effect_group_rand_coef = c(2,3)),
+                 c("Error_var", "group_A", "group_B", "group_C",
+                   "group_B_rand_coef_nb_1", "group_C_rand_coef_nb_1"))
+    # Two random slopes for the same grouped random effect
+    expect_equal(cov_par_names(group_data = group_data_named,
+                               group_rand_coef_data = group_rand_coef_data,
+                               ind_effect_group_rand_coef = c(3,3)),
+                 c("Error_var", "group_A", "group_B", "group_C",
+                   "group_C_rand_coef_nb_1", "group_C_rand_coef_nb_2"))
+    # Random slopes not given in increasing order of the random effects
+    expect_equal(cov_par_names(group_data = group_data_named,
+                               group_rand_coef_data = group_rand_coef_data,
+                               ind_effect_group_rand_coef = c(3,1)),
+                 c("Error_var", "group_A", "group_B", "group_C",
+                   "group_C_rand_coef_nb_1", "group_A_rand_coef_nb_1"))
+    # Names of the random slope covariate data are used if provided
+    group_rand_coef_data_named <- group_rand_coef_data
+    colnames(group_rand_coef_data_named) <- c("x1", "x2")
+    expect_equal(cov_par_names(group_data = group_data_named,
+                               group_rand_coef_data = group_rand_coef_data_named,
+                               ind_effect_group_rand_coef = c(3,1)),
+                 c("Error_var", "group_A", "group_B", "group_C",
+                   "group_C_rand_coef_x1", "group_A_rand_coef_x2"))
+    # No names for 'group_data' provided
+    expect_equal(cov_par_names(group_data = group_data_unnamed,
+                               group_rand_coef_data = group_rand_coef_data,
+                               ind_effect_group_rand_coef = c(1,2)),
+                 c("Error_var", "Group_1", "Group_2", "Group_3",
+                   "Group_1_rand_coef_nb_1", "Group_2_rand_coef_nb_1"))
+    # Non-Gaussian likelihood: there is no "Error_var" parameter
+    expect_equal(cov_par_names(group_data = group_data_named,
+                               group_rand_coef_data = group_rand_coef_data,
+                               ind_effect_group_rand_coef = c(1,2),
+                               likelihood = "bernoulli_probit", y_train = y_binary),
+                 c("group_A", "group_B", "group_C",
+                   "group_A_rand_coef_nb_1", "group_B_rand_coef_nb_1"))
+    # Intercept random effect dropped
+    expect_equal(cov_par_names(group_data = group_data_named,
+                               group_rand_coef_data = group_rand_coef_data,
+                               ind_effect_group_rand_coef = c(1,2),
+                               drop_intercept_group_rand_effect = c(TRUE,FALSE,FALSE)),
+                 c("Error_var", "group_B", "group_C",
+                   "group_A_rand_coef_nb_1", "group_B_rand_coef_nb_1"))
+    
   })
   
   test_that("Random coefficients with intercept random effect dropped ", {
@@ -969,4 +1204,186 @@ relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 *
     
   })
   
+  test_that("Predictions for new clusters with grouped random effects: means, variances and covariance matrices ", {
+
+    # A new cluster has no observed data, so the predictions are the prior of the random effects: zero means, the prior
+    #   variances and covariances (repeated groups share their random effects) and the error variance for the response.
+    #   The variances are calculated without the matrices Z Z^T of the prediction data, which have one entry for every
+    #   pair of prediction points in the same group
+    group_nc <- cbind(c(1, 1, 2, 2, 3, 3, 4, 4), c(1, 2, 1, 2, 1, 2, 1, 2))
+    x_nc <- c(0.5, -1, 2, 1.5, -0.5, 1, -2, 0.3)
+    y_nc <- qnorm(sim_rand_unif(n = nrow(group_nc), init_c = 0.37))
+    cluster_ids_nc <- rep(1, nrow(group_nc))
+    group_pred_nc <- cbind(c(1, 1, 2, 7), c(1, 1, 3, 3))
+    x_pred_nc <- c(0.2, -0.4, 1, 0.5)
+    cluster_ids_pred_nc <- rep(2, nrow(group_pred_nc))
+    Z1Z1t_nc <- outer(group_pred_nc[, 1], group_pred_nc[, 1], "==") * 1
+    Z2Z2t_nc <- outer(group_pred_nc[, 2], group_pred_nc[, 2], "==") * 1
+    ZZt_slope_nc <- Z1Z1t_nc * outer(x_pred_nc, x_pred_nc)
+    # two crossed random intercepts and a random slope on the first factor, with and without the intercept of the first factor
+    for (drop_intercept_nc in c(FALSE, TRUE)) {
+      if (drop_intercept_nc) {
+        cov_pars_nc <- c(0.4, 1.1, 0.9)
+        cov_latent_nc <- 1.1 * Z2Z2t_nc + 0.9 * ZZt_slope_nc
+      } else {
+        cov_pars_nc <- c(0.4, 0.7, 1.1, 0.9)
+        cov_latent_nc <- 0.7 * Z1Z1t_nc + 1.1 * Z2Z2t_nc + 0.9 * ZZt_slope_nc
+      }
+      gp_model_nc <- GPModel(group_data = group_nc, group_rand_coef_data = x_nc, ind_effect_group_rand_coef = 1,
+                             drop_intercept_group_rand_effect = c(drop_intercept_nc, FALSE), cluster_ids = cluster_ids_nc)
+      for (predict_response in c(FALSE, TRUE)) {
+        cov_exact_nc <- cov_latent_nc
+        if (predict_response) {
+          cov_exact_nc <- cov_exact_nc + cov_pars_nc[1] * diag(nrow(group_pred_nc))
+        }
+        label_nc <- paste0("(drop_intercept = ", drop_intercept_nc, ", predict_response = ", predict_response, ")")
+        pred_nc <- predict(gp_model_nc, y = y_nc, group_data_pred = group_pred_nc, group_rand_coef_data_pred = x_pred_nc,
+                           cluster_ids_pred = cluster_ids_pred_nc, cov_pars = cov_pars_nc,
+                           predict_cov_mat = TRUE, predict_response = predict_response)
+        expect_lt(max(abs(pred_nc$mu)), TOLERANCE_STRICT, label = paste("predictive mean", label_nc))
+        expect_lt(max(abs(as.vector(pred_nc$cov) - as.vector(cov_exact_nc))), TOLERANCE_STRICT,
+                  label = paste("predictive covariance matrix", label_nc))
+        pred_var_nc <- predict(gp_model_nc, y = y_nc, group_data_pred = group_pred_nc, group_rand_coef_data_pred = x_pred_nc,
+                               cluster_ids_pred = cluster_ids_pred_nc, cov_pars = cov_pars_nc,
+                               predict_var = TRUE, predict_response = predict_response)
+        expect_lt(max(abs(pred_var_nc$var - diag(cov_exact_nc))), TOLERANCE_STRICT, label = paste("predictive variances", label_nc))
+      }
+      pred_mean_nc <- predict(gp_model_nc, y = y_nc, group_data_pred = group_pred_nc, group_rand_coef_data_pred = x_pred_nc,
+                              cluster_ids_pred = cluster_ids_pred_nc, cov_pars = cov_pars_nc, predict_response = TRUE)
+      expect_lt(max(abs(pred_mean_nc$mu)), TOLERANCE_STRICT, label = paste0("response mean (drop_intercept = ", drop_intercept_nc, ")"))
+    }
+    # A single random intercept and many prediction points in one group of a new cluster: the matrix Z Z^T of the prediction
+    #   data would have n_pred^2 entries
+    n_pred_nc <- 10000
+    gp_model_nc1 <- GPModel(group_data = group_nc[, 1], cluster_ids = cluster_ids_nc)
+    pred_nc1 <- predict(gp_model_nc1, y = y_nc, group_data_pred = rep(1, n_pred_nc), cluster_ids_pred = rep(2, n_pred_nc),
+                        cov_pars = c(0.4, 0.7), predict_var = TRUE, predict_response = TRUE)
+    expect_lt(max(abs(pred_nc1$mu)), TOLERANCE_STRICT)
+    expect_lt(max(abs(pred_nc1$var - 1.1)), TOLERANCE_STRICT)
+    pred_nc1 <- predict(gp_model_nc1, y = y_nc, group_data_pred = rep(1, n_pred_nc), cluster_ids_pred = rep(2, n_pred_nc),
+                        cov_pars = c(0.4, 0.7), predict_response = TRUE)
+    expect_lt(max(abs(pred_nc1$mu)), TOLERANCE_STRICT)
+
+  })
+
+  test_that("Predictions for a single grouped random coefficient without an intercept random effect", {
+
+    # Dropping the intercept random effect of the only grouping variable leaves a model with a single
+    # grouped random coefficient component. The predictive (co-)variances must not use the shortcuts
+    # for a single random intercept, which ignore the covariate of the random coefficient
+    y <- as.vector(Z3 %*% b3) + xi
+    init_cov_pars <- c(var(y)/2, var(y)/2)
+    capture.output( gp_model <- fitGPModel(group_data = group, group_rand_coef_data = x,
+                                           ind_effect_group_rand_coef = 1,
+                                           drop_intercept_group_rand_effect = TRUE,
+                                           y = y, matrix_inversion_method = "cholesky",
+                                           params = list(optimizer_cov = "gradient_descent", init_cov_pars = init_cov_pars,
+                                                         init_coef_aux_pars_from_iid_model = FALSE))
+                    , file='NUL')
+    cov_pars <- as.numeric(gp_model$get_cov_pars())
+    expect_equal(length(cov_pars), 2)
+    # Posterior of Z3 %*% b3 for b3 ~ N(0, cov_pars[2] * I) and error variance cov_pars[1]
+    prior_cov <- cov_pars[2] * Z3 %*% t(Z3)
+    psi <- prior_cov + cov_pars[1] * diag(n)
+    expected_mu <- as.vector(prior_cov %*% solve(psi, y))
+    expected_cov <- prior_cov - prior_cov %*% solve(psi, prior_cov)
+    pred <- predict(gp_model, group_data_pred = group, group_rand_coef_data_pred = x,
+                    predict_var = TRUE, predict_response = FALSE)
+    expect_lt(max(abs(pred$mu - expected_mu)), TOLERANCE_STRICT)
+    expect_lt(max(abs(as.vector(pred$var) - diag(expected_cov))), TOLERANCE_STRICT)
+    pred_cov <- predict(gp_model, group_data_pred = group, group_rand_coef_data_pred = x,
+                        predict_cov_mat = TRUE, predict_response = FALSE)
+    expect_lt(max(abs(pred_cov$cov - expected_cov)), TOLERANCE_STRICT)
+    # A group that does not appear in the training data keeps its prior variance
+    pred_new <- predict(gp_model, group_data_pred = c(group[1], m + 1),
+                        group_rand_coef_data_pred = c(x[1], 2),
+                        predict_var = TRUE, predict_response = FALSE)
+    expect_lt(abs(as.vector(pred_new$var)[1] - diag(expected_cov)[1]), TOLERANCE_STRICT)
+    expect_lt(abs(as.vector(pred_new$var)[2] - 4 * cov_pars[2]), TOLERANCE_STRICT)
+
+  })
+
+  test_that("Training data random effects of a weighted grouped random effects model", {
+
+    # The weights give observation i the error variance sigma2 / weights[i]. Both the posterior
+    # means and the posterior variances of the random effects have to account for this
+    y <- as.vector(Z1 %*% b1) + as.vector(Z3 %*% b3) + xi
+    weights <- 0.5 + sim_rand_unif(n = n, init_c = 0.914)
+    init_cov_pars <- c(var(y)/3, var(y)/3, var(y)/3)
+    capture.output( gp_model <- fitGPModel(group_data = group, group_rand_coef_data = x,
+                                           ind_effect_group_rand_coef = 1, weights = weights,
+                                           y = y, matrix_inversion_method = "cholesky",
+                                           params = list(optimizer_cov = "gradient_descent", init_cov_pars = init_cov_pars,
+                                                         init_coef_aux_pars_from_iid_model = FALSE))
+                    , file='NUL')
+    cov_pars <- as.numeric(gp_model$get_cov_pars())
+    Z <- cbind(Z1, Z3)
+    Sigma <- diag(c(rep(cov_pars[2], ncol(Z1)), rep(cov_pars[3], ncol(Z3))))
+    psi <- Z %*% Sigma %*% t(Z) + cov_pars[1] * diag(1 / weights)
+    posterior_mean <- Sigma %*% t(Z) %*% solve(psi, y)
+    posterior_cov <- Sigma - Sigma %*% t(Z) %*% solve(psi, Z %*% Sigma)
+    training_data_random_effects <- predict_training_data_random_effects(gp_model, predict_var = TRUE)
+    # The random effects are reported on the scale of the intercept, i.e. without the covariate
+    #   of the random coefficient
+    for (comp in 1:2) {
+      block <- (comp - 1) * ncol(Z1) + 1:ncol(Z1)
+      expected_mean <- as.vector(Z1 %*% posterior_mean[block])
+      expected_var <- rowSums((Z1 %*% posterior_cov[block, block]) * Z1)
+      expect_lt(max(abs(training_data_random_effects[, comp] - expected_mean)), TOLERANCE_STRICT)
+      expect_lt(max(abs(training_data_random_effects[, 2 + comp] - expected_var)), TOLERANCE_STRICT)
+    }
+
+  })
+
+
+  test_that("Grouped random coefficient without an intercept random effect and several clusters ", {
+
+    # The components that are kept and their indices have to be determined once for the entire model.
+    # Determining them while constructing the components of a cluster made every cluster after the
+    # first one see a different number of components
+    y_dc <- as.vector(Z3 %*% b3) + xi
+    cov_pars_dc <- c(0.5, 1.2)# error variance and variance of the random coefficient
+    clusters_dc <- unique(cluster_ids)
+    # The clusters are independent, and the random effects of a group are independent between clusters
+    nll_dc_manual <- 0
+    for (cl_dc in clusters_dc) {
+      idx_dc <- cluster_ids == cl_dc
+      Z_cl_dc <- Z3[idx_dc, , drop = FALSE]
+      psi_cl_dc <- cov_pars_dc[2] * (Z_cl_dc %*% t(Z_cl_dc)) + diag(cov_pars_dc[1], sum(idx_dc))
+      nll_dc_manual <- nll_dc_manual +
+        as.numeric(0.5 * (determinant(psi_cl_dc, logarithm = TRUE)$modulus +
+                            t(y_dc[idx_dc]) %*% solve(psi_cl_dc, y_dc[idx_dc]) + sum(idx_dc) * log(2 * pi)))
+    }
+    gp_model_dc <- GPModel(group_data = group, group_rand_coef_data = x, ind_effect_group_rand_coef = 1,
+                           drop_intercept_group_rand_effect = TRUE, cluster_ids = cluster_ids)
+    expect_lt(abs(gp_model_dc$neg_log_likelihood(cov_pars = cov_pars_dc, y = y_dc) - nll_dc_manual),
+              TOLERANCE_MEDIUM)
+    # Estimation and prediction
+    capture.output( gp_model_dc <- fitGPModel(group_data = group, group_rand_coef_data = x,
+                                              ind_effect_group_rand_coef = 1,
+                                              drop_intercept_group_rand_effect = TRUE,
+                                              cluster_ids = cluster_ids, y = y_dc,
+                                              matrix_inversion_method = "cholesky",
+                                              params = list(optimizer_cov = "gradient_descent",
+                                                            init_cov_pars = c(var(y_dc) / 2, var(y_dc) / 2),
+                                                            init_coef_aux_pars_from_iid_model = FALSE))
+                    , file = 'NUL')
+    cov_pars_fit_dc <- as.numeric(gp_model_dc$get_cov_pars())
+    expect_equal(length(cov_pars_fit_dc), 2)
+    pred_dc <- predict(gp_model_dc, group_data_pred = group, group_rand_coef_data_pred = x,
+                       cluster_ids_pred = cluster_ids, predict_var = TRUE, predict_response = FALSE)
+    for (cl_dc in clusters_dc) {
+      idx_dc <- cluster_ids == cl_dc
+      Z_cl_dc <- Z3[idx_dc, , drop = FALSE]
+      prior_cov_cl_dc <- cov_pars_fit_dc[2] * (Z_cl_dc %*% t(Z_cl_dc))
+      psi_cl_dc <- prior_cov_cl_dc + diag(cov_pars_fit_dc[1], sum(idx_dc))
+      expect_lt(max(abs(pred_dc$mu[idx_dc] -
+                          as.vector(prior_cov_cl_dc %*% solve(psi_cl_dc, y_dc[idx_dc])))),
+                TOLERANCE_MEDIUM)
+      expect_lt(max(abs(as.vector(pred_dc$var)[idx_dc] -
+                          diag(prior_cov_cl_dc - prior_cov_cl_dc %*% solve(psi_cl_dc, prior_cov_cl_dc)))),
+                TOLERANCE_MEDIUM)
+    }
+  })
+
 }

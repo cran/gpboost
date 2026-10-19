@@ -6,102 +6,183 @@
 #' @keywords internal
 #' @title Documentation for parameters shared by \code{GPModel}, \code{gpb.cv}, and \code{gpboost}
 #' @description Documentation for parameters shared by \code{GPModel}, \code{gpb.cv}, and \code{gpboost}
-#' @param likelihood A \code{string} specifying the likelihood function (distribution) of the response variable. 
-#' Available options:
+#' @param likelihood A \code{string} specifying the likelihood function (distribution) of the response variable.
+#' The currently supported likelihoods, grouped by response type, are:
+#'
+#' \tabular{lll}{
+#' \strong{Response type} \tab \strong{Support} \tab \strong{Likelihoods} \cr
+#' Continuous \tab y in (-inf, inf) \tab "gaussian", "t", "t_fix_df", "quantile_regression" / "asymmetric_laplace", "gaussian_heteroscedastic", "gaussian_heteroscedastic_fixed_and_random" \cr
+#' Positive continuous \tab y in (0, inf) \tab "gamma", "gamma_varying_shape", "lognormal", "gpd", "egpd_power", "egpd_power_mixture", "egpd_beta", "egpd_power_beta" \cr
+#' Non-negative continuous / semicontinuous \tab y in [0, inf) with point mass at 0 \tab "tweedie", "tweedie_fixed_p", "tweedie_joint", "tweedie_varying_dispersion", "tweedie_joint_varying_dispersion" (and their "_fixed_p" variants), "hurdle_gamma", "hurdle_lognormal", hurdle GPD / EGPD likelihoods, "zero_censored_power_transformed_normal", "zero_censored_shifted_gamma" \cr
+#' Count \tab y in \{0, 1, 2, ...\} \tab "poisson", "negative_binomial", "negative_binomial_1", zero-inflated count likelihoods \cr
+#' Binary \tab y in \{0, 1\} \tab "bernoulli_logit", "bernoulli_probit" \cr
+#' Proportion / fractional / bounded \tab y in [0, 1] \tab "quasi_bernoulli_logit", "quasi_bernoulli_probit", "binomial_logit", "binomial_probit", "beta_binomial", "beta", "zoctn", "zero_one_censored_transformed_beta", "zero_one_censored_shifted_gamma" \cr
+#' }
+#'
+#' The table lists the main likelihood names. Aliases, heteroscedastic and varying-shape variants,
+#' and the "_regression" variants of the two-part likelihoods are documented in the detailed descriptions below.
+#'
+#' \strong{Continuous response: y in (-inf, inf)}
 #' \itemize{
-#' \item{ "gaussian" }
-#' \item{ "bernoulli_logit": Bernoulli likelihood with a logit link function for binary classification. Aliases: "binary", "binary_logit" }
-#' \item{ "bernoulli_probit": Bernoulli likelihood with a probit link function for binary classification. Aliases: "binary_probit" }
-#' \item{ "quasi_bernoulli_logit": quasi-Bernoulli likelihood with a logit link function for y in [0,1]. Aliases: "quasi_binary", "quasi_binary_logit" }
-#' \item{ "quasi_bernoulli_probit": quasi-Bernoulli likelihood with a probit link function for y in [0,1]. Aliases: "quasi_binary_probit" }
-#' \item{ "binomial_logit": Binomial likelihood with a logit link function. 
-#' The response variable \code{y} needs to contain proportions of successes / trials, 
-#' and the \code{weights} parameter needs to contain the numbers of trials. Aliases: "binomial"}
-#' \item{ "binomial_probit": Binomial likelihood with a probit link function. 
-#' The response variable \code{y} needs to contain proportions of successes / trials, 
-#' and the \code{weights} parameter needs to contain the numbers of trials }
-#' \item{ "beta_binomial": Beta-binomial likelihood with a logit link function. 
-#' The response variable \code{y} needs to contain proportions of successes / trials, 
-#' and the \code{weights} parameter needs to contain the numbers of trials. Aliases: "betabinomial", "beta-binomial"}
-#' \item{ "poisson": Poisson likelihood with a log link function }
-#' \item{ "negative_binomial": negative binomial likelihood with a log link function (aka "nbinom2", "negative_binomial_2"). 
-#' The variance is mu * (mu + r) / r, mu = mean, r = shape, with this parametrization }
-#' \item{ "negative_binomial_1": Negative binomial 1 (aka "nbinom1") likelihood with a log link function. 
-#' The variance is mu * (1 + phi), mu = mean, phi = dispersion, with this parametrization }
+#' \item{ "gaussian": Gaussian likelihood }
+#' \item{ "t": t-distribution (e.g., for robust regression). The default approximation is Fisher-Laplace, i.e., the Fisher information is used instead of the observed Hessian in the Laplace approximation of the marginal likelihood. }
+#' \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated
+#' \itemize{ \item{ The degrees-of-freedom (df) can be set via the \code{likelihood_additional_param} parameter. The default is df = 2 }}
+#' }
+#' \item{ "quantile_regression" / "asymmetric_laplace" : an asymmetric Laplace likelihood for quantile regression. Both names are accepted, as is the alias "quantile"
+#' \itemize{ \item{ The quantile must be supplied through the \code{likelihood_additional_param} parameter and must be strictly between 0 and 1 }}
+#' The default approximation is Fisher-Laplace, i.e., the Fisher information is used instead of the observed Hessian in the Laplace approximation of the marginal likelihood.
+#' The triangular-kernel-curvature (TKC) approximation can be enabled by appending "_triangular_kernel_curvature" or the shorthand "_tkc",
+#' for example, "quantile_regression_tkc" or "asymmetric_laplace_triangular_kernel_curvature".
+#' \itemize{ \item{ experimental: the log-likelihood is not differentiable at the kinks where 'y_i' equals the location parameter, and the
+#' quasi-Newton mode finding can therefore stall at a point that is not the exact posterior mode. Appending "_ssn_alm", for example
+#' "quantile_regression_ssn_alm", enables an exact check of the (non-smooth) optimality conditions after the mode finding and, if the check
+#' fails, a refinement of the mode with a semismooth Newton method applied to the subproblems of an augmented Lagrangian method.
+#' This makes the approximate marginal likelihood a well-defined function of the parameters, i.e., independent of the path taken by the
+#' optimizer and of the number of threads, at the price of additional linear solves during mode finding. This matters for standard errors
+#' and for likelihood-based model comparison, but it does not necessarily improve predictive accuracy; increasing
+#' \code{max_num_restarts_lbfgs} can be a cheaper way of avoiding poor optima.
+#' Appending "_admm_ssn_alm" instead warm starts the refinement with an ADMM phase, which typically halves its cost when
+#' \code{matrix_inversion_method = "cholesky"} and is not recommended for iterative methods }}
+#' }
+#' \item{ "gaussian_heteroscedastic": Gaussian likelihood where the mean is related to fixed and random effects and
+#' the log-error variance is related to fixed effects only (linear predictor or GPBoost algorithm). The estimated coefficients of the
+#' log-variance model are returned alongside the mean-model coefficients (with the suffix "_scale").
+#' Fisher-Laplace is the default and currently the only implemented approximation. }
+#' \item{ "gaussian_heteroscedastic_fixed_and_random": Gaussian likelihood where both the mean and the variance
+#' are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation.
+#' Fisher-Laplace is the default and currently the only implemented approximation. By default, Cholesky factorizations are used. If init_cov_pars is not given, the initial values are obtained from a homoscedastic Gaussian process model (unless some weights are zero). }
+#' }
+#'
+#' \strong{Positive continuous response: y in (0, inf)}
+#' \itemize{
 #' \item{ "gamma": Gamma likelihood with a log link function }
-#' \item{ "tweedie": Compound Poisson--Gamma Tweedie likelihood with a log link, variance phi * mu^p, and 1.01 < p < 1.99. The dispersion phi and power p are estimated }
-#' \item{ "tweedie_fixed_p": The same Tweedie likelihood with p fixed through \code{likelihood_additional_param}; only phi is estimated. The fixed power must satisfy 1.01 < p < 1.99 }
+#' \item{ "gamma_varying_shape": As "gamma", but the gamma shape varies across observations and is modeled
+#' by an additional fixed-effects-only predictor: log(shape) = F_s(X) (F_s(X) = linear predictor or the GPBoost
+#' algorithm), while the log mean log(mu) = F(X) + Zb is related to both fixed and random effects. Note that the shape
+#' also governs the dispersion, var(y) = mu^2 / shape. The estimated coefficients of the log-shape model are returned
+#' alongside the mean-model coefficients (with the suffix "_shape"). See also the corresponding two-part likelihoods
+#' "hurdle_gamma_varying_shape" and "hurdle_regression_gamma_varying_shape" below }
+#' \item{ "lognormal": Log-normal likelihood with a log link function }
 #' \item{ "gpd": Generalized Pareto likelihood for finite positive responses. The log scale parameter equals the latent predictor eta (sum of fixed and random effects), sigma = exp(eta), and the estimated auxiliary parameter is shape > -0.5 }
 #' \item{ "egpd_power": Naveau power-carrier extended generalized Pareto likelihood with auxiliary parameters shape and kappa }
 #' \item{ "egpd_power_mixture": Naveau ordered power-mixture carrier with auxiliary parameters shape, kappa1, delta_kappa, and p }
 #' \item{ "egpd_beta": Naveau beta-carrier extended generalized Pareto likelihood with auxiliary parameters shape and delta }
 #' \item{ "egpd_power_beta": Naveau power-beta carrier with auxiliary parameters shape, delta, and kappa }
-#' The GPD/EGPD likelihoods require finite y > 0. Response means exist for shape < 1 and response variances for shape < 0.5.
-#' \item{ "lognormal": Log-normal likelihood with a log link function }
-#' \item{ "beta" : Beta likelihood with a logit link function (parametrization of Ferrari and Cribari-Neto, 2004)}
-#' \item{ "t": t-distribution (e.g., for robust regression). The default approximation is Fisher-Laplace: Fisher information is used for both mode finding and determinant evaluation. }
-#' \item{ "t_fix_df": t-distribution with the degrees-of-freedom (df) held fixed and not estimated
-#' \itemize{ \item{ The degrees-of-freedom (df) can be set via the \code{likelihood_additional_param} parameter. The default is df = 2 }}
 #' }
-#' \item{ "quantile_regression" / "asymmetric_laplace" : an asymmetric Laplace likelihood for quantile regression, aliases: "asymmetric_laplace", "quantile_regression" 
-#' \itemize{ \item{ The quantile must be supplied through the \code{likelihood_additional_param} parameter and must be strictly between 0 and 1 }}
-#' The default approximation is Fisher-Laplace: Fisher information is used for both mode finding and determinant evaluation.
-#' The triangular-kernel-curvature (TKC) approximation can be enabled by appending "_triangular_kernel_curvature" or the shorthand "_tkc",
-#' for example, "quantile_regression_tkc" or "asymmetric_laplace_triangular_kernel_curvature".
-#' }
-#' \item{ "hurdle_<base>" and "zero_inflated_<base>": Two-part likelihoods for response variables with an excess probability 'p0' of exact zeros.
-#' They combine a point mass 'p0' at zero with a base distribution for the remaining mass '1 - p0'. Use "hurdle_<base>" when the base has support 'y > 0'
-#' (positive continuous responses) and "zero_inflated_<base>" for counts (where the base can itself generate additional zeros). In both cases 'exp(F(X) + Zb)'
-#' is the mean or scale parameter of the (non-structural) base component - not the unconditional response mean - so E(y) = (1 - p0) * base_mean. The structural-zero
-#' probability 'p0' is estimated jointly with the base auxiliary parameters. Currently supported variants:
+#'
+#' \strong{Non-negative continuous / semicontinuous response: y in [0, inf) with point mass at 0}
 #' \itemize{
-#' \item{ Hurdle (positive continuous base): "hurdle_gamma" (aux: shape), "hurdle_lognormal" (aux: log_variance), and the extreme-value bases
-#' "hurdle_gpd", "hurdle_egpd_power", "hurdle_egpd_power_mixture", "hurdle_egpd_beta", "hurdle_egpd_power_beta" (same aux parameters as the corresponding non-hurdle
-#' GPD/EGPD likelihoods, plus 'p0'). The alias "zero_inflated_gamma" maps to "hurdle_gamma". }
-#' \item{ Zero-inflated counts (integer y >= 0): "zero_inflated_poisson", "zero_inflated_negative_binomial" (aux: shape; aka "zero_inflated_nbinom2"),
-#' "zero_inflated_negative_binomial_1" (aux: dispersion; aka "zero_inflated_nbinom1"). The unsuffixed names default to combined Fisher-Laplace:
-#' the exact log-likelihood score and Fisher information (quasi-Fisher information for NB1) are used for mode finding, while the observed Hessian and its
-#' derivatives are used for the Laplace determinant. Append "_laplace" for observed-Hessian Newton mode finding, or "_fisher_laplace" to use Fisher
-#' (quasi-Fisher for NB1) information for both mode finding and determinant evaluation. }
-#' \item{ For both the hurdle (positive continuous) and the zero-inflated count families, the structural-zero probability can alternatively be modeled as a logistic
-#' regression on the covariates by inserting "regression" after the family prefix in the likelihood name (e.g. "hurdle_regression_gamma",
-#' "hurdle_regression_lognormal", "hurdle_regression_gpd", "zero_inflated_regression_poisson", "zero_inflated_regression_negative_binomial").
-#' The zero probability is then pi_i = 1 / (1 + exp(-x_i'alpha)), modeled through a second fixed-effects-only predictor that reuses the same design matrix
-#' X as the response model (the response predictor carries the random effects, the zero predictor does not). The estimated zero-model coefficients alpha are
-#' returned by get_coef() alongside the response-model coefficients, with the suffix "_zero". }
-#' }
-#' }
-#' \item{ "zero_censored_power_transformed_normal": Likelihood of a censored and power-transformed normal variable 
-#' for modeling data with a point mass at 0 and a continuous distribution for y > 0. 
-#' The model used is Y = max(0,X)^lambda, X ~ N(mu, sigma^2), where mu = F(X) + Zb, 
-#' and sigma and lambda are (auxiliary) parameters that are estimated. 
+#' \item{ "tweedie": Compound Poisson--Gamma Tweedie likelihood with a log link, variance phi * mu^p, and 1.01 < p < 1.99. The dispersion phi and power p are estimated }
+#' \item{ "tweedie_fixed_p": The same Tweedie likelihood with p fixed through \code{likelihood_additional_param}; only phi is estimated. The fixed power must satisfy 1.01 < p < 1.99 }
+#' \item{ "tweedie_joint", "tweedie_joint_fixed_p": The same Tweedie model, but the observed number of events (e.g., claims) N, given in the first
+#' column of \code{additional_likelihood_data}, is used jointly with the aggregate response y. The likelihood is the joint density of (y, N) of the
+#' compound Poisson--Gamma representation, N ~ Poisson(mu^(2-p) / (phi * (2-p))) and y | N = n ~ Gamma(n * (2-p) / (p-1), scale = phi * (p-1) * mu^(p-1)),
+#' see Jorgensen and de Souza (1994, Scandinavian Actuarial Journal).
+#' Given phi and p, the mean model is the same as for "tweedie"; N adds information
+#' for estimating phi and p. N must be a non-negative integer that is 0 if and only if y is 0. Predictions are the same as for "tweedie", and the
+#' "test_neg_log_likelihood" metric uses the marginal density of y since N is not known for new data }
+#' \item{ "tweedie_varying_dispersion", "tweedie_varying_dispersion_fixed_p": As "tweedie" and "tweedie_fixed_p", but the dispersion phi varies across
+#' observations: log(phi) = F_d(X) is related to fixed effects only (linear predictor or GPBoost algorithm), while log(mu) = F(X) + Zb is related
+#' to both fixed and random effects. The power p is then the only (auxiliary) parameter. The estimated coefficients of the log-dispersion model are
+#' returned alongside the mean-model coefficients (with the suffix "_dispersion") }
+#' \item{ "tweedie_joint_varying_dispersion", "tweedie_joint_varying_dispersion_fixed_p": The joint (y, N) likelihood of "tweedie_joint" with the
+#' varying dispersion of "tweedie_varying_dispersion" }
+#' \item{ "hurdle_<base>": Two-part likelihoods for non-negative response variables with an excess probability 'p0' of exact zeros.
+#' They combine a point mass 'p0' at zero with a base distribution with support 'y > 0' for the remaining mass '1 - p0'. The fixed effects 'F(X)'
+#' and random effects 'Zb' enter only through the base component: 'exp(F(X) + Zb)' is its mean or scale parameter, not the unconditional response
+#' mean, which is E(y) = (1 - p0) * base_mean. The structural-zero probability 'p0' is estimated jointly with the base auxiliary parameters.
+#' Currently supported bases: "hurdle_gamma", "hurdle_lognormal", and the extreme-value bases "hurdle_gpd", "hurdle_egpd_power",
+#' "hurdle_egpd_power_mixture", "hurdle_egpd_beta", "hurdle_egpd_power_beta".
+#' For all these bases, the "zero_inflated" prefix is accepted as an alias, e.g. "zero_inflated_gamma" maps to "hurdle_gamma".
+#' See "zero_inflated_<base>" under count
+#' responses for the corresponding count-data family }
+#' \item{ "hurdle_regression_<base>": As "hurdle_<base>", but the structural-zero probability is modeled as a logistic regression on the
+#' covariates instead of as a constant (e.g. "hurdle_regression_gamma", "hurdle_regression_lognormal", "hurdle_regression_gpd",
+#' "hurdle_regression_egpd_power", "hurdle_regression_egpd_power_mixture", "hurdle_regression_egpd_beta", "hurdle_regression_egpd_power_beta").
+#' The zero probability is then pi_i = 1 / (1 + exp(-x_i'alpha)), modeled through a second fixed-effects-only predictor that reuses the same
+#' design matrix X as the response model (the response predictor carries the random effects, the zero predictor does not). The estimated
+#' zero-model coefficients alpha are returned by get_coef() alongside the response-model coefficients, with the suffix "_zero" }
+#' \item{ "hurdle_gamma_varying_shape", "hurdle_regression_gamma_varying_shape": As "hurdle_gamma" and "hurdle_regression_gamma", but with
+#' the observation-specific gamma shape of "gamma_varying_shape". For "hurdle_regression_gamma_varying_shape" there are three predictors:
+#' the response mean, the structural-zero logit (coefficients with the suffix "_zero"), and log(shape) }
+#' \item{ "zero_censored_power_transformed_normal": Likelihood of a censored and power-transformed normal variable
+#' for modeling data with a point mass at 0 and a continuous distribution for y > 0.
+#' The model used is Y = max(0,X)^lambda, X ~ N(mu, sigma^2), where mu = F(X) + Zb,
+#' and sigma and lambda are (auxiliary) parameters that are estimated.
 #' For more details on this model, see Sigrist et al. (2012, AOAS) "A dynamic nonstationary spatio-temporal model for short term prediction of precipitation" }
 #' \item{ "zero_censored_power_transformed_normal_heteroscedastic": As "zero_censored_power_transformed_normal", but the
 #' standard deviation sigma of the latent normal variable varies across observations: log(sigma) = F_2(X) is related to
-#' fixed effects only (covariates and / or the GPBoost tree-boosting algorithm; no random effects / GPs for sigma), while
+#' fixed effects only (linear predictor or GPBoost algorithm), while
 #' mu = F(X) + Zb is related to both fixed and random effects. lambda is then the only (auxiliary) parameter that is estimated }
+#' \item{ "zero_censored_shifted_gamma": Zero-censored shifted gamma likelihood for modeling data with a point mass at 0
+#' and a continuous distribution for y > 0. The model used is Y = max(Z - xi, 0), where Z follows a gamma distribution
+#' with mean mu = exp(F(X) + Zb) and shape k. The shape k and shift xi are (auxiliary) parameters that are estimated.
+#' This is the version of "zero_one_censored_shifted_gamma" (Sigrist and Stahel, 2011) without the upper censoring at 1 }
+#' \item{ "zero_censored_shifted_gamma_varying_shape": As "zero_censored_shifted_gamma", but the shape k varies across
+#' observations: log(k) = F_s(X) is related to fixed effects only (covariates and / or the GPBoost tree-boosting
+#' algorithm; no random effects / GPs for the shape), while log(mu) = F(X) + Zb is related to both fixed and random
+#' effects. The shift xi is then the only (auxiliary) parameter that is estimated. The estimated coefficients of the
+#' log-shape model are returned alongside the mean-model coefficients (with the suffix "_shape") }
+#' }
+#'
+#' \strong{Count response: y in \{0, 1, 2, ...\}}
+#' \itemize{
+#' \item{ "poisson": Poisson likelihood with a log link function }
+#' \item{ "negative_binomial": negative binomial likelihood with a log link function (aka "nbinom2", "negative_binomial_2").
+#' The variance is mu * (mu + r) / r, mu = mean, r = shape, with this parametrization }
+#' \item{ "negative_binomial_1": Negative binomial 1 (aka "nbinom1") likelihood with a log link function.
+#' The variance is mu * (1 + phi), mu = mean, phi = dispersion, with this parametrization }
+#' \item{ "zero_inflated_<base>": Two-part count likelihoods that combine a point mass 'p0' at zero with a count base distribution for the
+#' remaining mass '1 - p0' (the base can itself generate additional zeros). As for the hurdle likelihoods, 'exp(F(X) + Zb)' is the mean of the
+#' (non-structural) base component - not the unconditional response mean - so E(y) = (1 - p0) * base_mean, and 'p0' is estimated jointly with
+#' the base auxiliary parameters. Currently supported bases: "zero_inflated_poisson", "zero_inflated_negative_binomial" (aux: shape; aka
+#' "zero_inflated_nbinom2"), "zero_inflated_negative_binomial_1" (aux: dispersion; aka "zero_inflated_nbinom1") }
+#' \item{ "zero_inflated_regression_<base>": As "zero_inflated_<base>", but with the logistic structural-zero model described under
+#' "hurdle_regression_<base>" above: "zero_inflated_regression_poisson", "zero_inflated_regression_negative_binomial", and
+#' "zero_inflated_regression_negative_binomial_1" }
+#' }
+#'
+#' \strong{Binary response: y in \{0, 1\}}
+#' \itemize{
+#' \item{ "bernoulli_logit": Bernoulli likelihood with a logit link function for binary classification. Aliases: "binary", "binary_logit" }
+#' \item{ "bernoulli_probit": Bernoulli likelihood with a probit link function for binary classification. Aliases: "binary_probit" }
+#' }
+#'
+#' \strong{Proportion / fractional / bounded response: y in [0, 1]}
+#' \itemize{
+#' \item{ "quasi_bernoulli_logit": quasi-Bernoulli likelihood with a logit link function for y in [0,1]. Aliases: "quasi_binary", "quasi_binary_logit" }
+#' \item{ "quasi_bernoulli_probit": quasi-Bernoulli likelihood with a probit link function for y in [0,1]. Aliases: "quasi_binary_probit" }
+#' \item{ "binomial_logit": Binomial likelihood with a logit link function.
+#' The response variable \code{y} needs to contain proportions of successes / trials,
+#' and the \code{weights} parameter needs to contain the numbers of trials. Aliases: "binomial"}
+#' \item{ "binomial_probit": Binomial likelihood with a probit link function.
+#' The response variable \code{y} needs to contain proportions of successes / trials,
+#' and the \code{weights} parameter needs to contain the numbers of trials }
+#' \item{ "beta_binomial": Beta-binomial likelihood with a logit link function.
+#' The response variable \code{y} needs to contain proportions of successes / trials,
+#' and the \code{weights} parameter needs to contain the numbers of trials. Aliases: "betabinomial", "beta-binomial"}
+#' \item{ "beta" : Beta likelihood with a logit link function (parametrization of Ferrari and Cribari-Neto, 2004). The response must lie strictly in (0,1) }
 #' \item{ "zoctn": Zero-one censored transformed normal likelihood for modeling data in [0,1] with point masses at 0 and 1
 #' and a continuous distribution on (0,1). The model used is T ~ N(mu, sigma^2), W = max(min(T,1),0), and Y = g(W),
 #' where g(x) = expit(a + b * logit(x)) for x in (0,1), mu = F(X) + Z_RE u, u denotes the random effects, Z_RE is their design matrix,
 #' and sigma, a, and b are (auxiliary) parameters
 #' that are estimated. For more details on this model, see Qiang and Sigrist (2026) }
-#' \item{ "zero_one_censored_transformed_beta": Zero-one censored transformed beta likelihood for modeling data in [0,1] 
-#' with point masses at 0 and 1 and a continuous distribution on (0,1). If T follows a beta distribution with mean 
-#' mu = expit(F(X) + Zb) and precision phi, the observed response is obtained by applying the linear transformation 
-#' Y = (1 + 2u) * T - u and censoring the result to [0,1]. The precision phi and shift u are (auxiliary) parameters 
+#' \item{ "zero_one_censored_transformed_beta": Zero-one censored transformed beta likelihood for modeling data in [0,1]
+#' with point masses at 0 and 1 and a continuous distribution on (0,1). If T follows a beta distribution with mean
+#' mu = expit(F(X) + Zb) and precision phi, the observed response is obtained by applying the linear transformation
+#' Y = (1 + 2u) * T - u and censoring the result to [0,1]. The precision phi and shift u are (auxiliary) parameters
 #' that are estimated. For more details on this model, see Kosmidis and Zeileis (2025) }
-#' \item{ "zero_one_censored_shifted_gamma": Zero-one censored shifted gamma likelihood for modeling data in [0,1] 
-#' with point masses at 0 and 1 and a continuous distribution on (0,1). The model used is Y = min(max(Z - xi, 0), 1), 
-#' where Z follows a gamma distribution with mean mu = exp(F(X) + Zb) and shape k. The shape k and shift xi are 
+#' \item{ "zero_one_censored_shifted_gamma": Zero-one censored shifted gamma likelihood for modeling data in [0,1]
+#' with point masses at 0 and 1 and a continuous distribution on (0,1). The model used is Y = min(max(Z - xi, 0), 1),
+#' where Z follows a gamma distribution with mean mu = exp(F(X) + Zb) and shape k. The shape k and shift xi are
 #' (auxiliary) parameters that are estimated. For more details on this model, see Sigrist and Stahel (2011) }
-#' \item{ "gaussian_heteroscedastic_fixed_and_random": Gaussian likelihood where both the mean and the variance
-#' are related to fixed and random effects. This is currently only implemented for GPs with a 'vecchia' approximation.
-#' Fisher-Laplace is the default and currently the only implemented approximation. }
-#' \item{ "gaussian_heteroscedastic": Gaussian likelihood where the mean is related to fixed and random effects and
-#' the log-error variance is related to fixed effects only (covariates and / or the GPBoost tree-boosting algorithm;
-#' no random effects / GPs for the variance). Fisher-Laplace is the default and currently the only implemented approximation. }
-#' \item{ Note: the first lines in the \href{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h}{likelihoods source file} contain additional comments on the specific parametrizations used }
-#' \item{ Note: other likelihoods can be implemented upon request }
+#' }
+#'
+#' \strong{Notes}
+#' \itemize{
+#' \item{ The first lines in the \href{https://github.com/fabsig/GPBoost/blob/master/include/GPBoost/likelihoods.h}{likelihoods source file} contain additional comments on the specific parametrizations used }
+#' \item{ Other likelihoods can be implemented upon request }
 #' }
 #' @param likelihood_additional_param A \code{numeric} specifying an additional parameter for the \code{likelihood} 
 #' which cannot be estimated for this \code{likelihood} (e.g., degrees of freedom for \code{likelihood = "t_fix_df"}). 
@@ -112,7 +193,7 @@
 #' \itemize{
 #' \item{ df = 2 for likelihood = "t_fix_df" }
 #' \item{ No default is used for likelihood = "asymmetric_laplace"; a quantile strictly between 0 and 1 is required }
-#' \item{ No default is used for likelihood = "tweedie_fixed_p"; a power strictly between 1.01 and 1.99 is required }
+#' \item{ No default is used for the Tweedie likelihoods with a fixed power ("tweedie_fixed_p" and the other "_fixed_p" variants); a power strictly between 1.01 and 1.99 is required }
 #' }
 #' @param group_data A \code{vector} or \code{matrix} whose columns are categorical grouping variables. 
 #' The elements being group levels defining grouped random effects.
@@ -162,12 +243,16 @@
 #' \item{ "linear": linear covariance function. This corresponds to a Bayesian linear 
 #' regression model with a Gaussian prior on the coefficients with a constant variance 
 #' diagonal prior covariance, and the prior variance is estimated using empirical Bayes. }
-#' \item{ "hurst": Hurst covariance function cov(s, s') = (sigma2 / 2) * ( ||s||^(2H) + ||s'||^(2H) - ||s - s'||^(2H) ). 
-#' For H = 0.5, this corresponds to Brownian motion (-> see the 'estimate_cov_par_index' argument) }
+#' \item{ "hurst": Hurst covariance function cov(s, s') = (sigma2 / 2) * ( ||s||^(2H) + ||s'||^(2H) - ||s - s'||^(2H) ), 0 < H < 1.
+#' For H = 0.5, this corresponds to Brownian motion in one dimension (-> see the 'estimate_cov_par_index' argument).
+#' This is the covariance for \code{cov_fct_order = 1} (default). For \code{cov_fct_order = 2}, the second-order Hurst covariance
+#' cov(s, s') = sigma2 / (2 (2H - 1)) * ( ||s - s'||^(2H) - ||s||^(2H) - ||s'||^(2H) + 2H (s^T s') (||s||^(2H-2) + ||s'||^(2H-2)) ), 1 < H < 2,
+#' is used. In one dimension and for s, s' >= 0, H = 1.5 corresponds to an integrated Wiener process. See \code{cov_fct_order} for more details }
 #' \item{ "hurst_ard": Hurst covariance function with with Automatic Relevance Determination (ARD), 
 #' i.e., with a different range parameter for every coordinate of ``gp_coords`` except 
 #' for the first coordinate which has a range parameter of 1 due to identifiability with the marginal variance: 
-#' \eqn{ cov(s, s') = (\sigma^2/2)\left[ \left(s_1^2 + \sum_{k=2}^d (s_k/l_k)^2\right)^H + \left({s'}_1^2 + \sum_{k=2}^d ({s'}_k/l_k)^2\right)^H - \left((s_1-{s'}_1)^2 + \sum_{k=2}^d ((s_k-{s'}_k)/l_k)^2\right)^H \right] } }
+#' \eqn{ cov(s, s') = (\sigma^2/2)\left[ \left(s_1^2 + \sum_{k=2}^d (s_k/l_k)^2\right)^H + \left({s'}_1^2 + \sum_{k=2}^d ({s'}_k/l_k)^2\right)^H - \left((s_1-{s'}_1)^2 + \sum_{k=2}^d ((s_k-{s'}_k)/l_k)^2\right)^H \right] }.
+#' For \code{cov_fct_order = 2}, the second-order Hurst covariance (see "hurst") is applied to the scaled coordinates (s_1, s_2/l_2, ..., s_d/l_d) }
 #' \item{ "ar1_mf_<base>": two-level autoregressive multifidelity covariance defined by
 #' \eqn{f_H(x)=\rho f_L(x)+\delta(x)}, where \eqn{f_L} and \eqn{\delta} are independent Gaussian processes
 #' using the same base covariance type but separate parameter vectors. 
@@ -188,27 +273,69 @@
 #' @param cov_fct_shape A \code{numeric} specifying the shape parameter of the covariance function 
 #' (e.g., smoothness parameter for Matern and Wendland covariance)  
 #' This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+#' @param cov_fct_order An \code{integer} specifying the order m of the "hurst" and "hurst_ard" covariance functions
+#' (also when used as base covariance in "ar1_mf_hurst" and "ar1_mf_hurst_ard"). Currently, the orders 1 (default) and 2 are supported.
+#' The Hurst exponent H of the order m satisfies m - 1 < H < m, and H = m - 0.5 is used as initial value.
+#' Order 1 is a fractional Brownian motion / field anchored at the origin (b(0) = 0), and order 2 is a second-order Hurst process / field
+#' anchored at the origin such that both the process and its gradient are zero there (b(0) = 0, grad b(0) = 0).
+#' The origin of the coordinates thus is a part of the model, and the coordinates are not centered internally.
+#' The order is not estimated. It can be chosen, e.g., by comparing the marginal likelihoods or by cross-validation.
+#' \itemize{
+#' \item{ Continuous-time RW1 prior: use \code{cov_function = "hurst"}, \code{cov_fct_order = 1}, and fix H = 0.5.
+#' This is a Brownian motion with b(0) = 0 and b'(t) = sqrt(q) W'(t), where W' denotes white noise and q = sigma2 }
+#' \item{ Continuous-time RW2 prior: use \code{cov_function = "hurst"}, \code{cov_fct_order = 2}, and fix H = 1.5.
+#' This is an integrated Wiener process with b(0) = b'(0) = 0 and b''(t) = sqrt(q) W'(t), where q = 3 * sigma2 }
+#' }
+#' For these priors, use a one-dimensional time coordinate t >= 0 whose origin t = 0 is the desired anchor (shift the time points if necessary).
+#' H can be fixed using the 'init_cov_pars' and 'estimate_cov_par_index' arguments of the \code{params} argument,
+#' see the examples of \code{\link{fitGPModel}}.
+#' If the polynomial null space of the intrinsic model should not be penalized, include an intercept (RW1) or
+#' an intercept and a linear time trend (RW2) as fixed effects.
+#' Note that the order 2 model with H = 1.5 is the continuous-time RW2 prior evaluated at the time points and
+#' not the usual discrete intrinsic RW2 prior on a lattice: for equally spaced time points, adjacent second differences
+#' are correlated (correlation 1/4) whereas they are independent for the discrete RW2
 #' @param gp_approx A \code{string} specifying the large data approximation
 #' for Gaussian processes. Available options: 
 #' \itemize{
 #' \item{"none": No approximation }
 #' \item{"vecchia": Vecchia approximation; see Sigrist (2022, JMLR) for more details.
-#' For "space_time_gneiting" and "ar1_mf_<base>", neighbors are selected by absolute correlation by default.
+#' For "matern_space_time" and the anisotropic ARD covariance functions ("matern_ard", "gaussian_ard",
+#' "matern_ard_estimate_shape"), neighbors are selected by absolute correlation, i.e., using distances in
+#' coordinates scaled by the range parameters, and they are redetermined during parameter estimation.
+#' For "space_time_gneiting" and "ar1_mf_<base>", neighbors are also selected by absolute correlation by default.
 #' Use gp_approx = "vecchia_euclidean" for Euclidean-distance selection. }
 #' \item{"full_scale_vecchia": Vecchia-inducing points full-scale (VIF) approximation; 
-#' see Gyger, Furrer, and Sigrist (2025) for more details }
+#' see Gyger, Furrer, and Sigrist (2026, JMLR) for more details }
 #' \item{"tapering": The covariance function is multiplied by 
 #' a compactly supported Wendland correlation function }
 #' \item{"fitc": Fully Independent Training Conditional approximation aka 
-#' modified predictive process approximation; see Gyger, Furrer, and Sigrist (2024) for more details }
+#' modified predictive process approximation }
 #' \item{"full_scale_tapering": Full-scale approximation combining an 
 #' inducing point / predictive process approximation with tapering on the residual process; 
-#' see Gyger, Furrer, and Sigrist (2024) for more details }
+#' see Gyger, Furrer, and Sigrist (2026, JUQ) for more details }
 #' \item{"vecchia_latent": similar as "vecchia" but a Vecchia approximation is applied to the latent Gaussian process 
 #' for likelihood == "gaussian". For likelihood != "gaussian", "vecchia" and "vecchia_latent" are equivalent }
 #' }
-#' @param num_parallel_threads An \code{integer} specifying the number of parallel threads for OMP. 
-#' If num_parallel_threads = NULL, all available threads are used
+#' @param num_parallel_threads An \code{integer} specifying the number of parallel threads for OMP.
+#' If num_parallel_threads = NULL, the default number of threads of the session is used, see
+#' \code{\link{gpb.get.default.num.threads}}. Initially, this is the number of physical performance
+#' cores, which is determined automatically as follows. On CPUs whose
+#' cores have different speeds (e.g., the performance and efficiency cores of recent Intel CPUs or
+#' Apple silicon), the fastest cores are counted, and hyperthreads are counted only once, since slow
+#' threads can slow down an entire model. The next fastest cores are added if the fastest ones alone
+#' would leave only a single thread. On Linux, a CPU bandwidth limit of a control group (e.g., of a
+#' container) is respected as well. If the environment variable OMP_NUM_THREADS is set, it takes
+#' precedence over both the topology of the CPU and the limit of the control group, and the number of
+#' threads that OpenMP is configured to use is taken as it is if the cores of the CPU cannot be
+#' determined. In either case, the limits of the OpenMP runtime itself still apply, in particular the
+#' limit of the contention group (OMP_THREAD_LIMIT).
+#' For ordinary use, leave num_parallel_threads unspecified to use this default. The default of the
+#' session can be changed with \code{\link{gpb.tune.num.threads}}, which benchmarks different numbers
+#' of threads, or with \code{\link{gpb.set.default.num.threads}}. Setting
+#' num_parallel_threads = 1 disables the OpenMP parallelization of the model and can substantially
+#' increase the runtime. A single thread should be chosen deliberately, e.g., to distribute the
+#' resources among concurrent model fits or for a specific test; it is not required for correctness
+#' or reproducibility
 #' @param GPU_use A \code{boolean}. If TRUE, GPU acceleration will be used if supported 
 #' @param cov_fct_taper_range A \code{numeric} specifying the range parameter 
 #' of the Wendland covariance function and Wendland correlation taper function. 
@@ -254,7 +381,7 @@
 #' @param matrix_inversion_method A \code{string} specifying the method used for inverting covariance matrices. 
 #' Available options:
 #' \itemize{
-#' \item{"default": iterative methods where possible, otherwise Cholesky factorization }
+#' \item{"default": iterative methods where possible, otherwise Cholesky factorization. Cholesky factorization is also used for likelihood = "gaussian_heteroscedastic_fixed_and_random" }
 #' \item{"cholesky": Cholesky factorization }
 #' \item{"iterative": iterative methods. A combination of the conjugate gradient, the Lanczos algorithm, and other methods. 
 #' 
@@ -287,8 +414,23 @@
 #' @param num_neighbors_pred an \code{integer} specifying the number of neighbors for the Vecchia approximation 
 #' for making predictions. Default value if NULL: num_neighbors_pred = 2 * num_neighbors
 #' @param cg_delta_conv_pred a \code{numeric} specifying the tolerance level for L2 norm of residuals for 
-#' checking convergence in conjugate gradient algorithms when being used for prediction
+#' checking convergence in conjugate gradient algorithms when being used for prediction.
+#' This is the tolerance of the "absolute" criterion only, the "relative" criterion is controlled
+#' by cg_rel_tol_pred and cg_abs_tol_pred.
 #' Default value if NULL: 1e-3
+#' @param cg_convergence_criterion_pred a \code{string} specifying the stopping rule of conjugate
+#' gradient algorithms when being used for prediction: "absolute" (stop when ||r||_2 < cg_delta_conv_pred)
+#' or "relative" (stop when ||r||_2 <= max(cg_abs_tol_pred, cg_rel_tol_pred * ||b||_2)).
+#' Default value if NULL: the value of cg_convergence_criterion used for the parameter estimation
+#' @param cg_rel_tol_pred a \code{numeric} specifying the relative tolerance of the "relative"
+#' stopping rule when being used for prediction.
+#' Default value if NULL: the value of cg_rel_tol used for the parameter estimation. This is
+#' inherited independently of cg_convergence_criterion_pred
+#' @param cg_abs_tol_pred a \code{numeric} specifying the absolute tolerance floor of the "relative"
+#' stopping rule when being used for prediction. This makes the rule robust for right-hand sides
+#' that are zero or very small.
+#' Default value if NULL: the value of cg_abs_tol used for the parameter estimation. This is
+#' inherited independently of the other two prediction options
 #' @param nsim_var_pred an \code{integer} specifying the number of samples when simulation 
 #' is used for calculating predictive variances
 #' Internal default values if NULL: 
@@ -306,10 +448,19 @@
 #' @param weights A \code{vector} with sample weights. For a Gaussian likelihood, the error variance ("nugget") for
 #' observation \code{i} is divided by \code{weights[i]}. For non-Gaussian likelihoods, the conditional
 #' log-likelihood contribution of observation \code{i} is multiplied by \code{weights[i]}. Consequently,
-#' weights affect the estimation of both random and fixed effects.
+#' weights affect the estimation of both random and fixed effects. Note that a Gaussian likelihood is
+#' calculated via the Laplace approximation when \code{gp_approx = "vecchia_latent"}, when
+#' \code{likelihood = "gaussian_latent"}, and when grouped random effects are combined with a
+#' Vecchia-approximated Gaussian process. In these cases, the weights act as for a non-Gaussian likelihood,
+#' i.e., the Gaussian log-likelihood contribution of observation \code{i} is multiplied by
+#' \code{weights[i]} instead of the error variance being divided by it.
+#' @param additional_likelihood_data A \code{vector} or \code{matrix} with observation-level data that some
+#' likelihoods require in addition to the response variable \code{y} (one row per data point). Currently, this is only
+#' used by the joint Tweedie likelihoods ("tweedie_joint" and its variants), for which its first column contains
+#' the observed number of events (e.g., claims) N. N must be a non-negative integer that is 0 if and only if y is 0
 #' @param likelihood_learning_rate A \code{numeric} with a learning rate for the likelihood for generalized Bayesian inference (only non-Gaussian likelihoods)
-#' @param free_raw_data A \code{boolean}. If TRUE, the data (groups, coordinates, covariate data for random coefficients) 
-#' is freed in R after initialization
+#' @param free_raw_data A \code{boolean}. If TRUE, the data (groups, coordinates, covariate data for random coefficients,
+#' cluster IDs, weights, and additional likelihood data) is freed in R after initialization
 #' @param y A \code{vector} with response variable data
 #' @param X A \code{matrix} with numeric covariate data for the 
 #' fixed effects linear regression term (if there is one)
@@ -337,7 +488,7 @@
 #'                (e.g., shape parameter of a gamma or negative_binomial likelihood) }
 #'                \item{init_coef_aux_pars_from_iid_model: \code{boolean} (default = TRUE).
 #'                If TRUE, regression coefficients and auxiliary parameters are initialized from an iid model (only for models with a linear regression term).
-#'                This option is ignored if init_coef is provided. If init_aux_pars is provided but init_coef is not, only regression coefficients are initialized from an iid model. }
+#'                This option is ignored if init_coef is provided. If init_aux_pars is provided but init_coef is not, only regression coefficients are initialized from an iid model. For likelihood = "gaussian_heteroscedastic_fixed_and_random", if init_cov_pars is not provided, the initial covariance parameters are obtained from a homoscedastic Gaussian process model, and the regression coefficients are then initialized from this model instead: the coefficients of the mean from its coefficients and the intercept of the log-error variance from the logarithm of its error variance. }
 #'                \item{estimate_cov_par_index: \code{vector} with \code{integer} (default = -1). 
 #'                This allows for disabling the estimation of some (or all) covariance parameters. 
 #'                If 'estimate_cov_par_index' = -1, all covariance parameters are estimated. 
@@ -345,7 +496,7 @@
 #'                and estimate_cov_par_index[i] should be of bool type indicating whether parameter number i is estimated or not. 
 #'                For instance, estimate_cov_par_index = c(1,1,0) means that the first two covariance parameters 
 #'                are estimated and the last one not. 
-#'                Parameters that are not estimated are kept at their initial values (see 'init_cov_pars'). }  
+#'                Parameters that are not estimated are kept at their initial values (see 'init_cov_pars'). They are treated as known constants when calculating the standard errors of the estimated parameters, and their own standard errors are NaN. }  
 #'                \item{estimate_aux_pars: \code{boolean} (default = TRUE). 
 #'                If TRUE, additional parameters for non-Gaussian likelihoods 
 #'                are also estimated (e.g., shape parameter of a gamma or negative_binomial likelihood) }
@@ -379,7 +530,42 @@
 #'                \item{cg_delta_conv: \code{numeric} (default = 1E-2).
 #'                Tolerance level for L2 norm of residuals for checking convergence 
 #'                in conjugate gradient algorithm when being used for parameter estimation.
+#'                This is the tolerance of the "absolute" criterion only, the "relative" criterion
+#'                is controlled by cg_rel_tol and cg_abs_tol.
 #'                If cg_delta_conv = -999, internal default values are used }
+#'                \item{cg_convergence_criterion: \code{string} (default = "absolute").
+#'                Stopping rule of conjugate gradient algorithms.
+#'                \itemize{
+#'                  \item{"absolute": stop when ||r||_2 < cg_delta_conv }
+#'                  \item{"relative": stop when ||r||_2 <= max(cg_abs_tol, cg_rel_tol * ||b||_2),
+#'                  where b is the right-hand side of the linear system. The cg_abs_tol floor makes
+#'                  this robust for right-hand sides that are zero or very small }
+#'                } }
+#'                \item{cg_rel_tol: \code{numeric} (default = 1E-6).
+#'                Relative tolerance of the "relative" stopping rule.
+#'                If cg_rel_tol = -999, internal default values are used }
+#'                \item{cg_abs_tol: \code{numeric} (default = 1E-8).
+#'                Absolute tolerance floor of the "relative" stopping rule, which makes it robust
+#'                for right-hand sides that are zero or very small. This is independent of
+#'                cg_delta_conv, so that the two criteria can be varied separately.
+#'                If cg_abs_tol = -999, internal default values are used }
+#'                \item{cg_multi_rhs_convergence: \code{string} (default = "average").
+#'                How the stopping rule is aggregated over the columns of a linear system with
+#'                several right-hand sides, such as the stochastic Lanczos quadrature.
+#'                For cg_convergence_criterion = "relative", every right-hand side is normalized by
+#'                its own norm, i.e. q_j = ||r_j||_2 / max(cg_abs_tol, cg_rel_tol * ||b_j||_2):
+#'                \itemize{
+#'                  \item{"average": stop when mean(q_j) <= 1 }
+#'                  \item{"max": stop when max(q_j) <= 1 }
+#'                  \item{"per_rhs": stop iterating on column j individually as soon as q_j <= 1 }
+#'                }
+#'                For cg_convergence_criterion = "absolute" there is no per-column normalization:
+#'                \itemize{
+#'                  \item{"average": stop when mean(||r_j||_2) < cg_delta_conv. This is the
+#'                  historic behavior and the default }
+#'                  \item{"max": stop when ||r_j||_2 < cg_delta_conv for all j }
+#'                  \item{"per_rhs": stop iterating on column j as soon as ||r_j||_2 < cg_delta_conv }
+#'                } }
 #'                \item{num_rand_vec_trace: \code{integer} (default = 50). 
 #'                Number of random vectors (e.g., Rademacher) for stochastic approximation of the trace of a matrix.
 #'                If num_rand_vec_trace = -999, internal default values are used }
@@ -435,13 +621,20 @@
 #'                The convergence criterion used for terminating the optimization algorithm.
 #'                Options: "relative_change_in_log_likelihood" or "relative_change_in_parameters".
 #'                If convergence_criterion = "default", internal default values are used }
-#'                \item{lr_cov: \code{numeric} (default = 0.1 for "gradient_descent" and 1. otherwise, only relevant for "gradient_descent", "fisher_scoring", and "newton"). 
+#'                \item{lr_cov: \code{numeric} (default = 0.1 for "gradient_descent" and 1. otherwise, relevant for "gradient_descent", "fisher_scoring", "newton", and "lbfgs"). 
 #'                Initial learning rate for covariance parameters if a gradient-based optimization method is used 
 #'                \itemize{
 #'                \item{If lr_cov = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise) }
 #'                \item{If there are additional auxiliary parameters for non-Gaussian likelihoods, 
 #'                'lr_cov' is also used for those }
-#'                \item{For "lbfgs", this is divided by the norm of the gradient in the first iteration }}}
+#'                \item{For "gradient_descent", "fisher_scoring", and "newton", this is the learning rate by which the 
+#'                search direction is multiplied. It can be decreased, and increased again, during the optimization }
+#'                \item{For "lbfgs" and "lbfgs_linesearch_nocedal_wright", this is not a learning rate by which every 
+#'                update is multiplied. It only determines the first trial step, which is the negative gradient divided 
+#'                by its norm and multiplied by 'lr_cov', i.e., a step of length 'lr_cov'. The subsequent steps are 
+#'                determined by the approximate Hessian of the L-BFGS algorithm and the line search. 'lr_cov' has no 
+#'                effect when the approximate Hessian of a previous call is reused (see 'reuse_learning_rates_gp_model' 
+#'                of the GPBoost algorithm) }}}
 #'                \item{lr_coef: \code{numeric} (default = 0.1, only relevant for "gradient_descent", "fisher_scoring", and "newton"). 
 #'                Learning rate for fixed effect regression coefficients if gradient descent is used.
 #'                If lr_coef = -999, internal default values are used }
@@ -458,7 +651,24 @@
 #'                \item{momentum_offset: \code{integer} (Default = 2, only relevant for "gradient_descent")}. 
 #'                Number of iterations for which no momentum is applied in the beginning. If momentum_offset = -999, internal default values are used.
 #'                \item{m_lbfgs: \code{integer} (Default = 6)}. Number of corrections to approximate the inverse Hessian matrix for the "lbfgs" optimizer. If m_lbfgs = -999, internal default values are used
-#'                \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8)}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
+#'                \item{cold_restart_lbfgs: \code{boolean} (Default = TRUE)}. If TRUE, restarts of the "lbfgs" optimizers are
+#'                "cold" restarts: the regression coefficients, the auxiliary parameters, and the modes of the Laplace
+#'                approximations are reset to their initial values and only the covariance parameters are kept. Such restarts
+#'                can escape a local optimum in which the optimizer is stuck. If FALSE, "warm" restarts are done: the
+#'                optimization simply continues from the current parameters with a re-initialized approximate Hessian.
+#'                Only relevant if \code{max_num_restarts_lbfgs} > 0. Note that every cold restart is a full optimization
+#'                with up to \code{maxit} iterations, and the number of iterations reported is the sum over all restarts
+#'                \item{max_num_restarts_lbfgs: \code{integer} (Default = 0)}. Maximal number of restarts of the "lbfgs" optimizers
+#'                after they have terminated. A restart continues from the current parameters with a re-initialized approximate Hessian.
+#'                What else is reset depends on \code{cold_restart_lbfgs}.
+#'                Restarts are only done as long as the negative log-likelihood still decreases by more than \code{delta_rel_conv} and
+#'                as long as the total number of iterations is below \code{maxit}. This can help when the line search of "lbfgs" fails
+#'                and the optimizer thus terminates prematurely without having converged. This can happen, e.g., for the
+#'                \code{"asymmetric_laplace"} (= quantile regression) likelihood, whose approximate marginal likelihood is not smooth
+#'                \item{reset_modes_line_search_lbfgs: \code{boolean} (Default = FALSE)}. If TRUE, the mode finding of the Laplace approximation
+#'                starts at the modes of the current parameters for every trial point of the line search of the "lbfgs" optimizer, and not at the
+#'                modes of the previous trial point. Only relevant for non-Gaussian likelihoods and \code{optimizer_cov = "lbfgs"} or \code{"lbfgs_linesearch_nocedal_wright"}
+#'                \item{delta_conv_mode_finding: \code{numeric} (Default = 1E-8, and 1E-10 for the likelihood "gaussian_heteroscedastic_fixed_and_random")}. Convergence tolerance in mode finding algorithm for Laplace approximation for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
 #'            }
 #' @param offset A \code{numeric} \code{vector} with 
 #' additional fixed effects contributions that are added to the linear predictor (= offset). 
@@ -487,7 +697,10 @@
 #' @param num_prior_samples A \code{numeric} with the number of prior samples to draw if 'sample_prior=TRUE'
 #' @param std_err A \code{boolean}. If TRUE, (approximate) standard errors are calculated 
 #'                (= square root of diagonal of the inverse Fisher information for Gaussian likelihoods and 
-#'                square root of diagonal of a numerically approximated inverse Hessian for non-Gaussian likelihoods)
+#'                square root of diagonal of a numerically approximated inverse Hessian for non-Gaussian likelihoods).
+#'                For non-Gaussian likelihoods, no standard errors of the covariance and auxiliary parameters
+#'                are calculated if the model is used in the GPBoost algorithm, since they require the
+#'                fixed effects given by the tree ensemble
 #' @param vecchia_approx Discontinued. Use the argument \code{gp_approx} instead
 #' @param num_data A \code{numeric} with the number of samples. This is only used for iid models
 
@@ -504,6 +717,7 @@ GPModel_shared_params <- function(likelihood = NULL,
                                   cov_function = NULL,
                                   fidelity_specific_mean = NULL,
                                   cov_fct_shape = NULL,
+                                  cov_fct_order = NULL,
                                   gp_approx = NULL,
                                   num_parallel_threads = NULL,
                                   GPU_use = NULL,
@@ -519,10 +733,14 @@ GPModel_shared_params <- function(likelihood = NULL,
                                   vecchia_pred_type = NULL,
                                   num_neighbors_pred = NULL,
                                   cg_delta_conv_pred = NULL,
+                                  cg_convergence_criterion_pred = NULL,
+                                  cg_rel_tol_pred = NULL,
+                                  cg_abs_tol_pred = NULL,
                                   nsim_var_pred = NULL,
                                   rank_pred_approx_matrix_lanczos = NULL,
                                   cluster_ids = NULL,
                                   weights = NULL,
+                                  additional_likelihood_data = NULL,
                                   likelihood_learning_rate = NULL,
                                   free_raw_data = NULL,
                                   y = NULL,
@@ -572,6 +790,7 @@ gpb.GPModel <- R6::R6Class(
                           GPU_use = FALSE,
                           matrix_inversion_method = "default",
                           weights = NULL,
+                          additional_likelihood_data = NULL,
                           likelihood_learning_rate = 1.,
                           cov_fct_taper_range = 1.,
                           cov_fct_taper_shape = 1.,
@@ -585,6 +804,7 @@ gpb.GPModel <- R6::R6Class(
                           num_data = NULL,
                           likelihood_additional_param = NULL,
                           fidelity_specific_mean = TRUE,
+                          cov_fct_order = 1L,
                           free_raw_data = FALSE,
                           modelfile = NULL,
                           model_list = NULL,
@@ -622,7 +842,8 @@ gpb.GPModel <- R6::R6Class(
         MAYBE_CONVERT_TO_MATRIX <- c("cov_pars", "group_data", "group_rand_coef_data", 
                                      "gp_coords", "gp_rand_coef_data", 
                                      "ind_effect_group_rand_coef",
-                                     "cluster_ids", "coefs", "X", "weights", "offset")
+                                     "cluster_ids", "coefs", "X", "weights", "offset",
+                                     "additional_likelihood_data")
         for (feature in MAYBE_CONVERT_TO_MATRIX) {
           if (!is.null(model_list[[feature]])) {
             if (is.list(model_list[[feature]])) {
@@ -646,9 +867,11 @@ gpb.GPModel <- R6::R6Class(
         cov_function = model_list[["cov_function"]]
         fidelity_specific_mean <- if (is.null(model_list[["fidelity_specific_mean"]])) FALSE else isTRUE(model_list[["fidelity_specific_mean"]])
         cov_fct_shape = model_list[["cov_fct_shape"]]
+        cov_fct_order <- if (is.null(model_list[["cov_fct_order"]])) 1L else model_list[["cov_fct_order"]]
         gp_approx = model_list[["gp_approx"]]
         matrix_inversion_method = model_list[["matrix_inversion_method"]]
         weights = model_list[["weights"]]
+        additional_likelihood_data = model_list[["additional_likelihood_data"]]
         likelihood_learning_rate = model_list[["likelihood_learning_rate"]]
         cov_fct_taper_range = model_list[["cov_fct_taper_range"]]
         cov_fct_taper_shape = model_list[["cov_fct_taper_shape"]]
@@ -662,6 +885,29 @@ gpb.GPModel <- R6::R6Class(
         GPU_use = model_list[["GPU_use"]]
         cluster_ids = model_list[["cluster_ids"]]
         likelihood = model_list[["likelihood"]]
+        if (!is.null(likelihood) && likelihood %in% c("zero_inflated_gamma", "zero-inflated-gamma")) {
+          # A saved model always contains the canonical likelihood name, so this name identifies a model that
+          # was saved with GPBoost <= 1.7.0. There, the predictor was the mean of the entire response,
+          # E(y) = exp(eta), whereas the predictor of "hurdle_gamma" is the mean of the positive part,
+          # E(y | y > 0) = exp(eta). The two differ by the factor 1 - p0, so loading such a model under the
+          # current parameterization would change its predictions
+          stop("The model was saved with the likelihood 'zero_inflated_gamma' of GPBoost <= 1.7.0, whose ",
+               "predictor was the mean of the entire response, E(y) = exp(eta). This likelihood is now called ",
+               "'hurdle_gamma' and its predictor is the mean of the positive part, E(y | y > 0) = exp(eta). The ",
+               "model can therefore not be loaded unchanged. Either refit it, or convert it by adding -log(1 - p0) ",
+               "to the predictor (e.g., to the intercept coefficient or to the offset) and setting the likelihood ",
+               "to 'hurdle_gamma' in the saved file")
+        }
+        if (!is.null(likelihood) && likelihood == "gaussian_heteroscedastic") {
+          # Up to and including the models saved with num_sets_re = 2, "gaussian_heteroscedastic" denoted the
+          # likelihood whose variance predictor contains both fixed and random effects. That model is now called
+          # "gaussian_heteroscedastic_fixed_and_random", and "gaussian_heteroscedastic" has a variance predictor
+          # with fixed effects only (num_sets_re = 1)
+          num_sets_re_saved = model_list[["num_sets_re"]]
+          if (is.null(num_sets_re_saved) || num_sets_re_saved > 1) {
+            likelihood = "gaussian_heteroscedastic_fixed_and_random"
+          }
+        }
         likelihood_additional_param = model_list[["likelihood_additional_param"]]
         # Set additionally required data
         private$model_has_been_loaded_from_saved_file = TRUE
@@ -681,7 +927,8 @@ gpb.GPModel <- R6::R6Class(
         }
         private$has_covariates = model_list[["has_covariates"]]
         if (model_list[["has_covariates"]]) {
-          private$coefs_loaded_from_file = model_list[["coefs"]]
+          # Note: the coefficients are restored via 'params$init_coef' in the pseudo call to 'fit'
+          #   below and are then kept in C++ (they are read from there by 'get_coef')
           private$num_coef = model_list[["num_coef"]]
           private$num_covariates = model_list[["num_covariates"]]
           private$num_covariates_original <- if (is.null(model_list[["num_covariates_original"]])) private$num_covariates else model_list[["num_covariates_original"]]
@@ -692,9 +939,7 @@ gpb.GPModel <- R6::R6Class(
           } else {
             private$coef_names <- colnames(private$X_loaded_from_file)
           }
-          if (private$num_sets_fe == 2) {
-            private$coef_names <- c(private$coef_names, paste0(private$coef_names,"_scale"))
-          }
+          # The suffixes of the additional predictors are appended below, once the likelihood is known
         }
         private$model_fitted = model_list[["model_fitted"]]
         if (private$model_fitted) {
@@ -716,16 +961,36 @@ gpb.GPModel <- R6::R6Class(
       if (likelihood == "gaussian_heteroscedastic_fixed_and_random") {
         private$num_sets_re = 2
         private$num_sets_fe = 2
+        private$extra_fe_block_suffixes = "_scale"
       } else if (likelihood == "gaussian_heteroscedastic" ||
                  likelihood == "zero_censored_power_transformed_normal_heteroscedastic") {
         # A second fixed-effects-only predictor: the log-error variance for "gaussian_heteroscedastic" and
         # the log standard deviation of the latent normal variable for the zero-censored power-transformed normal
         private$num_sets_fe = 2
+        private$extra_fe_block_suffixes = "_scale"
+      } else if (likelihood == "hurdle_regression_gamma_varying_shape") {
+        # Three predictors: the response mean (with random effects), the structural-zero logit, and log(shape)
+        private$num_sets_fe = 3
+        private$extra_fe_block_suffixes = c("_zero", "_shape")
       } else if (grepl("^(hurdle|zero_inflated)_regression_", likelihood)) {
         # Hurdle / zero-inflated regression zero model (e.g. "hurdle_regression_gamma", "zero_inflated_regression_poisson"):
         # a second fixed-effects-only predictor (zeta = X * alpha) for the structural-zero logit
         private$num_sets_fe = 2
-        private$second_fe_block_is_zero_model = TRUE
+        private$extra_fe_block_suffixes = "_zero"
+      } else if (likelihood == "gamma_varying_shape" || likelihood == "hurdle_gamma_varying_shape" ||
+                 likelihood == "zero_censored_shifted_gamma_varying_shape") {
+        # A second fixed-effects-only predictor for log(shape)
+        private$num_sets_fe = 2
+        private$extra_fe_block_suffixes = "_shape"
+      } else if (grepl("^tweedie(_joint)?_varying_dispersion", likelihood)) {
+        # A second fixed-effects-only predictor for log(dispersion)
+        private$num_sets_fe = 2
+        private$extra_fe_block_suffixes = "_dispersion"
+      }
+      if (private$model_has_been_loaded_from_saved_file && private$has_covariates &&
+          length(private$extra_fe_block_suffixes) > 0) {
+        # The coefficient names of a loaded model were set to the base names above, before the likelihood was known
+        private$coef_names <- private$append_extra_fe_block_suffixes(private$coef_names)
       }
       private$cov_par_names <- c()
       private$is_ar1_multifidelity <- startsWith(as.character(cov_function), "ar1_mf_")
@@ -830,18 +1095,14 @@ gpb.GPModel <- R6::R6Class(
           ind_effect_group_rand_coef <- as.vector(ind_effect_group_rand_coef)
           private$ind_effect_group_rand_coef <- ind_effect_group_rand_coef
           private$drop_intercept_group_rand_effect <- drop_intercept_group_rand_effect
-          offset = 1
-          if(likelihood != "gaussian"){
-            offset = 0
-          }
           counter_re <- rep(1,private$num_group_re)
           for (ii in 1:private$num_group_rand_coef) {
             if (is.null(colnames(private$group_rand_coef_data))) {
-              new_name <- paste0(private$cov_par_names[ind_effect_group_rand_coef[ii]+offset],
+              new_name <- paste0(private$cov_par_names[ind_effect_group_rand_coef[ii]],
                                  "_rand_coef_nb_",counter_re[ind_effect_group_rand_coef[ii]])
               counter_re[ind_effect_group_rand_coef[ii]] <- counter_re[ind_effect_group_rand_coef[ii]] + 1
             } else {
-              new_name <- paste0(private$cov_par_names[ind_effect_group_rand_coef[ii]+offset],
+              new_name <- paste0(private$cov_par_names[ind_effect_group_rand_coef[ii]],
                                  "_rand_coef_",colnames(private$group_rand_coef_data)[ii])
             }
             private$cov_par_names <- c(private$cov_par_names,new_name)
@@ -885,6 +1146,11 @@ gpb.GPModel <- R6::R6Class(
         gp_coords <- as.vector(matrix(private$gp_coords)) #convert to correct format for sending to C
         private$cov_function <- as.character(cov_function)
         private$cov_fct_shape <- as.numeric(cov_fct_shape)
+        if (!(is.numeric(cov_fct_order) && length(cov_fct_order) == 1L && !is.na(cov_fct_order) &&
+              cov_fct_order == round(cov_fct_order))) {
+          stop("GPModel: ", sQuote("cov_fct_order"), " must be a single integer")
+        }
+        private$cov_fct_order <- as.integer(cov_fct_order)
         private$gp_approx <- as.character(gp_approx)
         private$cov_fct_taper_range <- as.numeric(cov_fct_taper_range)
         private$cov_fct_taper_shape <- as.numeric(cov_fct_taper_shape)
@@ -942,31 +1208,19 @@ gpb.GPModel <- R6::R6Class(
           private$cov_par_names <- c(private$cov_par_names,"sigma2", "a", "c", "alpha", "nu", "beta", "delta")
         } else if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time") {
           private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range_time", "GP_range_space")
-        } else if (private$cov_function == "matern_ard" | private$cov_function == "gaussian_ard" | 
+        } else if (private$cov_function == "matern_ard" | private$cov_function == "gaussian_ard" |
                    private$cov_function == "exponential_ard") {
-          if (is.null(colnames(gp_coords))) {
-            private$cov_par_names <- c(private$cov_par_names,"GP_var", paste0("GP_range_",1:private$dim_coords))
-          } else {
-            private$cov_par_names <- c(private$cov_par_names,"GP_var", paste0("GP_range_",colnames(gp_coords)))
-          }
+          private$cov_par_names <- c(private$cov_par_names,"GP_var", paste0("GP_range_",1:private$dim_coords))
         } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
           private$cov_par_names <- c(private$cov_par_names,"GP_var")
         } else if (private$cov_function == "matern_estimate_shape") {
           private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range", "GP_smoothness")
         } else if (private$cov_function == "matern_ard_estimate_shape") {
-          if (is.null(colnames(gp_coords))) {
-            private$cov_par_names <- c(private$cov_par_names,"GP_var", paste0("GP_range_",1:private$dim_coords), "GP_smoothness")
-          } else {
-            private$cov_par_names <- c(private$cov_par_names,"GP_var", paste0("GP_range_",colnames(gp_coords)), "GP_smoothness")
-          }
+          private$cov_par_names <- c(private$cov_par_names,"GP_var", paste0("GP_range_",1:private$dim_coords), "GP_smoothness")
         } else if (private$cov_function == "hurst" || private$cov_function == "hurst_ard") {
           private$cov_par_names <- c(private$cov_par_names,"GP_var", "H")
-          if (private$cov_function == "hurst_ard") {
-            if (is.null(colnames(gp_coords))) {
-              private$cov_par_names <- c(private$cov_par_names,paste0("GP_range_",2:private$dim_coords))
-            } else {
-              private$cov_par_names <- c(private$cov_par_names,paste0("GP_range_",colnames(gp_coords)[2:private$dim_coords]))
-            }
+          if (private$cov_function == "hurst_ard" && private$dim_coords > 1L) {
+            private$cov_par_names <- c(private$cov_par_names,paste0("GP_range_",2:private$dim_coords))
           }
         } else {
           private$cov_par_names <- c(private$cov_par_names,"GP_var", "GP_range")
@@ -997,110 +1251,35 @@ gpb.GPModel <- R6::R6Class(
           private$num_gp_rand_coef <- as.integer(dim(gp_rand_coef_data)[2])
           private$gp_rand_coef_data <- gp_rand_coef_data
           gp_rand_coef_data <- as.vector(matrix(private$gp_rand_coef_data)) #convert to correct format for sending to C
+          # The covariance parameters of a random coefficient GP have the name of the random
+          #   coefficient followed by the same suffixes as the ones of the corresponding intercept GP
+          if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time") {
+            par_name_suffixes <- c("_var", "_range_time", "_range_space")
+          } else if (private$cov_function == "matern_ard" | private$cov_function == "gaussian_ard" | 
+                     private$cov_function == "exponential_ard") {
+            par_name_suffixes <- c("_var", paste0("_range_",1:private$dim_coords))
+          } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
+            par_name_suffixes <- "_var"
+          } else if (private$cov_function == "matern_estimate_shape") {
+            par_name_suffixes <- c("_var", "_range", "_smoothness")
+          } else if (private$cov_function == "matern_ard_estimate_shape") {
+            par_name_suffixes <- c("_var", paste0("_range_",1:private$dim_coords), "_smoothness")
+          } else if (private$cov_function == "hurst" || private$cov_function == "hurst_ard") {
+            par_name_suffixes <- c("_var", "_H")
+            if (private$cov_function == "hurst_ard" && private$dim_coords > 1L) {
+              par_name_suffixes <- c(par_name_suffixes, paste0("_range_",2:private$dim_coords))
+            }
+          } else {
+            par_name_suffixes <- c("_var", "_range")
+          }
           for (ii in 1:private$num_gp_rand_coef) {
             if (is.null(colnames(private$gp_rand_coef_data))) {
-              if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time") {
-                private$cov_par_names <- c(private$cov_par_names,
-                                           paste0("GP_rand_coef_nb_", ii,"_var"),
-                                           paste0("GP_rand_coef_nb_", ii,"_range_time"),
-                                           paste0("GP_rand_coef_nb_", ii,"_range_space"))
-              } else if (private$cov_function == "matern_ard" | private$cov_function == "gaussian_ard" | 
-                         private$cov_function == "exponential_ard") {
-                if (is.null(colnames(gp_coords))) {
-                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                             paste0(paste0("GP_rand_coef_nb_", ii,"_var"),1:private$dim_coords))
-                } else {
-                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                             paste0(paste0("GP_rand_coef_nb_", ii,"_range"),colnames(gp_coords)))
-                }
-              } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
-                private$cov_par_names <- c(private$cov_par_names,
-                                           paste0("GP_rand_coef_nb_", ii,"_var"))
-              } else if (private$cov_function == "matern_estimate_shape") {
-                private$cov_par_names <- c(private$cov_par_names,
-                                           paste0("GP_rand_coef_nb_", ii,"_var"),
-                                           paste0("GP_rand_coef_nb_", ii,"_range"),
-                                           paste0("GP_rand_coef_nb_", ii,"_smoothness"))
-              } else if (private$cov_function == "matern_ard_estimate_shape") {
-                if (is.null(colnames(gp_coords))) {
-                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                             paste0(paste0("GP_rand_coef_nb_", ii,"_var"),1:private$dim_coords),
-                                             paste0("GP_rand_coef_nb_", ii,"_smoothness"))
-                } else {
-                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                             paste0(paste0("GP_rand_coef_nb_", ii,"_range"),colnames(gp_coords)),
-                                             paste0("GP_rand_coef_nb_", ii,"_smoothness"))
-                }
-              }  else if (private$cov_function == "hurst" || private$cov_function == "hurst_ard") {
-                private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                           paste0("GP_rand_coef_nb_", ii,"_H"))
-                if (private$cov_function == "hurst_ard") {
-                  if (is.null(colnames(gp_coords))) {
-                    private$cov_par_names <- c(private$cov_par_names, 
-                                               paste0(paste0("GP_rand_coef_nb_", ii,"_var"),2:private$dim_coords))
-                  } else {
-                    private$cov_par_names <- c(private$cov_par_names, 
-                                               paste0(paste0("GP_rand_coef_nb_", ii,"_range"),colnames(gp_coords)[2:private$dim_coords]))
-                  }
-                }
-              }
-              else {
-                private$cov_par_names <- c(private$cov_par_names,
-                                           paste0("GP_rand_coef_nb_", ii,"_var"),
-                                           paste0("GP_rand_coef_nb_", ii,"_range"))
-              }
+              rand_coef_name <- paste0("GP_rand_coef_nb_", ii)
             } else {
-              if (private$cov_function == "matern_space_time" | private$cov_function == "exponential_space_time") {
-                private$cov_par_names <- c(private$cov_par_names,
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"),
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range_time"),
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range_space"))
-              } else if (private$cov_function == "matern_ard" | private$cov_function == "gaussian_ard" | 
-                         private$cov_function == "exponential_ard") {
-                if (is.null(colnames(gp_coords))) {
-                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                             paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_var"),1:private$dim_coords))
-                } else {
-                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                             paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_range"),colnames(gp_coords)))
-                }
-              } else if (private$cov_function == "wendland" || private$cov_function == "linear" || private$cov_function == "linear_no_woodbury") {
-                private$cov_par_names <- c(private$cov_par_names,
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"))
-              }  else if (private$cov_function == "matern_estimate_shape") {
-                private$cov_par_names <- c(private$cov_par_names,
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"),
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range"),
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_smoothness"))
-              } else if (private$cov_function == "matern_ard_estimate_shape") {
-                if (is.null(colnames(gp_coords))) {
-                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                             paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_var"),1:private$dim_coords),
-                                             paste0("GP_rand_coef_nb_", ii,"_smoothness"))
-                } else {
-                  private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                             paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_range"),colnames(gp_coords)),
-                                             paste0("GP_rand_coef_nb_", ii,"_smoothness"))
-                }
-              } else if (private$cov_function == "hurst" || private$cov_function == "hurst_ard") {
-                private$cov_par_names <- c(private$cov_par_names,paste0("GP_rand_coef_nb_", ii,"_var"), 
-                                           paste0("GP_rand_coef_nb_", ii,"_H"))
-                if (private$cov_function == "hurst_ard") {
-                  if (is.null(colnames(gp_coords))) {
-                    private$cov_par_names <- c(private$cov_par_names,
-                                               paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_var"),2:private$dim_coords))
-                  } else {
-                    private$cov_par_names <- c(private$cov_par_names, 
-                                               paste0(paste0("GP_rand_coef_nb_", colnames(private$gp_rand_coef_data)[ii],"_range"),colnames(gp_coords)[2:private$dim_coords]))
-                  }
-                }
-              } else {
-                private$cov_par_names <- c(private$cov_par_names,
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_var"),
-                                           paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii],"_range"))
-              }
+              rand_coef_name <- paste0("GP_rand_coef_", colnames(private$gp_rand_coef_data)[ii])
             }
-            private$re_comp_names <- c(private$re_comp_names,paste0("GP_rand_coef_nb_", ii))
+            private$cov_par_names <- c(private$cov_par_names, paste0(rand_coef_name, par_name_suffixes))
+            private$re_comp_names <- c(private$re_comp_names, rand_coef_name)
           }
         } # End set data for GP random coefficients
       } # End set data for Gaussian process part
@@ -1154,6 +1333,35 @@ gpb.GPModel <- R6::R6Class(
           stop("GPModel: Can only use ", sQuote("vector"), " as ", sQuote("weights"))
         }
       }
+      # Set up additional likelihood data (stored column-major as a matrix with one row per data point)
+      num_additional_likelihood_data <- 0L
+      if (!is.null(additional_likelihood_data)) {
+        if (is.data.frame(additional_likelihood_data)) {
+          additional_likelihood_data <- as.matrix(additional_likelihood_data)
+        }
+        # a list is also a vector in R, but it cannot be converted to a numeric matrix
+        if (is.list(additional_likelihood_data)) {
+          stop("GPModel: Can only use ", sQuote("vector"), " or ", sQuote("matrix"), " as ", sQuote("additional_likelihood_data"),
+               ", but a ", sQuote("list"), " was provided")
+        }
+        if (!is.numeric(additional_likelihood_data) && !is.logical(additional_likelihood_data)) {
+          stop("GPModel: ", sQuote("additional_likelihood_data"), " must be numeric")
+        }
+        if (is.vector(additional_likelihood_data)) {
+          additional_likelihood_data <- matrix(additional_likelihood_data, ncol = 1)
+        }
+        if (!is.matrix(additional_likelihood_data)) {
+          stop("GPModel: Can only use ", sQuote("vector"), " or ", sQuote("matrix"), " as ", sQuote("additional_likelihood_data"))
+        }
+        if (dim(additional_likelihood_data)[1] != private$num_data) {
+          stop("GPModel: Number of rows of ", sQuote("additional_likelihood_data"), " does not match number of data points")
+        }
+        if (storage.mode(additional_likelihood_data) != "double") {
+          storage.mode(additional_likelihood_data) <- "double"
+        }
+        private$additional_likelihood_data <- additional_likelihood_data
+        num_additional_likelihood_data <- as.integer(dim(additional_likelihood_data)[2])
+      }
       private$likelihood_learning_rate <- as.numeric(likelihood_learning_rate)
       private$determine_num_cov_pars(likelihood)
       if (is.null(private$likelihood_additional_param)) {
@@ -1182,6 +1390,7 @@ gpb.GPModel <- R6::R6Class(
         , private$num_gp_rand_coef
         , private$cov_function
         , private$cov_fct_shape
+        , private$cov_fct_order
         , private$gp_approx
         , private$cov_fct_taper_range
         , private$cov_fct_taper_shape
@@ -1199,6 +1408,8 @@ gpb.GPModel <- R6::R6Class(
         , private$has_weights
         , private$weights
         , private$likelihood_learning_rate
+        , num_additional_likelihood_data
+        , private$additional_likelihood_data
       )
       # Check whether the handle was created properly if it was not stopped earlier by a stop call
       if (gpb.is.null.handle(handle)) {
@@ -1217,10 +1428,22 @@ gpb.GPModel <- R6::R6Class(
         private$gp_rand_coef_data <- NULL
         private$cluster_ids <- NULL
         private$weights <- NULL
+        private$additional_likelihood_data <- NULL
       }
       if (private$model_has_been_loaded_from_saved_file) {
         # pseudo call to fit to save things in C++ 
         params <- model_list[["params"]]
+        # Before the internal default-value sentinel was changed to -999, any non-positive value of
+        #   these parameters was a request for the internal default (the former default was -1), so a
+        #   saved model can contain -1, another negative number, or 0, all of which are rejected now
+        legacy_sentinels <- list(delta_rel_conv = -999., lr_cov = -999.,
+                                 fitc_piv_chol_preconditioner_rank = -999L, m_lbfgs = -999L,
+                                 delta_conv_mode_finding = -999.)
+        for (param_name in names(legacy_sentinels)) {
+          if (!is.null(params[[param_name]]) && params[[param_name]] <= 0) {
+            params[[param_name]] <- legacy_sentinels[[param_name]]
+          }
+        }
         params[["maxit"]] <- 0
         if (private$has_covariates) {
           X_loaded <- private$X_loaded_from_file
@@ -1307,10 +1530,7 @@ gpb.GPModel <- R6::R6Class(
         } else {
           private$coef_names <- colnames(X)
         }
-        if (private$num_sets_fe == 2) {
-          second_block_suffix <- if (isTRUE(private$second_fe_block_is_zero_model)) "_zero" else "_scale"
-          private$coef_names <- c(private$coef_names, paste0(private$coef_names, second_block_suffix))
-        }
+        private$coef_names <- private$append_extra_fe_block_suffixes(private$coef_names)
         X <- as.vector(matrix(X))#matrix() is needed in order that all values are contiguous in memory (when colnames is not NULL)
       } else {
         private$has_covariates <- FALSE
@@ -1459,7 +1679,7 @@ gpb.GPModel <- R6::R6Class(
         , optimizer_cov_c_str
         , private$params[["momentum_offset"]]
         , private$params[["convergence_criterion"]]
-        , private$num_coef
+        , private$num_covariates
         , private$params[["init_coef"]]
         , private$params[["lr_coef"]]
         , private$params[["acc_rate_coef"]]
@@ -1478,6 +1698,13 @@ gpb.GPModel <- R6::R6Class(
         , private$params[["estimate_cov_par_index"]]
         , private$params[["m_lbfgs"]]
         , private$params[["delta_conv_mode_finding"]]
+        , private$params[["max_num_restarts_lbfgs"]]
+        , private$params[["cold_restart_lbfgs"]]
+        , private$params[["cg_convergence_criterion"]]
+        , private$params[["cg_rel_tol"]]
+        , private$params[["cg_abs_tol"]]
+        , private$params[["cg_multi_rhs_convergence"]]
+        , private$params[["reset_modes_line_search_lbfgs"]]
       )
       return(invisible(self))
     },
@@ -1624,6 +1851,9 @@ gpb.GPModel <- R6::R6Class(
     set_prediction_data = function(vecchia_pred_type = NULL,
                                    num_neighbors_pred = NULL,
                                    cg_delta_conv_pred = NULL,
+                                   cg_convergence_criterion_pred = NULL,
+                                   cg_rel_tol_pred = NULL,
+                                   cg_abs_tol_pred = NULL,
                                    nsim_var_pred = NULL,
                                    rank_pred_approx_matrix_lanczos = NULL,
                                    group_data_pred = NULL,
@@ -1796,6 +2026,21 @@ gpb.GPModel <- R6::R6Class(
       if (!is.null(cg_delta_conv_pred)) {
         private$cg_delta_conv_pred <- as.numeric(cg_delta_conv_pred)
       }
+      if (!is.null(cg_convergence_criterion_pred)) {
+        if (!is.character(cg_convergence_criterion_pred)) {
+          stop("set_prediction_data: Can only use ", sQuote("character"), " as ", sQuote("cg_convergence_criterion_pred"))
+        }
+        if (!(cg_convergence_criterion_pred %in% c("absolute", "relative"))) {
+          stop("set_prediction_data: ", sQuote("cg_convergence_criterion_pred"), " must be ", sQuote("absolute"), " or ", sQuote("relative"))
+        }
+        private$cg_convergence_criterion_pred <- cg_convergence_criterion_pred
+      }
+      if (!is.null(cg_rel_tol_pred)) {
+        private$cg_rel_tol_pred <- as.numeric(cg_rel_tol_pred)
+      }
+      if (!is.null(cg_abs_tol_pred)) {
+        private$cg_abs_tol_pred <- as.numeric(cg_abs_tol_pred)
+      }
       if (!is.null(nsim_var_pred)) {
         private$nsim_var_pred <- as.integer(nsim_var_pred)
       }
@@ -1817,6 +2062,9 @@ gpb.GPModel <- R6::R6Class(
         , private$cg_delta_conv_pred
         , private$nsim_var_pred
         , private$rank_pred_approx_matrix_lanczos
+        , private$cg_convergence_criterion_pred
+        , private$cg_rel_tol_pred
+        , private$cg_abs_tol_pred
       )
       return(invisible(self))
     },
@@ -2330,6 +2578,14 @@ gpb.GPModel <- R6::R6Class(
       }
       return(private$weights)
     },
+
+    get_additional_likelihood_data = function() {
+      if(isTRUE(private$free_raw_data)){
+        stop("GPModel: cannot return ", sQuote("additional_likelihood_data"), ",
+             please set ", sQuote("free_raw_data = FALSE"), " when you create the ", sQuote("GPModel"))
+      }
+      return(private$additional_likelihood_data)
+    },
     
     get_response_data = function() {
       response_data <- numeric(private$num_data)
@@ -2446,6 +2702,9 @@ gpb.GPModel <- R6::R6Class(
     },
     
     can_calculate_standard_errors_cov_pars = function() {
+      if (self$get_likelihood_name() == "asymmetric_laplace") {
+        return(FALSE)# no standard errors for quantile regression, see 'can_calculate_standard_errors_coef'
+      }
       out <- integer(1)
       .Call(
         GPB_CanCalculateStandardErrorsCovPars_R
@@ -2456,6 +2715,9 @@ gpb.GPModel <- R6::R6Class(
     },
 
     can_calculate_standard_errors_aux_pars = function() {
+      if (self$get_likelihood_name() == "asymmetric_laplace") {
+        return(FALSE)# no standard errors for quantile regression, see 'can_calculate_standard_errors_coef'
+      }
       out <- integer(1)
       .Call(
         GPB_CanCalculateStandardErrorsAuxPars_R
@@ -2465,8 +2727,22 @@ gpb.GPModel <- R6::R6Class(
       return(as.logical(out))
     },
 
+    # For quantile regression ('asymmetric_laplace'), no standard errors are calculated: the (approximate)
+    #   marginal likelihood is a pseudo-likelihood which is not smooth, and standard errors obtained from its
+    #   (approximated) Hessian are not valid
     can_calculate_standard_errors_coef = function() {
       return(self$get_likelihood_name() != "asymmetric_laplace")
+    },
+
+    set_used_in_gpboost_algorithm = function() {
+      # Standard errors of covariance and auxiliary parameters cannot be calculated for a model that is used
+      #   in the GPBoost algorithm since they require the fixed effects given by the tree ensemble
+      private$used_in_gpboost_algorithm <- TRUE
+      .Call(
+        GPB_SetUsedInGPBoostAlgorithm_R
+        , private$handle
+      )
+      return(invisible(NULL))
     },
 
     get_num_aux_pars = function() {
@@ -2558,9 +2834,11 @@ gpb.GPModel <- R6::R6Class(
       model_list[["cov_function"]] <- private$cov_function
       model_list[["fidelity_specific_mean"]] <- private$fidelity_specific_mean
       model_list[["cov_fct_shape"]] <- private$cov_fct_shape
+      model_list[["cov_fct_order"]] <- private$cov_fct_order
       model_list[["gp_approx"]] <- private$gp_approx
       model_list[["matrix_inversion_method"]] <- private$matrix_inversion_method
       model_list[["weights"]] <- private$weights
+      model_list[["additional_likelihood_data"]] <- private$additional_likelihood_data
       model_list[["likelihood_learning_rate"]] <- private$likelihood_learning_rate
       model_list[["cov_fct_taper_range"]] <- private$cov_fct_taper_range
       model_list[["cov_fct_taper_shape"]] <- private$cov_fct_taper_shape
@@ -2595,7 +2873,7 @@ gpb.GPModel <- R6::R6Class(
                                    "ind_effect_group_rand_coef",
                                    "drop_intercept_group_rand_effect",
                                    "cluster_ids", "coefs", "X", "nb_groups", "aux_pars", 
-                                   "weights", "offset")
+                                   "weights", "offset", "additional_likelihood_data")
       for (feature in MAYBE_CONVERT_TO_VECTOR) {
         if (!is.null(model_list[[feature]])) {
           if (is.vector(model_list[[feature]])) {
@@ -2630,9 +2908,12 @@ gpb.GPModel <- R6::R6Class(
       # not interleaved with the output below
       cov_pars <- self$get_cov_pars(std_err = std_err)
       has_covariates <- private$has_covariates
+      # standard errors of the regression coefficients cannot be calculated for all likelihoods (e.g., not for
+      #   'asymmetric_laplace'). 'get_coef' then returns only the estimates
+      std_err_coef <- std_err && self$can_calculate_standard_errors_coef()
       if (has_covariates) {
-        coefs <- self$get_coef(std_err = std_err)
-        if (std_err) {
+        coefs <- self$get_coef(std_err = std_err_coef)
+        if (std_err_coef) {
           z_values <- coefs[1,] / coefs[2,]
           p_values <- 2 * exp(pnorm(-abs(z_values), log.p = TRUE))
         }
@@ -2650,8 +2931,15 @@ gpb.GPModel <- R6::R6Class(
         aic <- 2*npar - 2*ll
         bic <- npar*log(self$get_num_data()) - 2*ll
       }
-      no_convergence <- (!private$model_has_been_loaded_from_saved_file) &&
-        (private$params$maxit == self$get_num_optim_iter())
+      # 0 = converged, 1 = the maximal number of iterations has been reached, 2 = no convergence since the
+      #   line search of an lbfgs optimizer has not been successful and it could not be verified that nothing
+      #   more can be gained (i.e., restarts have either not been done or they still improved the log-likelihood
+      #   when the last one was done). Note: the number of iterations cannot be used for determining this since
+      #   it is the sum over all restarts if 'max_num_restarts_lbfgs' > 0
+      convergence_status <- 0L
+      if (!private$model_has_been_loaded_from_saved_file && model_fitted) {
+        convergence_status <- private$get_convergence_status()
+      }
 
       # Now print everything
       cat("=====================================================\n")
@@ -2697,7 +2985,7 @@ gpb.GPModel <- R6::R6Class(
       if (has_covariates) {
         cat("-----------------------------------------------------\n")
         cat("Linear regression coefficients (fixed effects):\n")
-        if (std_err) {
+        if (std_err_coef) {
           coefs_summary <- cbind(t(coefs),"z value"=z_values,"P(>|z|)"=p_values)
           print(round(coefs_summary,4))
         } else {
@@ -2717,9 +3005,20 @@ gpb.GPModel <- R6::R6Class(
           print(round(aux_pars,4))
         }
       }
-      if (no_convergence) {
+      if (convergence_status == 1L) {
         cat("-----------------------------------------------------\n")
         cat("Note: no convergence after the maximal number of iterations\n")
+      } else if (convergence_status == 2L) {
+        cat("-----------------------------------------------------\n")
+        if (is.null(private$params$max_num_restarts_lbfgs) || private$params$max_num_restarts_lbfgs <= 0) {
+          cat("Note: the line search of the optimizer has not been successful. The parameters can be a\n")
+          cat("      (local) optimum, but the optimizer can also have stopped prematurely. Set\n")
+          cat("      'max_num_restarts_lbfgs' to a value larger than 0 to check this\n")
+        } else {# restarts have been done and they still improved the objective function
+          cat("Note: no convergence, the restarts of the optimizer still improved the log-likelihood\n")
+          cat("      when the maximal number of restarts was reached. Consider increasing\n")
+          cat("      'max_num_restarts_lbfgs'\n")
+        }
       }
       cat("=====================================================\n")
     }
@@ -2727,6 +3026,19 @@ gpb.GPModel <- R6::R6Class(
   ), # end public
   
   private = list(
+    # Convergence status of the last parameter estimation: 0 = converged, 1 = the maximal number of
+    #   iterations has been reached, 2 = no convergence since the line search of an lbfgs optimizer has
+    #   not been successful and it could not be verified that nothing more can be gained (i.e., restarts
+    #   have either not been done or they still improved the log-likelihood when the last one was done)
+    get_convergence_status = function() {
+      convergence_status <- integer(1)
+      .Call(
+        GPB_GetConvergenceStatus_R
+        , private$handle
+        , convergence_status
+      )
+      return(convergence_status)
+    },
     handle = NULL,
     likelihood_additional_param = -999, # default is set in C++
     num_data = NULL,
@@ -2753,10 +3065,12 @@ gpb.GPModel <- R6::R6Class(
     is_ar1_multifidelity = FALSE,
     fidelity_specific_mean = FALSE,
     cov_fct_shape = 1.5,
+    cov_fct_order = 1L,
     gp_approx = "none",
     matrix_inversion_method = "default",
     has_weights = FALSE,
     weights = NULL,
+    additional_likelihood_data = NULL,
     likelihood_learning_rate = 1.,
     num_parallel_threads = -1L,
     GPU_use = FALSE,
@@ -2767,6 +3081,9 @@ gpb.GPModel <- R6::R6Class(
     vecchia_pred_type = NULL,
     num_neighbors_pred = -1,
     cg_delta_conv_pred = -1,
+    cg_convergence_criterion_pred = NULL, # default: inherit the rule used for the parameter estimation
+    cg_rel_tol_pred = -1,
+    cg_abs_tol_pred = -1,
     nsim_var_pred = -1,
     rank_pred_approx_matrix_lanczos = -1,
     num_ind_points = -1L, # default is set in C++
@@ -2784,7 +3101,6 @@ gpb.GPModel <- R6::R6Class(
     used_in_gpboost_algorithm = FALSE,
     y_loaded_from_file = NULL,
     cov_pars_loaded_from_file = NULL,
-    coefs_loaded_from_file = NULL,
     X_loaded_from_file = NULL,
     model_fitted = FALSE,
     current_neg_log_likelihood_loaded_from_file = NULL,
@@ -2819,6 +3135,10 @@ gpb.GPModel <- R6::R6Class(
           cg_max_num_it = -999L, # default value is set in C++
           cg_max_num_it_tridiag = -999L, # default value is set in C++
           cg_delta_conv = -999., # default value is set in C++
+          cg_convergence_criterion = "absolute",
+          cg_rel_tol = -999.,
+          cg_abs_tol = -999.,
+          cg_multi_rhs_convergence = "average",
           num_rand_vec_trace = -999L, # default value is set in C++
           reuse_rand_vec_trace = TRUE,
           seed_rand_vec_trace = 1L,
@@ -2827,13 +3147,26 @@ gpb.GPModel <- R6::R6Class(
           init_coef_aux_pars_from_iid_model = TRUE,
           estimate_cov_par_index = -1L,
           m_lbfgs = -999L, # default value is set in C++
+          max_num_restarts_lbfgs = -999L, # default value is set in C++
+          cold_restart_lbfgs = TRUE,
+          reset_modes_line_search_lbfgs = FALSE,
           delta_conv_mode_finding = -999 # default value is set in C++
     ),
     num_sets_re = 1,
     num_sets_fe = 1,
-    second_fe_block_is_zero_model = FALSE,
+    # Suffixes of the coefficient names of the additional fixed-effects-only predictors (blocks 2, 3, ...),
+    # in the order of the location parameter blocks. Length = num_sets_fe - 1
+    extra_fe_block_suffixes = character(0),
     iid_model = FALSE,
-    
+
+    # Append the coefficient names of the additional fixed-effects-only predictors to the base names
+    append_extra_fe_block_suffixes = function(base_names) {
+      for (block_suffix in private$extra_fe_block_suffixes) {
+        base_names <- c(base_names, paste0(base_names[1:private$num_covariates], block_suffix))
+      }
+      return(base_names)
+    },
+
     # Finalize will free up the handles
     finalize = function() {
       .Call(
@@ -2903,16 +3236,21 @@ gpb.GPModel <- R6::R6Class(
       }
       ## Check format of parameters
       numeric_params <- c("lr_cov", "acc_rate_cov", "delta_rel_conv",
-                          "lr_coef", "acc_rate_coef", "cg_delta_conv", "delta_conv_mode_finding")
+                          "lr_coef", "acc_rate_coef", "cg_delta_conv", "cg_rel_tol", "cg_abs_tol",
+                          "delta_conv_mode_finding")
       integer_params <- c("maxit", "nesterov_schedule_version",
                           "momentum_offset", "cg_max_num_it", "cg_max_num_it_tridiag",
                           "num_rand_vec_trace", "seed_rand_vec_trace",
                           "fitc_piv_chol_preconditioner_rank", "estimate_cov_par_index", 
-                          "m_lbfgs")
+                          "m_lbfgs", "max_num_restarts_lbfgs")
       character_params <- c("optimizer_cov", "convergence_criterion",
-                            "optimizer_coef", "cg_preconditioner_type")
+                            "optimizer_coef", "cg_preconditioner_type",
+                            "cg_convergence_criterion", "cg_multi_rhs_convergence")
+      allowed_values_params <- list(cg_convergence_criterion = c("absolute", "relative"),
+                                    cg_multi_rhs_convergence = c("average", "max", "per_rhs"))
       logical_params <- c("use_nesterov_acc", "trace",  
-                          "reuse_rand_vec_trace", "estimate_aux_pars", "init_coef_aux_pars_from_iid_model")
+                          "reuse_rand_vec_trace", "estimate_aux_pars", "init_coef_aux_pars_from_iid_model",
+                          "cold_restart_lbfgs", "reset_modes_line_search_lbfgs")
       if (!is.null(params[["init_cov_pars"]])) {
         if (is.vector(params[["init_cov_pars"]])) {
           if (storage.mode(params[["init_cov_pars"]]) != "double") {
@@ -2933,10 +3271,15 @@ gpb.GPModel <- R6::R6Class(
             storage.mode(params[["init_coef"]]) <- "double"
           }
           params[["init_coef"]] <- as.vector(params[["init_coef"]])
-          num_covariates <- as.integer(length(params[["init_coef"]]))
           if (is.null(private$num_covariates) | private$num_covariates==0) {
-            private$num_covariates <- num_covariates
-            private$num_coef <- private$num_covariates * private$num_sets_fe
+            # 'init_coef' contains one coefficient per covariate and per fixed effects predictor
+            num_coef <- as.integer(length(params[["init_coef"]]))
+            if (num_coef %% private$num_sets_fe != 0) {
+              stop("GPModel: Number of parameters in ", sQuote("init_coef"),
+                   " is not a multiple of the number of fixed effects predictors (", private$num_sets_fe, ")")
+            }
+            private$num_covariates <- as.integer(num_coef / private$num_sets_fe)
+            private$num_coef <- num_coef
           }
         } else {
           stop("GPModel: Can only use ", sQuote("vector"), " as ", sQuote("init_coef"))
@@ -2977,6 +3320,12 @@ gpb.GPModel <- R6::R6Class(
         if (param %in% character_params & !is.null(params[[param]])) {
           if (!is.character(params[[param]])) {
             stop("GPModel: Can only use ", sQuote("character"), " as ", param)
+          }
+          if (param %in% names(allowed_values_params) &&
+              !(params[[param]] %in% allowed_values_params[[param]])) {
+            stop("GPModel: ", sQuote(param), " must be one of ",
+                 paste0(sQuote(allowed_values_params[[param]]), collapse = ", "),
+                 ", found ", sQuote(params[[param]]))
           }
         }
         if (param %in% logical_params & !is.null(params[[param]])) {
@@ -3065,6 +3414,7 @@ GPModel <- function(likelihood = "gaussian",
                     GPU_use = FALSE,
                     matrix_inversion_method = "default",
                     weights = NULL,
+                    additional_likelihood_data = NULL,
                     likelihood_learning_rate = 1.,
                     cov_fct_taper_range = 1.,
                     cov_fct_taper_shape = 1.,
@@ -3077,6 +3427,7 @@ GPModel <- function(likelihood = "gaussian",
                     cluster_ids = NULL,
                     likelihood_additional_param = NULL,
                     fidelity_specific_mean = TRUE,
+                    cov_fct_order = 1L,
                     num_data = NULL,
                     free_raw_data = FALSE,
                     vecchia_approx = NULL,
@@ -3094,11 +3445,13 @@ GPModel <- function(likelihood = "gaussian",
                             , cov_function = cov_function
                             , fidelity_specific_mean = fidelity_specific_mean
                             , cov_fct_shape = cov_fct_shape
+                            , cov_fct_order = cov_fct_order
                             , gp_approx = gp_approx
                             , num_parallel_threads = num_parallel_threads
                             , GPU_use = GPU_use
                             , matrix_inversion_method = matrix_inversion_method
                             , weights = weights
+                            , additional_likelihood_data = additional_likelihood_data
                             , likelihood_learning_rate = likelihood_learning_rate
                             , cov_fct_taper_range = cov_fct_taper_range
                             , cov_fct_taper_shape = cov_fct_taper_shape
@@ -3264,8 +3617,21 @@ fit.GPModel <- function(gp_model,
 #'                        gp_coords = coords, cov_function = "matern", cov_fct_shape = 1.5,
 #'                        likelihood = "gaussian", y = y, X = X1)
 #' summary(gp_model)
+#'
+#' #--------------------Continuous-time RW2 prior for a time series----------------
+#' # The prior is anchored at time t = 0, i.e., b(0) = b'(0) = 0
+#' time <- seq(0, 1, length.out = 100)
+#' y_time <- sin(2 * pi * time) + rnorm(100, sd = 0.2)
+#' X_time <- cbind(Intercept = 1, trend = time) # unpenalized intercept and linear trend
+#' # The covariance parameters are (error variance, GP variance, H), and H = 1.5 is not estimated
+#' gp_model <- fitGPModel(gp_coords = time, cov_function = "hurst", cov_fct_order = 2,
+#'                        likelihood = "gaussian", y = y_time, X = X_time,
+#'                        params = list(init_cov_pars = c(0.1, 1, 1.5),
+#'                                      estimate_cov_par_index = c(1, 1, 0)))
+#' summary(gp_model)
+#' # Continuous-time RW1 prior: cov_fct_order = 1, H fixed to 0.5, and only an intercept
 #' }
-#' 
+#'
 #' @rdname fitGPModel
 #' @author Fabio Sigrist
 #' @export fitGPModel
@@ -3283,6 +3649,7 @@ fitGPModel <- function(likelihood = "gaussian",
                        GPU_use = FALSE,
                        matrix_inversion_method = "default",
                        weights = NULL,
+                       additional_likelihood_data = NULL,
                        likelihood_learning_rate = 1.,
                        cov_fct_taper_range = 1.,
                        cov_fct_taper_shape = 1.,
@@ -3294,6 +3661,7 @@ fitGPModel <- function(likelihood = "gaussian",
                        seed = 0L,
                        cluster_ids = NULL,
                        fidelity_specific_mean = TRUE,
+                       cov_fct_order = 1L,
                        free_raw_data = FALSE,
                        y,
                        X = NULL,
@@ -3315,11 +3683,13 @@ fitGPModel <- function(likelihood = "gaussian",
                              , cov_function = cov_function
                              , fidelity_specific_mean = fidelity_specific_mean
                              , cov_fct_shape = cov_fct_shape
+                             , cov_fct_order = cov_fct_order
                              , gp_approx = gp_approx
                              , num_parallel_threads = num_parallel_threads
                              , GPU_use = GPU_use
                              , matrix_inversion_method = matrix_inversion_method
                              , weights = weights
+                             , additional_likelihood_data = additional_likelihood_data
                              , likelihood_learning_rate = likelihood_learning_rate
                              , cov_fct_taper_range = cov_fct_taper_range
                              , cov_fct_taper_shape = cov_fct_taper_shape
@@ -3676,6 +4046,9 @@ set_prediction_data <- function(gp_model,
                                 vecchia_pred_type = NULL,
                                 num_neighbors_pred = NULL,
                                 cg_delta_conv_pred = NULL,
+                                cg_convergence_criterion_pred = NULL,
+                                cg_rel_tol_pred = NULL,
+                                cg_abs_tol_pred = NULL,
                                 nsim_var_pred = NULL,
                                 rank_pred_approx_matrix_lanczos = NULL,
                                 group_data_pred = NULL,
@@ -3711,6 +4084,9 @@ set_prediction_data.GPModel <- function(gp_model
                                         , vecchia_pred_type = NULL
                                         , num_neighbors_pred = NULL
                                         , cg_delta_conv_pred = NULL
+                                        , cg_convergence_criterion_pred = NULL
+                                        , cg_rel_tol_pred = NULL
+                                        , cg_abs_tol_pred = NULL
                                         , nsim_var_pred = NULL
                                         , rank_pred_approx_matrix_lanczos = NULL
                                         , group_data_pred = NULL
@@ -3727,6 +4103,9 @@ set_prediction_data.GPModel <- function(gp_model
   invisible(gp_model$set_prediction_data(vecchia_pred_type = vecchia_pred_type
                                          , num_neighbors_pred = num_neighbors_pred
                                          , cg_delta_conv_pred = cg_delta_conv_pred
+                                         , cg_convergence_criterion_pred = cg_convergence_criterion_pred
+                                         , cg_rel_tol_pred = cg_rel_tol_pred
+                                         , cg_abs_tol_pred = cg_abs_tol_pred
                                          , nsim_var_pred = nsim_var_pred
                                          , rank_pred_approx_matrix_lanczos = rank_pred_approx_matrix_lanczos
                                          , group_data_pred = group_data_pred

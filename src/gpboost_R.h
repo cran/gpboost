@@ -635,6 +635,7 @@ GPBOOST_C_EXPORT SEXP LGBM_BoosterDumpModel_R(
 * \param num_gp_rand_coef Number of Gaussian process random coefficients
 * \param cov_fct Type of covariance function for Gaussian process (GP)
 * \param cov_fct_shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+* \param cov_fct_order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 * \param gp_approx Type of GP-approximation for handling large data
 * \param cov_fct_taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 * \param cov_fct_taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
@@ -652,6 +653,8 @@ GPBOOST_C_EXPORT SEXP LGBM_BoosterDumpModel_R(
 * \param has_weights True, if sample weights should be used
 * \param weights Sample weights
 * \param likelihood_learning_rate Likelihood learning rate for generalized Bayesian inference (only non-Gaussian likelihoods)
+* \param num_additional_likelihood_data Number of columns of 'additional_likelihood_data' (0 = none)
+* \param additional_likelihood_data Observation-level data required by some likelihoods in addition to the response variable (column-major)
 * \return REModel handle
 */
 GPBOOST_C_EXPORT SEXP GPB_CreateREModel_R(
@@ -670,6 +673,7 @@ GPBOOST_C_EXPORT SEXP GPB_CreateREModel_R(
 	SEXP num_gp_rand_coef,
 	SEXP cov_fct,
 	SEXP cov_fct_shape,
+	SEXP cov_fct_order,
 	SEXP gp_approx,
 	SEXP cov_fct_taper_range,
 	SEXP cov_fct_taper_shape,
@@ -686,7 +690,9 @@ GPBOOST_C_EXPORT SEXP GPB_CreateREModel_R(
 	SEXP GPU_use,
 	SEXP has_weights,
 	SEXP weights,
-	SEXP likelihood_learning_rate
+	SEXP likelihood_learning_rate,
+	SEXP num_additional_likelihood_data,
+	SEXP additional_likelihood_data
 );
 
 /*!
@@ -702,7 +708,7 @@ GPBOOST_C_EXPORT SEXP GPB_REModelFree_R(
 * \brief Set configuration parameters for the optimizer
 * \param handle Handle of REModel
 * \param init_cov_pars Initial values for covariance parameters of RE components
-* \param lr Learning rate for covariance parameters. If lr = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise)
+* \param lr Learning rate for covariance parameters. If lr = -999, internal default values are used (0.1 for "gradient_descent" and 1. otherwise). For "lbfgs", this is not a learning rate which multiplies every update but the length of the first trial step: it is divided by the norm of the gradient in the first iteration
 * \param acc_rate_cov Acceleration rate for covariance parameters for Nesterov acceleration (only relevant if nesterov_schedule_version == 0). If acc_rate_cov = -999, internal default values are used
 * \param max_iter Maximal number of iterations. If max_iter = -999, internal default values are used
 * \param delta_rel_conv Convergence tolerance. The algorithm stops if the relative change in eiher the log-likelihood or the parameters is below this value. For "bfgs", the L2 norm of the gradient is used instead of the relative change in the log-likelihood. If delta_rel_conv = -999, internal default values are used
@@ -730,7 +736,10 @@ GPBOOST_C_EXPORT SEXP GPB_REModelFree_R(
 * \param init_coef_aux_pars_from_iid_model If true, initialize regression coefficients and auxiliary parameters from an iid model
 * \param estimate_cov_par_index If estimate_cov_par_index[0] >= 0, some covariance parameters might not be estimated, estimate_cov_par_index[i] is then bool and indicates which ones are estimated
 * \param m_lbfgs Number of corrections to approximate the inverse Hessian matrix for the lbfgs optimizer. If m_lbfgs = -999, internal default values are used
+* \param max_num_restarts_lbfgs Maximal number of restarts of the lbfgs optimizers after they have terminated. If max_num_restarts_lbfgs = -999, internal default values are used
+* \param cold_restart_lbfgs If true, restarts of the lbfgs optimizers are "cold" restarts, otherwise "warm" restarts (only relevant if max_num_restarts_lbfgs > 0)
 * \param delta_conv_mode_finding Used for checking convergence in mode finding algorithm for non-Gaussian likelihoods. If delta_conv_mode_finding = -999, internal default values are used
+* \param reset_modes_line_search_lbfgs If true, the mode finding of every trial point of the line search of the "lbfgs" optimizers starts at the modes of the current iterate, and the objective function value of the optimizer is kept separate from the negative log-likelihood stored in the model
 * \return 0 when succeed, -1 when failure happens
 */
 GPBOOST_C_EXPORT SEXP GPB_SetOptimConfig_R(
@@ -764,7 +773,14 @@ GPBOOST_C_EXPORT SEXP GPB_SetOptimConfig_R(
 	SEXP init_coef_aux_pars_from_iid_model,
 	SEXP estimate_cov_par_index,
 	SEXP m_lbfgs,
-	SEXP delta_conv_mode_finding
+	SEXP delta_conv_mode_finding,
+	SEXP max_num_restarts_lbfgs,
+	SEXP cold_restart_lbfgs,
+	SEXP cg_convergence_criterion,
+	SEXP cg_rel_tol,
+	SEXP cg_abs_tol,
+	SEXP cg_multi_rhs_convergence,
+	SEXP reset_modes_line_search_lbfgs
 );
 
 /*!
@@ -826,6 +842,10 @@ GPBOOST_C_EXPORT SEXP GPB_GetCurrentNegLogLikelihood_R(
 	SEXP negll
 );
 
+GPBOOST_C_EXPORT SEXP GPB_SetUsedInGPBoostAlgorithm_R(
+	SEXP handle
+);
+
 GPBOOST_C_EXPORT SEXP GPB_CanCalculateStandardErrorsCovPars_R(
 	SEXP handle,
 	SEXP out
@@ -877,11 +897,24 @@ GPBOOST_C_EXPORT SEXP GPB_GetCoef_R(
 );
 
 /*!
-* \brief Get / export the number of iterations until convergence
-*   Note: You should pre-allocate memory for num_it (length = 1)
+* \brief Get / export the convergence status of the last parameter estimation
 * \param handle Handle of REModel
-* \param[out] num_it Number of iterations for convergence
-* \return 0 when succeed, -1 when failure happens
+* \param[out] convergence_status 0 = converged, 1 = the maximal number of iterations has been reached,
+*   2 = no convergence since the line search of an lbfgs optimizer has not been successful and it could not
+*   be verified that nothing more can be gained (i.e., restarts have either not been done or they still
+*   improved the objective function when the last one was done)
+* \return R NULL value
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetConvergenceStatus_R(
+	SEXP handle,
+	SEXP convergence_status
+);
+
+/*!
+* \brief Get the number of iterations for parameter estimation
+* \param handle Handle of REModel
+* \param[out] num_it Number of iterations for parameter estimation
+* \return R NULL value
 */
 GPBOOST_C_EXPORT SEXP GPB_GetNumIt_R(
 	SEXP handle,
@@ -898,6 +931,71 @@ GPBOOST_C_EXPORT SEXP GPB_GetNumIt_R(
 GPBOOST_C_EXPORT SEXP GPB_HasStdCylBesselK_R(
 	SEXP has_bessel
 );
+
+/*!
+* \brief Get the number of threads that OMP currently uses for parallelization
+*   Note: You should pre-allocate memory for num_threads (length = 1)
+* \param[out] num_threads Number of threads
+* \return R NULL value
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetNumParallelThreads_R(
+	SEXP num_threads
+);
+
+/*!
+* \brief Set the number of threads used by OMP and Eigen for the entire R process
+* \param num_threads Number of threads. If num_threads <= 0, the default number of threads is used
+* \return R NULL value
+*/
+GPBOOST_C_EXPORT SEXP GPB_SetNumParallelThreads_R(
+	SEXP num_threads
+);
+
+/*!
+* \brief Get the number of threads that models use when no number of threads is specified for them
+*   Note: You should pre-allocate memory for num_threads (length = 1)
+* \param[out] num_threads Number of threads
+* \return R NULL value
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetDefaultNumParallelThreads_R(
+	SEXP num_threads
+);
+
+/*!
+* \brief Get the automatically selected number of threads
+*   Note: You should pre-allocate memory for num_threads (length = 1)
+* \param[out] num_threads Number of threads
+* \return R NULL value
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetAutoNumParallelThreads_R(
+	SEXP num_threads
+);
+
+/*!
+* \brief Get the largest number of threads that GPBoost uses on its own
+*   Note: You should pre-allocate memory for num_threads (length = 1)
+* \param[out] num_threads Number of threads
+* \return R NULL value
+*/
+GPBOOST_C_EXPORT SEXP GPB_GetMaxNumParallelThreads_R(
+	SEXP num_threads
+);
+
+/*!
+* \brief Set the number of threads that models use when no number of threads is specified for them
+* \param num_threads Number of threads. If num_threads <= 0, the automatically selected number of threads is
+*   used again
+* \return R NULL value
+*/
+GPBOOST_C_EXPORT SEXP GPB_SetDefaultNumParallelThreads_R(
+	SEXP num_threads
+);
+
+/*!
+* \brief Do not write the message about the automatically selected number of threads
+* \return R NULL value
+*/
+GPBOOST_C_EXPORT SEXP GPB_SuppressAutoNumParallelThreadsMessage_R();
 
 /*!
 * \brief Set the data used for making predictions (useful if the same data is used repeatedly, e.g., in validation of GPBoost)
@@ -929,7 +1027,10 @@ GPBOOST_C_EXPORT SEXP GPB_SetPredictionData_R(
 	SEXP num_neighbors_pred,
 	SEXP cg_delta_conv_pred,
 	SEXP nsim_var_pred,
-	SEXP rank_pred_approx_matrix_lanczos
+	SEXP rank_pred_approx_matrix_lanczos,
+	SEXP cg_convergence_criterion_pred,
+	SEXP cg_rel_tol_pred,
+	SEXP cg_abs_tol_pred
 );
 
 /*!

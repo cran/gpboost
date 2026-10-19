@@ -1204,7 +1204,12 @@ class HistogramPool {
 #pragma omp parallel for schedule(static)
     for (int i = old_cache_size; i < cache_size; ++i) {
       OMP_LOOP_EX_BEGIN();
-      pool_[i].reset(new FeatureHistogram[train_data->num_features()]);
+      // The number of elements is converted to uint32_t so that its range is known from the
+      // type: the product with sizeof(FeatureHistogram) is then provably far below the
+      // largest object, and gcc no longer reports the size that the allocation would have if
+      // that product overflowed
+      pool_[i].reset(new FeatureHistogram[static_cast<uint32_t>(
+          std::max(0, train_data->num_features()))]);
       data_[i].resize(num_total_bin * 2);
       for (int j = 0; j < train_data->num_features(); ++j) {
         pool_[i][j].Init(data_[i].data() + offsets[j] * 2, &feature_metas_[j]);

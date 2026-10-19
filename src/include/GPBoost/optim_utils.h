@@ -221,6 +221,13 @@ namespace GPBoost {
 		vec_t cov_pars_;//vector of covariance parameters (only used in case the covariance parameters are not estimated)
 		bool profile_out_error_variance_;// If true, the error variance sigma is profiled out (= use closed-form expression for error / nugget variance)
 		bool profile_out_regression_coef_;// If true, the linear regression coefficients are profiled out (= use closed-form WLS expression)
+		std::vector<vec_t> modes_lag1_, SigmaI_modes_lag1_;// modes of the Laplace approximations at the last accepted iterate of the optimizer (see 'SetLag1Modes()')
+		bool modes_lag1_have_been_set_ = false;
+		std::vector<vec_t> modes_lo_, SigmaI_modes_lo_;// modes of the Laplace approximations at the best point found so far in a line search (see 'SaveModesLo()')
+		bool modes_lo_have_been_set_ = false;
+		double sigma2_lo_;// error variance at the best point found so far in a line search (see 'SaveProfiledOutVariablesLo()')
+		vec_t beta_lo_;// linear regression coefficients at the best point found so far in a line search (see 'SaveProfiledOutVariablesLo()')
+		bool profiled_out_variables_lo_have_been_set_ = false;
 
 		EvalLLforLBFGSpp(REModelTemplate<T_mat, T_chol>* re_model_templ,
 			const double* fixed_effects,
@@ -391,6 +398,91 @@ namespace GPBoost {
 		}
 
 		/*!
+		* \brief Save the current modes of the Laplace approximations as lag1 modes (does nothing for a Gaussian likelihood).
+		*		This is called once per accepted iterate of the optimizer. The modes are changed by every evaluation of the
+		*		objective function, in particular also by the candidate points of a line search. If a line search is not
+		*		successful and the optimizer thus goes back to the parameters of the previous iterate, the modes need to be
+		*		reset accordingly with 'ResetModesToLag1()'. Otherwise, the modes do not correspond to the parameters of the
+		*		optimizer, and the objective function value of the optimizer can then not be reproduced anymore
+		*/
+		void SetLag1Modes() {
+			re_model_templ_->SaveModeStates(modes_lag1_, SigmaI_modes_lag1_);
+			modes_lag1_have_been_set_ = true;
+		}
+
+		/*!
+		* \brief Report that a line search has not been successful, i.e., that no step length satisfying the convergence
+		*		criteria of the line search has been found. The optimizer then terminates without having converged
+		*/
+		void SetLineSearchHasNotBeenSuccessful() {
+			re_model_templ_->SetLineSearchHasNotBeenSuccessful(true);
+		}
+
+		/*!
+		* \brief Reset the modes of the Laplace approximations to their lag1 modes (see 'SetLag1Modes()')
+		*/
+		void ResetModesToLag1() {
+			if (modes_lag1_have_been_set_) {
+				re_model_templ_->RestoreModeStates(modes_lag1_, SigmaI_modes_lag1_);
+			}
+		}
+
+		/*!
+		* \brief True if the mode finding of every trial point of a line search starts at the modes of the current iterate
+		*		(see 'ResetModesToLag1()'), otherwise it starts at the modes of the previous trial point
+		*/
+		bool ResetModesEveryTrialPoint() const {
+			return re_model_templ_->ResetModesLineSearchLBFGS();
+		}
+
+		/*!
+		* \brief Save the current modes of the Laplace approximations as the modes of the best point found so far in a
+		*		line search ('x_lo' in 'LineSearchNocedalWright'). This function must be called whenever the current
+		*		point of a line search becomes this best point, since a line search can return the best point found so
+		*		far instead of the point that has been evaluated last (namely if the strong Wolfe condition is not
+		*		satisfied when the maximal number of line search iterations is reached). The modes are then restored
+		*		with 'RestoreModesLo()'. Otherwise, the modes correspond to a point that has been rejected by the line
+		*		search and not to the point that is returned by it
+		*/
+		void SaveModesLo() {
+			re_model_templ_->SaveModeStates(modes_lo_, SigmaI_modes_lo_);
+			modes_lo_have_been_set_ = true;
+		}
+
+		/*!
+		* \brief Restore the modes that have been saved with 'SaveModesLo()'. Note that all other quantities that
+		*		depend on the modes (and the covariance matrices) are recalculated for the restored modes when the
+		*		gradient is calculated the next time, see 'CalcGradPars()' in re_model_template.h
+		*/
+		void RestoreModesLo() {
+			if (modes_lo_have_been_set_) {
+				re_model_templ_->RestoreModeStates(modes_lo_, SigmaI_modes_lo_);
+			}
+		}
+
+		/*!
+		* \brief Save the current values of the profiled-out variables (if there are any such as nugget effects,
+		*		regression coefficients) as the ones of the best point found so far in a line search ('x_lo' in
+		*		'LineSearchNocedalWright'), see 'SaveModesLo()'. They are changed by every evaluation of the objective
+		*		function, exactly like the modes, and are restored with 'RestoreProfiledOutVariablesLo()'
+		*/
+		void SaveProfiledOutVariablesLo() {
+			re_model_templ_->SaveProfiledOutVariables(profile_out_error_variance_, profile_out_regression_coef_,
+				sigma2_lo_, beta_lo_);
+			profiled_out_variables_lo_have_been_set_ = true;
+		}
+
+		/*!
+		* \brief Restore the profiled-out variables that have been saved with 'SaveProfiledOutVariablesLo()'
+		*/
+		void RestoreProfiledOutVariablesLo() {
+			if (profiled_out_variables_lo_have_been_set_) {
+				re_model_templ_->RestoreProfiledOutVariables(profile_out_error_variance_, profile_out_regression_coef_,
+					sigma2_lo_, beta_lo_);
+			}
+		}
+
+		/*!
 		* \brief Indicates whether inducing points or/and correlation-based nearest neighbors for Vecchia approximation should be updated
 		* \param force_redermination If true, inducing points/neighbors are redetermined if applicaple irrespective of num_iter_
 		* \return True, if inducing points/nearest neighbors have been redetermined
@@ -558,6 +650,14 @@ namespace GPBoost {
 	* \param initial_step_factor Only for 'lbfgs': The initial step length in the first iteration is this factor divided by the search direction (i.e. gradient)
 	* \param reuse_m_bfgs_from_previous_call If true, the approximate Hessian for the LBFGS are kept at the values from a previous call and not re-initialized (applies only to LBFGSSolver)
 	* \param m_lbfgs Number of corrections to approximate the inverse Hessian matrix for the lbfgs optimizer
+	* \param max_num_restarts_lbfgs Maximal number of restarts of the lbfgs optimizers after they have terminated (only for 'lbfgs' and
+	*		'lbfgs_linesearch_nocedal_wright'). A restart continues from the current parameters with a re-initialized approximate Hessian.
+	*		Restarts are only done as long as the objective function still decreases by more than 'delta_rel_conv' and as long as the total
+	*		number of iterations is below 'max_iter'. This can help when the line search fails (e.g., for non-smooth approximate marginal
+	*		likelihoods such as the one of the 'asymmetric_laplace' likelihood), since lbfgs then terminates without having converged
+	* \param[out] convergence_criterion_satisfied True if the optimizer has terminated since its convergence criterion was satisfied,
+	*		false if it has terminated since the maximal number of iterations was reached. This cannot be inferred from 'num_it', which
+	*		is the same in both cases when the criterion is satisfied in the last allowed iteration
 	*/
 	template<typename T_mat, typename T_chol>
 	void OptimExternal(REModelTemplate<T_mat, T_chol>* re_model_templ,
@@ -578,8 +678,10 @@ namespace GPBoost {
 		const double* aux_pars,
 		bool has_covariates,
 		double initial_step_factor,
-		bool reuse_m_bfgs_from_previous_call, 
-		int m_lbfgs) {
+		bool reuse_m_bfgs_from_previous_call,
+		int m_lbfgs,
+		int max_num_restarts_lbfgs,
+		bool& convergence_criterion_satisfied) {
 		// Some checks
 		if (re_model_templ->EstimateAuxPars()) {
 			CHECK(num_cov_par + nb_aux_pars == (int)cov_pars.size());
@@ -640,16 +742,19 @@ namespace GPBoost {
 			settings.grad_err_tol = delta_rel_conv;
 			settings.rel_sol_change_tol = 1e-20;
 		}
+		//the optimizers of OptimLib return whether they converged ('error_reporting()' in external_libs/OptimLib),
+		//	which they also do when the criterion is satisfied in the last allowed iteration. The returned value only
+		//	covers the change in the objective function, though, and not the change in the parameters, see below
 		if (optimizer == "nelder_mead") {
-			optim::nm(pars_init, EvalLLforOptimLib<T_mat, T_chol>, &opt_data, settings);
+			convergence_criterion_satisfied = optim::nm(pars_init, EvalLLforOptimLib<T_mat, T_chol>, &opt_data, settings);
 		}
 		else if (optimizer == "bfgs_optim_lib") {
-			optim::bfgs(pars_init, EvalLLforOptimLib<T_mat, T_chol>, &opt_data, settings);
+			convergence_criterion_satisfied = optim::bfgs(pars_init, EvalLLforOptimLib<T_mat, T_chol>, &opt_data, settings);
 		}
 		else if (optimizer == "adam") {
 			settings.gd_settings.method = 6;
 			settings.gd_settings.ada_max = false;
-			optim::gd(pars_init, EvalLLforOptimLib<T_mat, T_chol>, &opt_data, settings);
+			convergence_criterion_satisfied = optim::gd(pars_init, EvalLLforOptimLib<T_mat, T_chol>, &opt_data, settings);
 		}
 		else if (optimizer == "lbfgs" || optimizer == "lbfgs_linesearch_nocedal_wright") {
 			LBFGSpp::LBFGSParam<double> param_LBFGSpp;
@@ -663,15 +768,91 @@ namespace GPBoost {
 			param_LBFGSpp.initial_step_factor = initial_step_factor;
 			EvalLLforLBFGSpp<T_mat, T_chol> ll_fun(re_model_templ, fixed_effects, learn_cov_aux_pars,
 				cov_pars.segment(0, num_cov_par), profile_out_error_variance, profile_out_regression_coef);
-			if (optimizer == "lbfgs") {
-				param_LBFGSpp.linesearch = 1;//LBFGS_LINESEARCH_BACKTRACKING_ARMIJO
-				LBFGSpp::LBFGSSolver<double, LBFGSpp::LineSearchBacktracking> solver(param_LBFGSpp);
-				num_it = solver.minimize(ll_fun, pars_init, neg_log_likelihood, reuse_m_bfgs_from_previous_call, re_model_templ->GetMBFGS());
-			}
-			else if (optimizer == "lbfgs_linesearch_nocedal_wright") {
-				param_LBFGSpp.linesearch = 3;//LBFGS_LINESEARCH_BACKTRACKING_STRONG_WOLFE
-				LBFGSpp::LBFGSSolver<double, LBFGSpp::LineSearchNocedalWright> solver(param_LBFGSpp);
-				num_it = solver.minimize(ll_fun, pars_init, neg_log_likelihood, reuse_m_bfgs_from_previous_call, re_model_templ->GetMBFGS());
+			// A single run of lbfgs can terminate without having converged, in particular when the line search fails
+			//	(this happens, e.g., for non-smooth approximate marginal likelihoods). 'max_num_restarts_lbfgs' restarts
+			//	are then done from the current parameters with a re-initialized approximate Hessian (the first search
+			//	direction after a restart is the steepest descent direction, which is always a descent direction). Nothing
+			//	else is changed ("warm" restart), see 'cold_restart_lbfgs' in re_model_template.h for "cold" restarts.
+			//	Restarting stops as soon as the objective function does not decrease by more than 'delta_rel_conv' anymore.
+			//	The best point found is returned together with its modes
+			num_it = 0;
+			bool do_restarts = max_num_restarts_lbfgs > 0, last_point_is_best = false;
+			double nll_lag1 = std::numeric_limits<double>::infinity(), nll_best = std::numeric_limits<double>::infinity();
+			vec_t pars_best, grad_dummy(pars_init.size());
+			std::vector<vec_t> modes_best, SigmaI_modes_best;// the modes corresponding to 'pars_best'
+			for (int restart = 0; restart <= max_num_restarts_lbfgs; ++restart) {
+				param_LBFGSpp.max_iterations = max_iter - num_it;//the restarts share the total budget of 'max_iter' iterations
+				bool reuse_m_bfgs = reuse_m_bfgs_from_previous_call && restart == 0;//restarts use a re-initialized approximate Hessian
+				int num_it_restart = 0;
+				// With 'reset_modes_line_search_lbfgs', the objective function value of the optimizer is a variable of its own.
+				//	Otherwise, it is 'neg_log_likelihood', the value stored in the model, which evaluations of the model can change
+				//	without the optimizer noticing it, e.g., the calculation of the gradient after an unsuccessful line search, which
+				//	finds the modes anew
+				const bool separate_objective_value = re_model_templ->ResetModesLineSearchLBFGS();
+				double nll_optimizer = neg_log_likelihood;
+				double& fx_optimizer = separate_objective_value ? nll_optimizer : neg_log_likelihood;
+				if (optimizer == "lbfgs") {
+					param_LBFGSpp.linesearch = 1;//LBFGS_LINESEARCH_BACKTRACKING_ARMIJO
+					LBFGSpp::LBFGSSolver<double, LBFGSpp::LineSearchBacktracking> solver(param_LBFGSpp);
+					num_it_restart = solver.minimize(ll_fun, pars_init, fx_optimizer, reuse_m_bfgs, re_model_templ->GetMBFGS());
+					convergence_criterion_satisfied = solver.CriterionSatisfied();
+					if (restart == 0) {
+						re_model_templ->SetConvergedFirstIterationAfterBacktracking(solver.ConvergedFirstIterationAfterBacktracking());
+					}
+				}
+				else if (optimizer == "lbfgs_linesearch_nocedal_wright") {
+					param_LBFGSpp.linesearch = 3;//LBFGS_LINESEARCH_BACKTRACKING_STRONG_WOLFE
+					LBFGSpp::LBFGSSolver<double, LBFGSpp::LineSearchNocedalWright> solver(param_LBFGSpp);
+					num_it_restart = solver.minimize(ll_fun, pars_init, fx_optimizer, reuse_m_bfgs, re_model_templ->GetMBFGS());
+					convergence_criterion_satisfied = solver.CriterionSatisfied();
+					if (restart == 0) {
+						re_model_templ->SetConvergedFirstIterationAfterBacktracking(solver.ConvergedFirstIterationAfterBacktracking());
+					}
+				}
+				if (separate_objective_value) {
+					neg_log_likelihood = nll_optimizer;
+				}
+				num_it += num_it_restart;
+				double nll_current = neg_log_likelihood;
+				if (do_restarts) {
+					// Keep track of the best restart. The modes are saved as well since mode finding can be start-dependent,
+					//	and the objective function value of this restart can thus only be reproduced when restoring the modes
+					//	together with the parameters below. Note: the modes correspond to the parameters returned by the
+					//	optimizer also when a line search has not been successful (see 'SetLag1Modes()' in optim_utils.h)
+					last_point_is_best = nll_current < nll_best;
+					if (last_point_is_best) {
+						nll_best = nll_current;
+						pars_best = pars_init;
+						re_model_templ->SaveModeStates(modes_best, SigmaI_modes_best);
+					}
+				}
+				// Note: the improvement is checked before the maximal number of restarts, see the corresponding comment
+				//	for the "cold" restarts in re_model_template.h
+				if (restart > 0) {// a restart is always done after the first run since it cannot be known whether lbfgs has terminated prematurely
+					double rel_improvement = (nll_lag1 - nll_current) / std::max(std::abs(nll_lag1), 1.);
+					if (rel_improvement <= delta_rel_conv) {
+						re_model_templ->SetRestartsHaveStoppedWithoutImprovement(true);//a restart did not improve the objective function anymore
+						break;
+					}
+				}
+				if (restart >= max_num_restarts_lbfgs || num_it >= max_iter) {
+					break;
+				}
+				nll_lag1 = nll_current;
+				string_t ll_str = re_model_templ->IsGaussLikelihood() ? "negative log-likelihood" : "approximate negative marginal log-likelihood";
+				Log::REDebug(" ");
+				Log::REDebug(("GPModel: the optimization is restarted ('warm' restart number %d) after %d iterations. "
+					"The optimization continues from the current parameters with a re-initialized approximate Hessian. "
+					"Current " + ll_str + ": %g ").c_str(),
+					restart + 1, num_it, nll_current);
+			}//end loop over restarts
+			if (do_restarts && !last_point_is_best && pars_best.size() > 0) {//'pars_best.size() == 0' if no restart has ever been the best one (e.g., if NA or Inf occurred in all of them)
+				// a restart can end at a worse point than a previous one -> return the best point found. The modes
+				//	corresponding to this point are restored such that the re-evaluation below reproduces the objective
+				//	function value obtained by the optimizer (mode finding is deterministic given the starting mode)
+				pars_init = pars_best;
+				re_model_templ->RestoreModeStates(modes_best, SigmaI_modes_best);
+				neg_log_likelihood = ll_fun(pars_init, grad_dummy, true, false);//re-evaluate to also reset the profiled-out variables and all quantities depending on the mode
 			}
 		}
 		//else if (optimizer == "adadelta") {// adadelta currently not supported as default settings do not always work
@@ -680,6 +861,14 @@ namespace GPBoost {
 		//}
 		if (optimizer != "lbfgs" && optimizer != "lbfgs_linesearch_nocedal_wright") {//only for optimizers from OptimLib
 			num_it = (int)settings.opt_iter;
+			//The optimizers of OptimLib stop when the error of one of their two convergence criteria is within its
+			//	tolerance or when the maximal number of iterations is reached. The value they return covers only the
+			//	first criterion ('rel_objfn_change' for 'nm', 'grad_err' for 'gd'), the error of the second one is
+			//	reported in 'opt_rel_sol_change'. Whichever of the two GPBoost has selected through
+			//	'convergence_criterion' is the one whose tolerance is not set to 1e-20 above, so the two conditions
+			//	together say whether the optimizer converged, for every criterion and also in the last iteration
+			convergence_criterion_satisfied = convergence_criterion_satisfied ||
+				settings.opt_rel_sol_change <= settings.rel_sol_change_tol;
 			neg_log_likelihood = settings.opt_fn_value;
 			if (profile_out_error_variance || profile_out_regression_coef) {
 				vec_t* grad_dummy = nullptr;

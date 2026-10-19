@@ -134,7 +134,7 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 			auto param = Config::Str2Map(parameters);
 			config_.Set(param);
 			if (config_.num_threads > 0) {
-				omp_set_num_threads(config_.num_threads);
+				GPBoost::SetNumParallelThreads(config_.num_threads);
 			}
 			// create boosting
 			if (config_.input_model.size() > 0) {
@@ -403,7 +403,7 @@ yamc::shared_lock<yamc::alternate::shared_mutex> lock(&mtx);
 			config_.Set(param);
 
 			if (config_.num_threads > 0) {
-				omp_set_num_threads(config_.num_threads);
+				GPBoost::SetNumParallelThreads(config_.num_threads);
 			}
 
 			if (param.count("objective")) {
@@ -1017,7 +1017,7 @@ int LGBM_DatasetCreateFromFile(const char* filename,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	DatasetLoader loader(config, nullptr, 1, filename);
 	if (reference == nullptr) {
@@ -1049,7 +1049,7 @@ int LGBM_DatasetCreateFromSampledColumn(double** sample_data,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	DatasetLoader loader(config, nullptr, 1, nullptr);
 	*out = loader.ConstructFromSampleData(sample_data, sample_indices, ncol, num_per_col,
@@ -1165,7 +1165,7 @@ int LGBM_DatasetCreateFromMats(int32_t nmat,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	std::unique_ptr<Dataset> ret;
 	int32_t total_nrow = 0;
@@ -1261,7 +1261,7 @@ int LGBM_DatasetCreateFromCSR(const void* indptr,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	std::unique_ptr<Dataset> ret;
 	auto get_row_fun = RowFunctionFromCSR<int>(indptr, indptr_type, indices, data, data_type, nindptr, nelem);
@@ -1333,7 +1333,7 @@ int LGBM_DatasetCreateFromCSRFunc(void* get_row_funptr,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	std::unique_ptr<Dataset> ret;
 	int32_t nrow = num_rows;
@@ -1408,7 +1408,7 @@ int LGBM_DatasetCreateFromCSC(const void* col_ptr,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	std::unique_ptr<Dataset> ret;
 	int32_t nrow = static_cast<int32_t>(num_row);
@@ -1493,7 +1493,7 @@ int LGBM_DatasetGetSubset(
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	auto full_dataset = reinterpret_cast<const Dataset*>(handle);
 	CHECK_GT(num_used_row_indices, 0);
@@ -1918,7 +1918,7 @@ int LGBM_BoosterPredictForFile(BoosterHandle handle,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	Booster* ref_booster = reinterpret_cast<Booster*>(handle);
 	ref_booster->Predict(start_iteration, num_iteration, predict_type, data_filename, data_has_header,
@@ -1997,7 +1997,7 @@ int LGBM_BoosterPredictForCSR(BoosterHandle handle,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	Booster* ref_booster = reinterpret_cast<Booster*>(handle);
 	auto get_row_fun = RowFunctionFromCSR<int>(indptr, indptr_type, indices, data, data_type, nindptr, nelem);
@@ -2031,7 +2031,7 @@ int LGBM_BoosterPredictSparseOutput(BoosterHandle handle,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	if (matrix_type == C_API_MATRIX_TYPE_CSR) {
 		if (num_col_or_row <= 0) {
@@ -2126,7 +2126,7 @@ int LGBM_BoosterPredictForCSRSingleRow(BoosterHandle handle,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	Booster* ref_booster = reinterpret_cast<Booster*>(handle);
 	auto get_row_fun = RowFunctionFromCSR<int>(indptr, indptr_type, indices, data, data_type, nindptr, nelem);
@@ -2159,7 +2159,7 @@ int LGBM_BoosterPredictForCSRSingleRowFastInit(BoosterHandle handle,
 		static_cast<int32_t>(num_col)));
 
 	if (fastConfig_ptr->config.num_threads > 0) {
-		omp_set_num_threads(fastConfig_ptr->config.num_threads);
+		GPBoost::SetNumParallelThreads(fastConfig_ptr->config.num_threads);
 	}
 
 	fastConfig_ptr->booster->SetSingleRowPredictor(start_iteration, num_iteration, predict_type, fastConfig_ptr->config);
@@ -2207,7 +2207,7 @@ int LGBM_BoosterPredictForCSC(BoosterHandle handle,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	int num_threads = OMP_NUM_THREADS();
 	int ncol = static_cast<int>(ncol_ptr - 1);
@@ -2252,7 +2252,7 @@ int LGBM_BoosterPredictForMat(BoosterHandle handle,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	Booster* ref_booster = reinterpret_cast<Booster*>(handle);
 	auto get_row_fun = RowPairFunctionFromDenseMatric(data, nrow, ncol, data_type, is_row_major);
@@ -2277,7 +2277,7 @@ int LGBM_BoosterPredictForMatSingleRow(BoosterHandle handle,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	Booster* ref_booster = reinterpret_cast<Booster*>(handle);
 	auto get_row_fun = RowPairFunctionFromDenseMatric(data, 1, ncol, data_type, is_row_major);
@@ -2303,7 +2303,7 @@ int LGBM_BoosterPredictForMatSingleRowFastInit(BoosterHandle handle,
 		ncol));
 
 	if (fastConfig_ptr->config.num_threads > 0) {
-		omp_set_num_threads(fastConfig_ptr->config.num_threads);
+		GPBoost::SetNumParallelThreads(fastConfig_ptr->config.num_threads);
 	}
 
 	fastConfig_ptr->booster->SetSingleRowPredictor(start_iteration, num_iteration, predict_type, fastConfig_ptr->config);
@@ -2343,7 +2343,7 @@ int LGBM_BoosterPredictForMats(BoosterHandle handle,
 	Config config;
 	config.Set(param);
 	if (config.num_threads > 0) {
-		omp_set_num_threads(config.num_threads);
+		GPBoost::SetNumParallelThreads(config.num_threads);
 	}
 	Booster* ref_booster = reinterpret_cast<Booster*>(handle);
 	auto get_row_fun = RowPairFunctionFromDenseRows(data, ncol, data_type);
@@ -2698,6 +2698,7 @@ int GPB_CreateREModel(int32_t num_data,
 	int32_t num_gp_rand_coef,
 	const char* cov_fct,
 	double cov_fct_shape,
+	int cov_fct_order,
 	const char* gp_approx,
 	double cov_fct_taper_range,
 	double cov_fct_taper_shape,
@@ -2715,6 +2716,8 @@ int GPB_CreateREModel(int32_t num_data,
 	bool has_weights,
 	const double* weights,
 	double likelihood_learning_rate,
+	int num_additional_likelihood_data,
+	const double* additional_likelihood_data,
 	REModelHandle* out) {
 	API_BEGIN();
 	std::unique_ptr<REModel> ret;
@@ -2733,6 +2736,7 @@ int GPB_CreateREModel(int32_t num_data,
 		num_gp_rand_coef,
 		cov_fct,
 		cov_fct_shape,
+		cov_fct_order,
 		gp_approx,
 		cov_fct_taper_range,
 		cov_fct_taper_shape,
@@ -2749,7 +2753,9 @@ int GPB_CreateREModel(int32_t num_data,
 		GPU_use,
 		has_weights,
 		weights,
-		likelihood_learning_rate));
+		likelihood_learning_rate,
+		num_additional_likelihood_data,
+		additional_likelihood_data));
 	*out = ret.release();
 	API_END();
 }
@@ -2790,7 +2796,14 @@ int GPB_SetOptimConfig(REModelHandle handle,
 	bool init_coef_aux_pars_from_iid_model,
 	const int* estimate_cov_par_index,
 	int m_lbfgs,
-	double delta_conv_mode_finding) {
+	double delta_conv_mode_finding,
+	int max_num_restarts_lbfgs,
+	bool cold_restart_lbfgs,
+	const char* cg_convergence_criterion,
+	double cg_rel_tol,
+	double cg_abs_tol,
+	const char* cg_multi_rhs_convergence,
+	bool reset_modes_line_search_lbfgs) {
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	ref_remodel->SetOptimConfig(init_cov_pars,
@@ -2822,7 +2835,14 @@ int GPB_SetOptimConfig(REModelHandle handle,
 		init_coef_aux_pars_from_iid_model,
 		estimate_cov_par_index,
 		m_lbfgs, 
-		delta_conv_mode_finding);
+		delta_conv_mode_finding,
+		max_num_restarts_lbfgs,
+		cold_restart_lbfgs,
+		cg_convergence_criterion,
+		cg_rel_tol,
+		cg_abs_tol,
+		cg_multi_rhs_convergence,
+		reset_modes_line_search_lbfgs);
 	API_END();
 }
 
@@ -2907,6 +2927,14 @@ int GPB_GetCoef(REModelHandle handle,
 	API_END();
 }
 
+int GPB_GetConvergenceStatus(REModelHandle handle,
+	int* convergence_status) {
+	API_BEGIN();
+	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
+	convergence_status[0] = ref_remodel->GetConvergenceStatus();
+	API_END();
+}
+
 int GPB_GetNumIt(REModelHandle handle,
 	int* num_it) {
 	API_BEGIN();
@@ -2918,6 +2946,53 @@ int GPB_GetNumIt(REModelHandle handle,
 int GPB_HasStdCylBesselK(int* has_bessel) {
 	API_BEGIN();
 	has_bessel[0] = HAS_STD_CYL_BESSEL_K;
+	API_END();
+}
+
+int GPB_GetNumParallelThreads(int* num_threads) {
+	API_BEGIN();
+	num_threads[0] = omp_get_max_threads();
+	API_END();
+}
+
+int GPB_SetNumParallelThreads(int num_threads) {
+	API_BEGIN();
+	//the default is determined before the number of threads is changed below, and also when it is not
+	//	needed here: it must not be derived from a number of threads that a previous call has already set
+	const int num_threads_default = GPBoost::DefaultNumParallelThreads();
+	int num_threads_used = num_threads > 0 ? num_threads : num_threads_default;
+	GPBoost::SetNumParallelThreads(num_threads_used);
+	Eigen::setNbThreads(num_threads_used);
+	API_END();
+}
+
+int GPB_GetDefaultNumParallelThreads(int* num_threads) {
+	API_BEGIN();
+	num_threads[0] = GPBoost::DefaultNumParallelThreads();
+	API_END();
+}
+
+int GPB_GetAutoNumParallelThreads(int* num_threads) {
+	API_BEGIN();
+	num_threads[0] = GPBoost::AutoNumParallelThreads();
+	API_END();
+}
+
+int GPB_GetMaxNumParallelThreads(int* num_threads) {
+	API_BEGIN();
+	num_threads[0] = GPBoost::MaxNumParallelThreads();
+	API_END();
+}
+
+int GPB_SetDefaultNumParallelThreads(int num_threads) {
+	API_BEGIN();
+	GPBoost::SetDefaultNumParallelThreads(num_threads);
+	API_END();
+}
+
+int GPB_SuppressAutoNumParallelThreadsMessage() {
+	API_BEGIN();
+	GPBoost::SuppressAutoNumParallelThreadsMessage();
 	API_END();
 }
 
@@ -2933,7 +3008,10 @@ int GPB_SetPredictionData(REModelHandle handle,
 	int num_neighbors_pred,
 	double cg_delta_conv_pred,
 	int nsim_var_pred,
-	int rank_pred_approx_matrix_lanczos) {
+	int rank_pred_approx_matrix_lanczos,
+	const char* cg_convergence_criterion_pred,
+	double cg_rel_tol_pred,
+	double cg_abs_tol_pred) {
 	API_BEGIN();
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	ref_remodel->SetPredictionData(num_data_pred,
@@ -2947,7 +3025,10 @@ int GPB_SetPredictionData(REModelHandle handle,
 		num_neighbors_pred,
 		cg_delta_conv_pred,
 		nsim_var_pred,
-		rank_pred_approx_matrix_lanczos);
+		rank_pred_approx_matrix_lanczos,
+		cg_convergence_criterion_pred,
+		cg_rel_tol_pred,
+		cg_abs_tol_pred);
 	API_END();
 }
 
@@ -3085,6 +3166,13 @@ int GPB_SetLikelihood(REModelHandle handle,
 	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
 	std::string likelihood_s = std::string(likelihood);
 	ref_remodel->SetLikelihood(likelihood_s);
+	API_END();
+}
+
+int GPB_SetUsedInGPBoostAlgorithm(REModelHandle handle) {
+	API_BEGIN();
+	REModel* ref_remodel = reinterpret_cast<REModel*>(handle);
+	ref_remodel->SetUsedInGPBoostAlgorithm();
 	API_END();
 }
 

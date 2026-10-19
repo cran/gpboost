@@ -20,6 +20,64 @@
 #endif
 namespace GPBoost {
 
+	/*!
+	* \brief Read-only view of the columns of a matrix that consists of two blocks of columns, without copying them into one
+	*		matrix: the first columns are those of the first block, the remaining ones those of the second block. A view can
+	*		also start at a column offset of another view. It is used for 'chol_ip_cross_cov' (the inverse of the Cholesky
+	*		factor of the inducing point matrix times the cross covariance) at the observed and the prediction locations
+	*/
+	class ColumnBlocksView {
+	public:
+		/*! \brief View of the columns of a single matrix */
+		ColumnBlocksView(const den_mat_t& first) : first_(&first), second_(nullptr), offset_(0), num_cols_(first.cols()) {}
+		/*! \brief View of the columns of two matrices with the same number of rows */
+		ColumnBlocksView(const den_mat_t& first, const den_mat_t& second) : first_(&first), second_(&second), offset_(0),
+			num_cols_(first.cols() + second.cols()) {
+			CHECK(first.rows() == second.rows() || first.cols() == 0 || second.cols() == 0);
+		}
+		/*! \brief View of 'num_cols' columns of this view starting at column 'offset' */
+		ColumnBlocksView MiddleCols(Eigen::Index offset, Eigen::Index num_cols) const {
+			CHECK(offset >= 0 && num_cols >= 0 && offset + num_cols <= num_cols_);
+			ColumnBlocksView view(*this);
+			view.offset_ += offset;
+			view.num_cols_ = num_cols;
+			return view;
+		}
+		Eigen::Index rows() const {
+			return (first_->cols() > 0 || second_ == nullptr) ? first_->rows() : second_->rows();
+		}
+		Eigen::Index cols() const {
+			return num_cols_;
+		}
+		den_mat_t::ConstColXpr col(Eigen::Index i) const {
+			const Eigen::Index j = offset_ + i;
+			return (j < first_->cols()) ? first_->col(j) : second_->col(j - first_->cols());
+		}
+		/*! \brief Copy of the columns of this view */
+		den_mat_t ToMatrix() const {
+			den_mat_t M(rows(), num_cols_);
+			for (Eigen::Index i = 0; i < num_cols_; ++i) {
+				M.col(i) = col(i);
+			}
+			return M;
+		}
+		/*! \brief The viewed matrix if this view consists of all columns of a single matrix, nullptr otherwise */
+		const den_mat_t* WholeMatrix() const {
+			if (offset_ == 0 && num_cols_ == first_->cols()) {
+				return first_;
+			}
+			if (second_ != nullptr && offset_ == first_->cols() && num_cols_ == second_->cols()) {
+				return second_;
+			}
+			return nullptr;
+		}
+	private:
+		const den_mat_t* first_;
+		const den_mat_t* second_;
+		Eigen::Index offset_;
+		Eigen::Index num_cols_;
+	};
+
 #ifdef USE_CUDA_GP
 
 	/*!
@@ -113,7 +171,7 @@ namespace GPBoost {
 		const std::vector<int>& coords_ind_j,
 		const den_mat_t& coords,
 		const vec_t& corr_diag,
-		const den_mat_t& chol_ip_cross_cov,
+		const ColumnBlocksView& chol_ip_cross_cov,
 		std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
 		vec_t& distances,
 		string_t dist_function,
@@ -132,7 +190,7 @@ namespace GPBoost {
 	* \param dist_function distance function
 	*/
 	void CoverTree_kNN(const den_mat_t& coords_mat,
-		const den_mat_t& chol_ip_cross_cov,
+		const ColumnBlocksView& chol_ip_cross_cov,
 		const vec_t& corr_diag,
 		const int start,
 		std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
@@ -155,19 +213,24 @@ namespace GPBoost {
 	* \param[out] dist_of_neighbors_i
 	* \param cover_tree
 	* \param dist_function distance function
+	* \param first_candidate First index of the points in the tree
+	* \param end_candidates One past the last index of the points in the tree. The neighbors are searched among the points
+	*		of the tree with indices smaller than 'i', also if the search in the tree is replaced by a brute-force search
 	*/
 	void find_kNN_CoverTree(const int i,
 		const int k,
 		const int levels,
 		const bool distances_saved,
 		const den_mat_t& coords,
-		const den_mat_t& chol_ip_cross_cov,
+		const ColumnBlocksView& chol_ip_cross_cov,
 		const vec_t& corr_diag,
 		std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
 		std::vector<int>& neighbors_i,
 		std::vector<double>& dist_of_neighbors_i,
-		std::map<int, std::vector<int>>& cover_tree,
-		string_t dist_function);
+		const std::map<int, std::vector<int>>& cover_tree,
+		string_t dist_function,
+		int first_candidate,
+		int end_candidates);
 
 	/*!
 	* \brief Finds the nearest_neighbors among the previous observations
@@ -192,7 +255,7 @@ namespace GPBoost {
 	void find_nearest_neighbors_Vecchia_FSA_fast(const den_mat_t& coords,
 		int num_data,
 		int num_neighbors,
-		const den_mat_t& chol_ip_cross_cov,
+		const ColumnBlocksView& chol_ip_cross_cov,
 		const string_t& vecchia_neighbor_selection,
 		std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
 		std::vector<std::vector<int>>& neighbors,
@@ -249,17 +312,32 @@ namespace GPBoost {
 		bool save_distances,
 		bool GPU_use);
 
+	/*!
+	* \brief Nearest neighbors of point i among the points before it (and not after 'end_search_at'), see 'find_nearest_neighbors_Vecchia_fast'
+	* \param bound_factor The candidates are visited in the order of 'coords_sum' until the squared difference to 'coords_sum[i]' times
+	*		'bound_factor' exceeds the largest squared distance among the neighbors, see 'ProjectCoordinatesNeighborSearch'
+	*/
 	void find_nearest_neighbors_fast_internal(const int i,
 		const int num_data,
 		const int num_nearest_neighbors,
 		const int end_search_at,
-		const int dim_coords,
+		const double bound_factor,
 		const den_mat_t& coords,
 		const std::vector<int>& sort_sum,
 		const std::vector<int>& sort_inv_sum,
 		const std::vector<double>& coords_sum,
 		std::vector<int>& neighbors_i,
 		std::vector<double>& nn_square_dist);
+
+	/*!
+	* \brief Calculate the outer products of the random coefficient covariates of every location and its neighbors
+	* \param re_comps_vecchia_cluster_i Container that collects the individual component models (the GP followed by the random coefficient GPs)
+	* \param nearest_neighbors_cluster_i Indices of nearest neighbors
+	* \param[out] z_outer_z_obs_neighbors_cluster_i Outer product of covariate vector at observations and neighbors with itself for random coefficients. First index = data point i, second index = GP number j
+	*/
+	void CalcZOuterZObsNeighbors(const std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_vecchia_cluster_i,
+		const std::vector<std::vector<int>>& nearest_neighbors_cluster_i,
+		std::vector<std::vector<den_mat_t>>& z_outer_z_obs_neighbors_cluster_i);
 
 	/*!
 	* \brief Initialize individual component models and collect them in a containter when the Vecchia approximation is used
@@ -289,6 +367,7 @@ namespace GPBoost {
 	* \param gauss_likelihood If true, the response variables have a Gaussian likelihood, otherwise not
 	* \param cov_fct Type of covariance function
 	* \param cov_fct_shape Shape parameter of covariance function (=smoothness parameter for Matern and Wendland covariance. This parameter is irrelevant for some covariance functions such as the exponential or Gaussian
+	* \param cov_fct_order Order m of the 'hurst' and 'hurst_ard' covariance functions (m - 1 < H < m). This must be 1 for all other covariance functions
 	* \param cov_fct_taper_range Range parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 	* \param cov_fct_taper_shape Shape parameter of the Wendland covariance function and Wendland correlation taper function. We follow the notation of Bevilacqua et al. (2019, AOS)
 	* \param apply_tapering If true, tapering is applied to the covariance function (element-wise multiplication with a compactly supported Wendland correlation function)
@@ -324,6 +403,7 @@ namespace GPBoost {
 		bool gauss_likelihood,
 		string_t cov_fct,
 		double cov_fct_shape,
+		int cov_fct_order,
 		double cov_fct_taper_range,
 		double cov_fct_taper_shape,
 		bool apply_tapering,
@@ -348,6 +428,7 @@ namespace GPBoost {
 	* \param chol_ip_cross_cov inverse of Cholesky factor of inducing point matrix times cross covariance : Sigma_ip ^ -1 / 2 Sigma_cross_cov
 	* \param[out] dist_obs_neighbors Distances needed for the Vecchia approximation : distances between locations and their neighbors(length = num_data - start_at)
 	* \param[out] dist_between_neighbors Distances needed for the Vecchia approximation : distances between all neighbors(length = num_data - start_at)
+	* \param[out] z_outer_z_obs_neighbors_cluster_i Outer product of covariate vector at observations and neighbors with itself for random coefficients (only changed if there are random coefficient GPs)
 	* \param save_distances_isotropic_cov_fct If true, distances among points and neighbors are saved for Vecchia approximations for isotropic covariance functions
 	* \param GPU_use If true, try to leverage GPU
 	*/
@@ -364,6 +445,7 @@ namespace GPBoost {
 		const den_mat_t& chol_ip_cross_cov,
 		std::vector<den_mat_t>& dist_obs_neighbors_cluster_i,
 		std::vector<den_mat_t>& dist_between_neighbors_cluster_i,
+		std::vector<std::vector<den_mat_t>>& z_outer_z_obs_neighbors_cluster_i,
 		bool save_distances_isotropic_cov_fct,
 		bool GPU_use);
 
@@ -438,11 +520,15 @@ namespace GPBoost {
 	* \param num_data_pred Total number of prediction locations (over all clusters)
 	* \param Cross covariance matrix between inducing points and observations
 	* \param Cholesky factor of inducing point matrix
+	* \param chol_ip_cross_cov_obs_model L^-1 times the transposed cross covariance matrix between inducing points and observations, where
+	*		L is the Cholesky factor of the inducing point matrix (as calculated in 'CalcSigmaComps', it is calculated anew if it does not match)
 	* \param Cholesky factor of Woodbury matrix
 	* \param Cross covariance matrix between inducing points and prediction locations
 	* \param Vecchia matrix B
 	* \param D_inv_cluster_i Diagonal matrices D^{-1} for Vecchia approximation
 	* \param Vecchia matrix B^T D^(-1)
+	* \param B_prior_cluster_i Vecchia matrix B of the process whose prior is sampled, used only if 'sample_prior' is true. This differs from 'B_cluster_i' when the prior of the latent process is sampled for a Gaussian likelihood, since 'B_cluster_i' refers to the observed process and thus contains the nugget effect
+	* \param D_inv_prior_cluster_i Diagonal matrix D^{-1} of the process whose prior is sampled, used only if 'sample_prior' is true, see 'B_prior_cluster_i'
 	* \param data_indices_per_cluster_pred Keys: labels of independent clusters, values: vectors with indices for data points that belong to the every cluster
 	* \param gp_coords_mat_obs Coordinates for observed locations
 	* \param gp_coords_mat_pred Coordinates for prediction locations
@@ -481,11 +567,14 @@ namespace GPBoost {
 		int num_data_pred,
 		const std::vector<std::shared_ptr<RECompGP<den_mat_t>>>& re_comps_cross_cov_cluster_i,
 		const chol_den_mat_t& chol_fact_sigma_ip_cluster_i,
+		const den_mat_t& chol_ip_cross_cov_obs_model,
 		const chol_den_mat_t& chol_fact_sigma_woodbury_cluster_i,
 		den_mat_t& cross_cov_pred_ip,
 		const sp_mat_rm_t& B_cluster_i,
 		const sp_mat_rm_t& D_inv_cluster_i,
 		const sp_mat_rm_t& Bt_D_inv_cluster_i,
+		const sp_mat_rm_t& B_prior_cluster_i,
+		const sp_mat_rm_t& D_inv_prior_cluster_i,
 		std::map<data_size_t, std::vector<int>>& data_indices_per_cluster_pred,
 		const den_mat_t& gp_coords_mat_obs,
 		const den_mat_t& gp_coords_mat_pred,

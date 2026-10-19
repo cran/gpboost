@@ -1,13 +1,10 @@
 context("GPD and EGPD likelihoods")
 # Non-convex / stochastic optimization: a different compiler or standard library (e.g. clang + libc++ on
 # Linux, used by the sanitizer containers of R-hub and CRAN) can converge to a different stationary point
-# with practically the same likelihood. Only require the tight tolerances on the reference platform on
-# which the expected values were calculated. Set GPBOOST_STRICT_TOLERANCES=true to always use them
-USE_STRICT_TOLERANCES <- .Platform$OS.type == "windows" ||
-  Sys.getenv("GPBOOST_STRICT_TOLERANCES") == "true"
-relax_tolerance <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(2 * tol, 0.5)
-# Separate helper for ABSOLUTE differences of negative log-likelihoods (scale 100-1000 here)
-relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 * tol, 3)
+# with practically the same likelihood.
+# The tight tolerances below therefore only hold on the reference platform on which the expected
+# values were calculated. 'relax_tolerance*()' of helper-tolerances.R relaxes them elsewhere and
+# reports once per test run which of the two is in force.
 
 if(Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS"){
 
@@ -39,23 +36,23 @@ test_that("all continuous carriers estimate, evaluate, and predict", {
                   egpd_power_beta=c(0.05, 1, 1.2), egpd_power_mixture=c(0.05, 0.9, 0.6, 0.6))
   expected <- list(
     gpd=list(aux=-0.1904527582, coef=c(0.4118840337, 0.5137677124), cov=0.04699721933, nll=97.73954415,
-             given=100.13358045, mu=c(0.8522038025, 0.7835895604), var=c(0.5759926659, 0.4869757118)),
+             given=100.13358045, mu=c(0.8521648785, 0.7835537704), var=c(0.5758636686, 0.4868666503)),
     egpd_power=list(aux=c(-0.08742481805, 1.1517620975), coef=c(0.2475385011, 0.5370884373), cov=0.02808931417,
-                    nll=97.49848773, given=98.71975502, mu=c(0.8713290923, 0.7981281827), var=c(0.6003439312, 0.5037104818)),
+                    nll=97.49848773, given=98.71975502, mu=c(0.8712688920, 0.7980730399), var=c(0.6000544331, 0.5034675824)),
     egpd_beta=list(aux=c(0.2405998405, 1.7151732379), coef=c(-0.3452957342, 0.5867795921), cov=0.007032903292,
-                   nll=100.40833525, given=108.62519397, mu=c(0.8833455357, 0.8025926386), var=c(1.0165839065, 0.8392132597)),
+                   nll=100.40833525, given=108.62519397, mu=c(0.8830301793, 0.8023061111), var=c(1.0172073750, 0.8397279473)),
     egpd_power_beta=list(aux=c(-0.08668289867, 1.0469984245, 1.1559812290), coef=c(0.2527227024, 0.5378556834),
-                         cov=0.02642681026, nll=97.49633508, given=98.71975502, mu=c(0.8730075086, 0.7995653591),
-                         var=c(0.6031604222, 0.5059467598)),
+                         cov=0.02642681026, nll=97.49633508, given=98.71975502, mu=c(0.8729478358, 0.7995107063),
+                         var=c(0.6028702195, 0.5057033301)),
     egpd_power_mixture=list(aux=c(-0.05164320454, 1.0751327224, 0.3677128479, 0.6463666057), coef=c(0.1827105737, 0.5408923322),
-                            cov=0.01536002914, nll=97.59735768, given=99.48223799, mu=c(0.8767495404, 0.8025942982),
-                            var=c(0.6161613395, 0.5163396687)))
+                            cov=0.01536002914, nll=97.59735768, given=99.48223799, mu=c(0.8766779771, 0.8025287876),
+                            var=c(0.6157654620, 0.5160079256)))
   expected_names <- list(gpd="shape", egpd_power=c("shape", "kappa"), egpd_beta=c("shape", "delta"),
                          egpd_power_beta=c("shape", "delta", "kappa"),
                          egpd_power_mixture=c("shape", "kappa1", "delta_kappa", "p"))
   for(likelihood in names(expected)){
-    fit <- fitGPModel(group_data=group, y=y, X=cbind(1, x), likelihood=likelihood,
-                      params=list(maxit=15, delta_rel_conv=1e-5, init_aux_pars=initial[[likelihood]], init_coef_aux_pars_from_iid_model=FALSE))
+    invisible(capture.output( fit <- fitGPModel(group_data=group, y=y, X=cbind(1, x), likelihood=likelihood,
+                                                params=list(maxit=15, delta_rel_conv=1e-5, init_aux_pars=initial[[likelihood]], init_coef_aux_pars_from_iid_model=FALSE)) ))
     actual_aux <- fit$get_aux_pars()
     reference <- expected[[likelihood]]
     expect_identical(names(actual_aux), expected_names[[likelihood]])
@@ -96,8 +93,8 @@ test_that("GPD covers grouped, crossed, Vecchia, and combined latent models", {
   expect_equal(fit_group$neg_log_likelihood(unname(fit_group$get_cov_pars()), y_group, fixed_effects=drop(cbind(1, x) %*% fit_group$get_coef()),
                                             aux_pars=unname(fit_group$get_aux_pars())), 96.60467923, tolerance=1e-4)
   pred_group <- predict(fit_group, group_data_pred=group1[1:3], X_pred=cbind(1, x[1:3]), predict_response=TRUE, predict_var=TRUE)
-  expect_equal(unname(pred_group$mu), c(1.4913611673, 1.4823656181, 1.4870656611), tolerance=1e-4)
-  expect_equal(unname(pred_group$var), c(2.4511914239, 2.4217105525, 2.4370916272), tolerance=1e-4)
+  expect_equal(unname(pred_group$mu), c(1.4912413010, 1.4822464750, 1.4869461400), tolerance=1e-4)
+  expect_equal(unname(pred_group$var), c(2.4496678650, 2.4202053180, 2.4355768330), tolerance=1e-4)
 
   eta_crossed <- 0.1 + b1[group1] + b2[group2]
   y_crossed <- sim_gpd_lcg(eta_crossed, 0.1, 0.47)
@@ -162,8 +159,8 @@ test_that("GPD covers grouped, crossed, Vecchia, and combined latent models", {
   expect_equal(evaluated, 112.08649465, tolerance=1e-4)
   pred_combined <- predict(fit_combined, group_data_pred=group1[1:3], gp_coords_pred=coords[1:3, ], X_pred=cbind(1, x[1:3]),
                            predict_response=TRUE, predict_var=TRUE)
-  expect_equal(unname(pred_combined$mu), c(1.0381680386, 0.9326345468, 0.9862718573), tolerance=1e-4)
-  expect_equal(unname(pred_combined$var), c(1.8530712810, 1.4954773708, 1.6724384879), tolerance=1e-4)
+  expect_equal(unname(pred_combined$mu), c(1.0378871800, 0.9323822383, 0.9860050383), tolerance=1e-4)
+  expect_equal(unname(pred_combined$var), c(1.8502888240, 1.4932318550, 1.6699272580), tolerance=1e-4)
 })
 
 test_that("EGPD carriers with multiple observations at the same location (Vecchia, Cholesky and iterative)", {
@@ -229,6 +226,48 @@ test_that("EGPD response and auxiliary parameter validation is explicit", {
                "strictly between 0 and 1")
 })
 
+test_that("response mean and variance match the closed-form moments for a heavy tail", {
+  # For an unobserved group the predictive latent distribution is the prior N(0, sigma^2), so the
+  # response moments are those of exp(latent) times the unit-scale carrier variable Z. The unit-scale
+  # moments follow from M(t) = E[R^-t] with R the exceedance probability of the carrier:
+  # E[Z] = (M(xi) - 1) / xi and E[Z^2] = (M(2 xi) - 2 M(xi) + 1) / xi^2. These are exact, independent
+  # of the quadrature in the library, and increasingly sensitive to it as the shape approaches the
+  # variance boundary xi = 0.5.
+  n <- 40
+  group <- rep(1:8, each=5)
+  y <- sim_gpd_lcg(rep(0.2, n), 0.3, 0.19)
+  latent_var <- 0.2
+  M_power_kappa <- function(t, kappa) exp(lgamma(1 - t) + lgamma(kappa + 1) - lgamma(kappa + 1 - t))
+  M_gpd <- function(t, pars) 1 / (1 - t)
+  M_power <- function(t, pars) M_power_kappa(t, pars[2])
+  M_beta <- function(t, pars) (1 + pars[2]) / ((1 - t) * (1 + pars[2] - t))
+  # The mixture carrier is the mixture of its two power carriers, and the power-beta carrier is
+  # the power carrier with the same kappa at delta = 1, where B(u) = u^2 and B'(u) = 2 u
+  M_power_mixture <- function(t, pars) pars[4] * M_power_kappa(t, pars[2]) +
+    (1 - pars[4]) * M_power_kappa(t, pars[2] + pars[3])
+  M_power_beta <- function(t, pars) M_power_kappa(t, pars[3])
+  cases <- list(list(likelihood="gpd", pars=0.4, M=M_gpd),
+                list(likelihood="gpd", pars=0.45, M=M_gpd),
+                list(likelihood="egpd_power", pars=c(0.35, 1.4), M=M_power),
+                list(likelihood="egpd_power", pars=c(0.45, 0.7), M=M_power),
+                list(likelihood="egpd_beta", pars=c(0.42, 0.8), M=M_beta),
+                list(likelihood="egpd_power_mixture", pars=c(0.4, 0.8, 2.2, 0.35), M=M_power_mixture),
+                list(likelihood="egpd_power_beta", pars=c(0.44, 1, 1.6), M=M_power_beta))
+  for(case in cases){
+    gp_model <- GPModel(group_data=group, likelihood=case$likelihood)
+    gp_model$set_optim_params(params=list(init_aux_pars=case$pars))
+    pred <- gp_model$predict(y=y, group_data_pred=max(group) + 1L, cov_pars=latent_var,
+                             predict_var=TRUE, predict_response=TRUE)
+    xi <- case$pars[1]
+    first <- (case$M(xi, case$pars) - 1) / xi
+    second <- (case$M(2 * xi, case$pars) - 2 * case$M(xi, case$pars) + 1) / xi^2
+    response_mean <- first * exp(0.5 * latent_var)
+    expect_equal(as.numeric(pred$mu), response_mean, tolerance=1e-7, info=case$likelihood)
+    expect_equal(as.numeric(pred$var), second * exp(2 * latent_var) - response_mean^2,
+                 tolerance=1e-7, info=case$likelihood)
+  }
+})
+
 test_that("EGPD carriers reduce to their special cases and match a closed-form GPD density", {
   # These checks are deliberately non-self-referential: the expected values are
   # either exact analytic identities between carriers or a hand-computed density,
@@ -266,5 +305,104 @@ test_that("EGPD carriers reduce to their special cases and match a closed-form G
   analytic <- sum(eta0 + y_exp * exp(-eta0))
   expect_equal(nll("gpd", c(0), y_use=y_exp, eta_use=eta0, cov_use=1e-4), analytic, tolerance=5e-3)
 })
+
+  test_that("test negative log-likelihood metric of the GPBoost algorithm for the gpd likelihood ", {
+
+    sim_rand_unif <- sim_rand_unif_egpd
+    # The "test_neg_log_likelihood" metric of the GPBoost algorithm on validation data, together with an independent
+    # calculation: for every validation point, the integral of a reference density (written with base R functions) over
+    # the latent predictive distribution of the first predictor, given the tree-ensemble values of the other predictors.
+    # Further arguments are passed to GPModel()
+    validation_test_nll <- function(likelihood, y, x, group, log_dens, additional_likelihood_data = NULL, nrounds = 5, ...) {
+      tr <- seq(1, length(y), by = 2)
+      va <- seq(2, length(y), by = 2)
+      dtrain <- gpb.Dataset(data = x[tr, , drop = FALSE], label = y[tr])
+      dvalid <- gpb.Dataset.create.valid(dtrain, data = x[va, , drop = FALSE], label = y[va])
+      gp_model <- GPModel(group_data = group[tr], likelihood = likelihood,
+                          additional_likelihood_data = if (is.null(additional_likelihood_data)) NULL else additional_likelihood_data[tr], ...)
+      gp_model$set_optim_params(params = list(optimizer_cov = "lbfgs", maxit = 300, init_coef_aux_pars_from_iid_model = FALSE))
+      gp_model$set_prediction_data(group_data_pred = group[va])
+      bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = nrounds, learning_rate = 0.1, max_depth = 2, min_data_in_leaf = 5,
+                       valids = list(valid = dvalid), verbose = 0, deterministic = TRUE)
+      metric <- unlist(bst$record_evals$valid$test_neg_log_likelihood$eval)[nrounds]
+      pred <- predict(bst, data = x[va, , drop = FALSE], group_data_pred = group[va], predict_var = TRUE, pred_latent = TRUE, num_iteration = nrounds)
+      raw <- predict(bst, data = x[va, , drop = FALSE], ignore_gp_model = TRUE, pred_latent = TRUE, num_iteration = nrounds)
+      num_blocks <- length(raw) / length(va)
+      extra <- if (num_blocks > 1) matrix(sapply(2:num_blocks, function(k) raw[(seq_along(va) - 1) * num_blocks + k]), nrow = length(va)) else matrix(0, length(va), 1)
+      mean_eta <- pred$fixed_effect + pred$random_effect_mean
+      sd_eta <- sqrt(pred$random_effect_cov)
+      aux <- gp_model$get_aux_pars()
+      reference <- mean(sapply(seq_along(va), function(i) {
+        integrand <- function(e) exp(log_dens(y[va][i], e, extra[i, ], aux)) * dnorm(e, mean_eta[i], sd_eta[i])
+        -log(integrate(integrand, mean_eta[i] - 12 * sd_eta[i], mean_eta[i] + 12 * sd_eta[i], rel.tol = 1e-10)$value)
+      }))
+      c(metric = unname(metric), reference = reference)
+    }
+    n_v <- 200
+    group_v <- rep(1:20, each = 10)
+    x_v <- matrix(sim_rand_unif(n_v, 0.61), ncol = 1)
+    eta_v <- 0.2 + 0.6 * x_v[, 1] + 0.4 * qnorm(sim_rand_unif(20, 0.27))[group_v]
+    u1_v <- sim_rand_unif(n_v, 0.44)
+    u2_v <- sim_rand_unif(n_v, 0.83)
+    zeta_v <- -0.5 + 1.2 * x_v[, 1]
+    zeta2_v <- 0.3 + 0.8 * x_v[, 1]
+    # Reference log-densities, vectorized in the first predictor e (z: values of the other predictors, a: auxiliary parameters)
+    cases <- list(
+      gpd = list(y = exp(eta_v) / 0.2 * ((1 - u2_v)^(-0.2) - 1),
+        log_dens = function(y, e, z, a) ifelse(1 + a[1] * y / exp(e) > 0,
+            -e - (1 / a[1] + 1) * log(pmax(1 + a[1] * y / exp(e), 1e-300)), -Inf),
+        tol_reference = 1e-5))
+    expected <- c(gpd = 1.83784513)
+    for (lik in names(cases)) {
+      res <- validation_test_nll(lik, cases[[lik]]$y, x_v, group_v, cases[[lik]]$log_dens)
+      expect_lt(abs(res[["metric"]] - res[["reference"]]), cases[[lik]]$tol_reference)
+      expect_lt(abs(res[["metric"]] - expected[[lik]]), 1e-3)
+    }
+  })
+
+  test_that("test negative log-likelihood metric of the gpd likelihood with a bounded support ", {
+
+    sim_rand_unif <- sim_rand_unif_egpd
+    # With a negative shape, the support of the GPD ends at exp(eta) / (-shape). The validation points belong to new
+    # groups, and their responses are chosen such that the predictive mean of the latent variable lies beyond this
+    # endpoint for many of them, while a part of the predictive distribution lies inside the support. The density is
+    # then zero at the predictive mean, which is where the adaptive Gauss-Hermite quadrature would otherwise center
+    # its nodes. The shape and the variance are fixed, and the training responses lie well inside the support
+    shape <- -0.2
+    n <- 100
+    group_tr <- rep(1:10, each = 10)
+    group_va <- rep(11:20, each = 10)
+    x_tr <- matrix(sim_rand_unif(n, 0.61), ncol = 1)
+    x_va <- matrix(sim_rand_unif(n, 0.37), ncol = 1)
+    eta_tr <- 0.2 + 0.6 * x_tr[, 1] + 0.1 * qnorm(sim_rand_unif(10, 0.27))[group_tr]
+    y_tr <- exp(eta_tr) / shape * ((1 - 0.8 * sim_rand_unif(n, 0.83))^(-shape) - 1)
+    y_va <- exp(0.2 + 0.6 * x_va[, 1]) / (-shape) * (0.3 + 1.4 * sim_rand_unif(n, 0.44))
+    dtrain <- gpb.Dataset(data = x_tr, label = y_tr)
+    dvalid <- gpb.Dataset.create.valid(dtrain, data = x_va, label = y_va)
+    gp_model <- GPModel(group_data = group_tr, likelihood = "gpd")
+    gp_model$set_optim_params(params = list(init_cov_pars = 0.25, init_aux_pars = shape, estimate_aux_pars = FALSE))
+    gp_model$set_prediction_data(group_data_pred = group_va)
+    nrounds <- 5
+    bst <- gpb.train(data = dtrain, gp_model = gp_model, nrounds = nrounds, learning_rate = 0.1, max_depth = 2,
+                     min_data_in_leaf = 5, valids = list(valid = dvalid), verbose = 0,
+                     train_gp_model_cov_pars = FALSE, deterministic = TRUE)
+    metric <- unlist(bst$record_evals$valid$test_neg_log_likelihood$eval)
+    expect_true(all(is.finite(metric)))
+    pred <- predict(bst, data = x_va, group_data_pred = group_va, predict_var = TRUE, pred_latent = TRUE,
+                    num_iteration = nrounds)
+    mean_eta <- pred$fixed_effect + pred$random_effect_mean
+    sd_eta <- sqrt(pred$random_effect_cov)
+    outside <- 1 + shape * y_va / exp(mean_eta) <= 0
+    expect_gt(sum(outside), 0)
+    expect_lt(sum(outside), n)
+    log_dens <- function(y, e) ifelse(1 + shape * y / exp(e) > 0,
+                                      -e - (1 / shape + 1) * log(pmax(1 + shape * y / exp(e), 1e-300)), -Inf)
+    reference <- mean(sapply(seq_len(n), function(i) {
+      integrand <- function(e) exp(log_dens(y_va[i], e)) * dnorm(e, mean_eta[i], sd_eta[i])
+      -log(integrate(integrand, mean_eta[i] - 12 * sd_eta[i], mean_eta[i] + 12 * sd_eta[i], rel.tol = 1e-10)$value)
+    }))
+    expect_lt(abs(metric[nrounds] - reference), 1e-4)
+    expect_lt(abs(metric[nrounds] - 7.14640167), 1e-3)
+  })
 
 }

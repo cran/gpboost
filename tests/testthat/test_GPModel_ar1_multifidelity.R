@@ -2,13 +2,10 @@ context("GPModel_ar1_multifidelity")
 
 # Non-convex / stochastic optimization: a different compiler or standard library (e.g. clang + libc++ on
 # Linux, used by the sanitizer containers of R-hub and CRAN) can converge to a different stationary point
-# with practically the same likelihood. Only require the tight tolerances on the reference platform on
-# which the expected values were calculated. Set GPBOOST_STRICT_TOLERANCES=true to always use them
-USE_STRICT_TOLERANCES <- .Platform$OS.type == "windows" ||
-  Sys.getenv("GPBOOST_STRICT_TOLERANCES") == "true"
-relax_tolerance <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(2 * tol, 0.5)
-# Separate helper for ABSOLUTE differences of negative log-likelihoods (scale 100-1000 here)
-relax_tolerance_nll <- function(tol) if (USE_STRICT_TOLERANCES) tol else max(3 * tol, 3)
+# with practically the same likelihood.
+# The tight tolerances below therefore only hold on the reference platform on which the expected
+# values were calculated. 'relax_tolerance*()' of helper-tolerances.R relaxes them elsewhere and
+# reports once per test run which of the two is in force.
 
 # 'matern_ard_estimate_shape' needs 'std::cyl_bessel_k', which is not provided by every standard
 # library (in particular not by libc++, used by clang on macOS and in the sanitizer containers)
@@ -54,8 +51,9 @@ if (Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS") {
     latent <- drop(t(chol(covariance + 1e-10 * diag(nrow(gp_coords)))) %*% qnorm(sim_rand_unif(nrow(gp_coords), init_c = 0.8)))
     y_gaussian <- latent + sqrt(cov_pars[1]) * qnorm(sim_rand_unif(length(latent), init_c = 0.1))
     y_binary <- as.numeric(sim_rand_unif(length(latent), init_c = 0.2341) < pnorm(0.2 + latent))
+    y_poisson <- qpois(sim_rand_unif(length(latent), init_c = 0.31), lambda = exp(latent))
     list(gp_coords = gp_coords, cov_pars = cov_pars, latent = latent,
-         y_gaussian = y_gaussian, y_binary = y_binary)
+         y_gaussian = y_gaussian, y_binary = y_binary, y_poisson = y_poisson)
   }
 
   test_that("exact Gaussian AR1 multifidelity likelihood agrees with R", {
@@ -149,16 +147,10 @@ if (Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS") {
     expect_equal(as.numeric(exact_model$get_current_neg_log_likelihood()), 16.364965896631873, tolerance = 1e-8)
 
     for (inversion_method in c("cholesky", "iterative")) {
-      # The stochastic PREDICTION of the iterative method depends on the number of OpenMP threads ('seed_rand_vec_trace'
-      # only makes the fit reproducible: 'cov_pars' and the nll below are bit-identical for 1, 2, 10 and 16 threads,
-      # whereas the predicted mean differs by up to 3.5e-3, which is above the 1e-3 tolerance used here). The thread
-      # count is therefore pinned for the iterative case, so that the expected predictions below do not depend on the
-      # machine or on the session's 'OMP_NUM_THREADS' (e.g. 'R CMD check' caps the number of OpenMP threads)
       gp_model <- GPModel(
         gp_coords = data$gp_coords, cov_function = "ar1_mf_exponential", likelihood = "bernoulli_probit",
         gp_approx = "vecchia", num_neighbors = 6, vecchia_ordering = "none",
-        matrix_inversion_method = inversion_method,
-        num_parallel_threads = if (inversion_method == "iterative") 1L else NULL
+        matrix_inversion_method = inversion_method
       )
       optim_params <- list(
         init_cov_pars = process_cov_pars, optimizer_cov = "gradient_descent", lr_cov = 0.05,
@@ -172,17 +164,22 @@ if (Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS") {
         optim_params$cg_max_num_it <- 100
         optim_params$cg_preconditioner_type <- "piv_chol_on_Sigma"
         optim_params$fitc_piv_chol_preconditioner_rank <- 10
-        tol_pred <- 1e-3
+        # 'seed_rand_vec_trace' only makes the fit reproducible: 'cov_pars' and the nll below are bit-identical for any
+        # number of OpenMP threads, whereas the stochastic prediction is not. Measured against the values below (which
+        # were recorded with 6 threads), the largest deviation over 1, 2, 3, 4, 8, 12 and 16 threads is 6.1e-3,
+        # so the tolerance has to accommodate that. Note: this must not be solved by pinning the number of threads of
+        # the model, since that would only hide the dependence on the number of threads instead of covering it
+        tol_pred <- 1e-2
       }
       if (inversion_method == "cholesky") {
         expect_equal(gp_model$neg_log_likelihood(y = data$y_binary, cov_pars = process_cov_pars), 20.118953180464363, tolerance = 1e-8)
       }
       invisible(capture.output(fit(gp_model, y = data$y_binary, params = optim_params)))
       expected_fit <- list(
-        cholesky = list(cov_pars = c(1.1208846731049009, 0.2837165041795852, 0.5265774974772421, 0.1241828718058514, -0.1234287872320286),
-                        nll = 17.743260933163558, mu = c(0.8232655588081717, 0.6753089735531903), var = c(0.1454993784884405, 0.2192667637917268)),
-        iterative = list(cov_pars = c(1.1055593547491722, 0.2824705662808080, 0.5300671780510321, 0.1250140324130210, -0.1027052545776411),
-                         nll = 17.577849124499139, mu = c(0.8272584508034939, 0.6812133592385567), var = c(0.1429019063776971, 0.2171617184334778)))
+        cholesky = list(cov_pars = c(1.0661956334178793, 0.2837297651975412, 0.5263592091708343, 0.1241549552226316, -0.1278426999830472),
+                        nll = 17.786924024394054, mu = c(0.8203132350256910, 0.6748932540516034), var = c(0.1473994314673764, 0.2194123496872413)),
+        iterative = list(cov_pars = c(1.0410513074049415, 0.2825117036462009, 0.5304750217357596, 0.1244834725673703, -0.0953183940478825),
+                         nll = 17.606109542086166, mu = c(0.8188778853882207, 0.6815214692354954), var = c(0.1483168942103368, 0.2170499562065871)))
       expected <- expected_fit[[inversion_method]]
       expect_equal(as.numeric(gp_model$get_cov_pars()), expected$cov_pars, tolerance = relax_tolerance(1e-8))
       expect_equal(as.numeric(gp_model$get_current_neg_log_likelihood()), expected$nll, tolerance = relax_tolerance(1e-8))
@@ -190,6 +187,81 @@ if (Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS") {
       expect_equal(prediction$mu, expected$mu, tolerance = relax_tolerance(tol_pred))
       expect_equal(prediction$var, expected$var, tolerance = relax_tolerance(tol_pred))
     }
+  })
+
+  test_that("non-Gaussian AR1 multifidelity covariance gradients agree with the exact model", {
+    # Vecchia with all previous points as neighbors, FITC with every data point as an inducing point,
+    # and full-scale Vecchia with all previous points as neighbors are exactly equivalent to the model
+    # without an approximation, so the covariance parameter gradients have to agree as well. They only
+    # do if the first variance parameter is not treated as a factor of the entire covariance matrix (it
+    # scales the low-fidelity component alone) and if the derivative of the covariance diagonal is
+    # evaluated at every location (it differs between the two fidelity levels)
+    data <- simulate_ar1_mf_test_data()
+    n_data <- nrow(data$gp_coords)
+    process_cov_pars <- data$cov_pars[-1]
+    settings <- list(
+      none = list(gp_approx = "none"),
+      vecchia = list(gp_approx = "vecchia", num_neighbors = n_data - 1L, vecchia_ordering = "none"),
+      fitc = list(gp_approx = "fitc", num_ind_points = n_data, ind_points_selection = "random"),
+      full_scale_vecchia = list(gp_approx = "full_scale_vecchia", num_neighbors = n_data - 1L,
+                                vecchia_ordering = "none", num_ind_points = 5L)
+    )
+    expected_nll <- 65.653681881238981
+    expected_cov_pars <- c(1.3265111106825676, 0.2453506478036946, 0.4633590664305500,
+                           0.1129057756477863, -0.4394352771585056)
+    for (gp_approx_name in names(settings)) {
+      gp_model <- do.call(GPModel, c(
+        list(gp_coords = data$gp_coords, cov_function = "ar1_mf_exponential", likelihood = "poisson",
+             matrix_inversion_method = "cholesky"), settings[[gp_approx_name]]))
+      expect_equal(gp_model$neg_log_likelihood(y = data$y_poisson, cov_pars = process_cov_pars),
+                   expected_nll, tolerance = 1e-8)
+      invisible(capture.output(fit(gp_model, y = data$y_poisson, params = list(
+        init_cov_pars = process_cov_pars, optimizer_cov = "gradient_descent", lr_cov = 0.05,
+        maxit = 3, use_nesterov_acc = FALSE, init_coef_aux_pars_from_iid_model = FALSE,
+        trace = FALSE))))
+      expect_equal(as.numeric(gp_model$get_cov_pars()), expected_cov_pars,
+                   tolerance = relax_tolerance(1e-6))
+    }
+  })
+
+  test_that("AR1 multifidelity inducing points keep a 0/1 fidelity indicator", {
+    # The fidelity indicator is the last coordinate column but is not a spatial coordinate. Averaging
+    # it, as 'kmeans++' and 'cover_tree' do, gives fractional fidelities that the covariance function
+    # rejects, so the inducing points are selected separately within every fidelity level
+    n_data <- 120L
+    coords <- cbind(10 * sim_rand_unif(n = n_data, init_c = 0.23),
+                    10 * sim_rand_unif(n = n_data, init_c = 0.61))
+    fidelity <- as.numeric(sim_rand_unif(n = n_data, init_c = 0.44) < 0.5)
+    gp_coords <- cbind(coords, fidelity)
+    cov_pars <- c(1.0, 2.0, 0.5, 1.0, 0.7)
+    covariance <- ar1_mf_exponential_covariance(gp_coords, cov_pars)
+    latent <- drop(t(chol(covariance + 1e-8 * diag(n_data))) %*% qnorm(sim_rand_unif(n_data, init_c = 0.19)))
+    y_gaussian <- latent + 0.3 * qnorm(sim_rand_unif(n_data, init_c = 0.37))
+    y_poisson <- qpois(sim_rand_unif(n_data, init_c = 0.83), lambda = exp(latent))
+    expected_nll <- list("fitc" = c(gaussian = 145.99454312750748, poisson = 218.34721467970454),
+                         "full_scale_vecchia" = c(gaussian = 140.09552616999730, poisson = 218.60080095637534))
+    for (gp_approx in names(expected_nll)) {
+      for (likelihood in c("gaussian", "poisson")) {
+        model_args <- list(gp_coords = gp_coords, cov_function = "ar1_mf_exponential",
+                           likelihood = likelihood, gp_approx = gp_approx, num_ind_points = 20L,
+                           matrix_inversion_method = "cholesky")
+        if (gp_approx == "full_scale_vecchia") {
+          model_args$num_neighbors <- 10L
+          model_args$vecchia_ordering <- "none"
+        }
+        gp_model <- do.call(GPModel, model_args)# 'ind_points_selection' is "kmeans++" by default
+        y <- if (likelihood == "gaussian") y_gaussian else y_poisson
+        pars <- if (likelihood == "gaussian") c(0.09, cov_pars) else cov_pars
+        expect_equal(gp_model$neg_log_likelihood(y = y, cov_pars = pars),
+                     expected_nll[[gp_approx]][[likelihood]], tolerance = relax_tolerance(1e-8))
+      }
+    }
+    gp_model <- GPModel(gp_coords = gp_coords, cov_function = "ar1_mf_exponential",
+                        likelihood = "poisson", gp_approx = "fitc", num_ind_points = 20L,
+                        ind_points_selection = "cover_tree", cover_tree_radius = 1.5,
+                        matrix_inversion_method = "cholesky")
+    expect_equal(gp_model$neg_log_likelihood(y = y_poisson, cov_pars = cov_pars),
+                 218.14420331974057, tolerance = relax_tolerance(1e-8))
   })
 
   test_that("AR1 multifidelity can be used by the GPBoost algorithm", {
@@ -217,6 +289,74 @@ if (Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS") {
     same_x_coords <- rbind(c(data$gp_coords[5, 1], 0), c(data$gp_coords[5, 1], 1))
     tree_mean <- predict(booster, data = same_x_features, gp_coords_pred = same_x_coords, ignore_gp_model = TRUE)
     expect_equal(tree_mean, c(2.8165058065167723, 2.9922163527923269), tolerance = 1e-8)
+  })
+
+  test_that("AR1 multifidelity boosters can predict after being saved and loaded", {
+    data <- simulate_ar1_mf_test_data()
+    features <- cbind(x = data$gp_coords[, 1], nonlinear = sin(4 * data$gp_coords[, 1]))
+    dtrain <- gpb.Dataset(data = features, label = data$y_gaussian + 5 * data$gp_coords[, 2])
+    gp_model <- GPModel(
+      gp_coords = data$gp_coords, cov_function = "ar1_mf_exponential", likelihood = "gaussian",
+      gp_approx = "vecchia", num_neighbors = 6, vecchia_ordering = "none"
+    )
+    gp_model$set_optim_params(params = list(
+      init_cov_pars = data$cov_pars, init_coef_aux_pars_from_iid_model = FALSE
+    ))
+    booster <- gpb.train(
+      data = dtrain, gp_model = gp_model, train_gp_model_cov_pars = FALSE, nrounds = 2,
+      learning_rate = 0.1, max_depth = 2, min_data_in_leaf = 4, objective = "regression_l2", verbose = 0
+    )
+    features_pred <- features[c(2, 20), , drop = FALSE]
+    coords_pred <- data$gp_coords[c(2, 20), , drop = FALSE]
+    prediction <- predict(booster, data = features_pred, gp_coords_pred = coords_pred, predict_var = TRUE)
+
+    # With the default 'save_raw_data = FALSE' the training data is not restored, so the number of
+    # training features, which the fidelity-specific mean needs in order to append the fidelity
+    # indicator, has to be taken from the saved model
+    model_file <- file.path(tempdir(), "ar1_mf_booster.json")
+    gpb.save(booster, filename = model_file)
+    booster_file <- gpb.load(filename = model_file)
+    prediction_file <- predict(booster_file, data = features_pred, gp_coords_pred = coords_pred,
+                               predict_var = TRUE)
+    expect_equal(prediction_file$response_mean, prediction$response_mean, tolerance = 1e-8)
+    expect_equal(prediction_file$response_var, prediction$response_var, tolerance = 1e-8)
+
+    booster_string <- gpb.load(model_str = booster$save_model_to_string())
+    prediction_string <- predict(booster_string, data = features_pred, gp_coords_pred = coords_pred,
+                                 predict_var = TRUE)
+    expect_equal(prediction_string$response_mean, prediction$response_mean, tolerance = 1e-8)
+    expect_equal(prediction_string$response_var, prediction$response_var, tolerance = 1e-8)
+    unlink(model_file)
+  })
+
+  test_that("cross-validation uses the same boosting features as training", {
+    data <- simulate_ar1_mf_test_data()
+    features <- cbind(x = data$gp_coords[, 1], nonlinear = sin(4 * data$gp_coords[, 1]))
+    label <- data$y_gaussian + 5 * data$gp_coords[, 2]
+    folds <- list(seq(1, nrow(data$gp_coords), by = 2), seq(2, nrow(data$gp_coords), by = 2))
+    run_cv <- function(fidelity_specific_mean) {
+      gp_model <- GPModel(
+        gp_coords = data$gp_coords, cov_function = "ar1_mf_exponential", likelihood = "gaussian",
+        fidelity_specific_mean = fidelity_specific_mean
+      )
+      gp_model$set_optim_params(params = list(
+        init_cov_pars = data$cov_pars, init_coef_aux_pars_from_iid_model = FALSE
+      ))
+      dtrain <- gpb.Dataset(data = features, label = label, free_raw_data = FALSE)
+      cv_result <- gpb.cv(
+        data = dtrain, gp_model = gp_model, train_gp_model_cov_pars = FALSE, nrounds = 25, folds = folds,
+        learning_rate = 0.1, max_depth = 2, min_data_in_leaf = 4, objective = "regression_l2",
+        metric = "l2", use_gp_model_for_validation = FALSE, verbose = 0
+      )
+      list(dataset = dtrain, error = cv_result$best_score)
+    }
+    with_feature <- run_cv(TRUE)
+    expect_equal(with_feature$dataset$dim()[2], 3L)
+    expect_equal(tail(with_feature$dataset$get_colnames(), 1), "AR1_MF_fidelity")
+    without_feature <- run_cv(FALSE)
+    expect_equal(without_feature$dataset$dim()[2], 2L)
+    # The two fidelities differ by a constant of 5, which only the fidelity feature can represent
+    expect_lt(with_feature$error, 0.5 * without_feature$error)
   })
 
   test_that("AR1 multifidelity has independent low- and high-fidelity linear means", {
@@ -368,5 +508,110 @@ if (Sys.getenv("GPBOOST_ALL_TESTS") == "GPBOOST_ALL_TESTS") {
     actual_nll_hurst <- gp_model_hurst$neg_log_likelihood(y = data$y_gaussian, cov_pars = hurst_cov_pars)
     expect_equal(actual_nll_hurst, expected_nll_hurst, tolerance = 1e-8)
     expect_equal(actual_nll_hurst, 34.029297710299844, tolerance = 1e-8)
+
+    # second-order hurst base (cov_fct_order = 2, 1 < H < 2): the order applies to both the low-fidelity and the discrepancy process
+    hurst2_cov_matrix <- function(x, var, H) {
+      sqrd <- x^2
+      var / (2 * (2 * H - 1)) * (abs(outer(x, x, "-"))^(2 * H) - outer(sqrd^H, sqrd^H, "+") +
+                                   2 * H * outer(x, x) * outer(sqrd^(H - 1), sqrd^(H - 1), "+"))
+    }
+    hurst2_cov_pars <- c(error_var = 0.08, low_var = 1.0, low_H = 1.3, discrepancy_var = 0.5, discrepancy_H = 1.6, rho = -0.6)
+    cov_low_hurst2 <- hurst2_cov_matrix(x[, 1], hurst2_cov_pars[["low_var"]], hurst2_cov_pars[["low_H"]])
+    cov_disc_hurst2 <- hurst2_cov_matrix(x[, 1], hurst2_cov_pars[["discrepancy_var"]], hurst2_cov_pars[["discrepancy_H"]])
+    Sigma_hurst2 <- ar1_mf_combine(data$gp_coords, cov_low_hurst2, cov_disc_hurst2, hurst2_cov_pars[["rho"]])
+    expected_nll_hurst2 <- gaussian_nll_from_cov(data$y_gaussian, hurst2_cov_pars[["error_var"]], Sigma_hurst2)
+    gp_model_hurst2 <- GPModel(
+      gp_coords = data$gp_coords, cov_function = "ar1_mf_hurst", cov_fct_order = 2, likelihood = "gaussian",
+      gp_approx = "none", matrix_inversion_method = "cholesky"
+    )
+    actual_nll_hurst2 <- gp_model_hurst2$neg_log_likelihood(y = data$y_gaussian, cov_pars = hurst2_cov_pars)
+    expect_equal(actual_nll_hurst2, expected_nll_hurst2, tolerance = 1e-8)
+    expect_equal(actual_nll_hurst2, 69.600734173917928, tolerance = 1e-8)
+    # H outside (1, 2) and an order other than 1 for other base covariance functions are rejected
+    hurst2_cov_pars[["discrepancy_H"]] <- 0.6
+    expect_error(gp_model_hurst2$neg_log_likelihood(y = data$y_gaussian, cov_pars = hurst2_cov_pars))
+    expect_error(GPModel(gp_coords = data$gp_coords, cov_function = "ar1_mf_matern", cov_fct_order = 2, likelihood = "gaussian"))
   })
+  test_that("Training data random effect variances of a non constant prior variance", {
+
+    # The prior variance of the AR1 multifidelity and of the Hurst covariance functions is not the
+    # marginal variance parameter but depends on the fidelity level and on the location
+    hurst_cov_matrix <- function(x, var, H) {
+      n <- length(x)
+      sqrd <- x^2
+      var / 2 * (outer(sqrd^H, rep(1, n)) + outer(rep(1, n), sqrd^H) -
+                   (outer(x, x, "-")^2)^H)
+    }
+    ar1_mf_combine <- function(gp_coords, cov_low, cov_discrepancy, rho) {
+      fidelity <- gp_coords[, ncol(gp_coords)]
+      loading <- ifelse(fidelity == 0, 1, rho)
+      cov_low * outer(loading, loading) + cov_discrepancy * outer(fidelity, fidelity)
+    }
+    check_training_data_random_effects <- function(gp_model, y, error_var, Sigma) {
+      psi <- Sigma + error_var * diag(length(y))
+      expected_mean <- as.vector(Sigma %*% solve(psi, y))
+      expected_var <- diag(Sigma - Sigma %*% solve(psi, Sigma))
+      training_data_random_effects <- predict_training_data_random_effects(gp_model, predict_var = TRUE)
+      expect_true(all(training_data_random_effects[, 2] > 0))
+      expect_equal(unname(as.numeric(training_data_random_effects[, 1])), unname(expected_mean), tolerance = 1e-6)
+      expect_equal(unname(as.numeric(training_data_random_effects[, 2])), unname(expected_var), tolerance = 1e-6)
+    }
+
+    data <- simulate_ar1_mf_test_data()
+    x <- data$gp_coords[, 1, drop = FALSE]
+
+    gp_model <- GPModel(
+      gp_coords = data$gp_coords, cov_function = "ar1_mf_exponential", likelihood = "gaussian",
+      gp_approx = "none", matrix_inversion_method = "cholesky"
+    )
+    invisible(capture.output(
+      fit(gp_model, y = data$y_gaussian, params = list(init_cov_pars = data$cov_pars, maxit = 1, trace = FALSE))
+    ))
+    cov_pars <- as.numeric(gp_model$get_cov_pars())
+    Sigma <- ar1_mf_exponential_covariance(data$gp_coords, cov_pars[-1])
+    check_training_data_random_effects(gp_model, data$y_gaussian, cov_pars[1], Sigma)
+
+    init_hurst_cov_pars <- c(error_var = 0.08, low_var = 1.0, low_H = 0.3,
+                             discrepancy_var = 0.5, discrepancy_H = 0.6, rho = -0.6)
+    gp_model_hurst <- GPModel(
+      gp_coords = data$gp_coords, cov_function = "ar1_mf_hurst", likelihood = "gaussian",
+      gp_approx = "none", matrix_inversion_method = "cholesky"
+    )
+    invisible(capture.output(
+      fit(gp_model_hurst, y = data$y_gaussian, params = list(init_cov_pars = init_hurst_cov_pars, maxit = 1, trace = FALSE))
+    ))
+    hurst_cov_pars <- as.numeric(gp_model_hurst$get_cov_pars())
+    Sigma_hurst <- ar1_mf_combine(
+      data$gp_coords,
+      hurst_cov_matrix(x[, 1], hurst_cov_pars[2], hurst_cov_pars[3]),
+      hurst_cov_matrix(x[, 1], hurst_cov_pars[4], hurst_cov_pars[5]),
+      hurst_cov_pars[6]
+    )
+    check_training_data_random_effects(gp_model_hurst, data$y_gaussian, hurst_cov_pars[1], Sigma_hurst)
+
+    # second-order Hurst covariance, whose prior variance sigma2 * |x|^(2H) also depends on the location
+    hurst2_cov_matrix <- function(x, var, H) {
+      sqrd <- x^2
+      var / (2 * (2 * H - 1)) * (abs(outer(x, x, "-"))^(2 * H) - outer(sqrd^H, sqrd^H, "+") +
+                                   2 * H * outer(x, x) * outer(sqrd^(H - 1), sqrd^(H - 1), "+"))
+    }
+    init_hurst2_cov_pars <- c(error_var = 0.08, low_var = 1.0, low_H = 1.3, discrepancy_var = 0.5, discrepancy_H = 1.6, rho = -0.6)
+    gp_model_hurst2 <- GPModel(
+      gp_coords = data$gp_coords, cov_function = "ar1_mf_hurst", cov_fct_order = 2, likelihood = "gaussian",
+      gp_approx = "none", matrix_inversion_method = "cholesky"
+    )
+    invisible(capture.output(
+      fit(gp_model_hurst2, y = data$y_gaussian, params = list(init_cov_pars = init_hurst2_cov_pars, maxit = 1, trace = FALSE))
+    ))
+    hurst2_cov_pars <- as.numeric(gp_model_hurst2$get_cov_pars())
+    Sigma_hurst2 <- ar1_mf_combine(
+      data$gp_coords,
+      hurst2_cov_matrix(x[, 1], hurst2_cov_pars[2], hurst2_cov_pars[3]),
+      hurst2_cov_matrix(x[, 1], hurst2_cov_pars[4], hurst2_cov_pars[5]),
+      hurst2_cov_pars[6]
+    )
+    check_training_data_random_effects(gp_model_hurst2, data$y_gaussian, hurst2_cov_pars[1], Sigma_hurst2)
+
+  })
+
 }
